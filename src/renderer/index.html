@@ -4,89 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Command Center</title>
-    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="chrome-drag"></div>
-
-    <header class="masthead">
-      <div class="mark">
-        <span class="glyph">◈</span>
-        <div>
-          <h1>Command Center</h1>
-          <p class="stardate" id="clock">—</p>
-        </div>
-      </div>
-      <button class="refresh" id="refresh-all" title="Refresh everything">
-        ⟳ Refresh
-      </button>
-    </header>
-
-    <main class="grid">
-      <!-- Docker -->
-      <section class="panel" data-widget="docker">
-        <div class="panel-head">
-          <h2>Services</h2>
-          <span class="pip" id="docker-pip"></span>
-        </div>
-        <div class="panel-body" id="docker-body">
-          <p class="muted">Checking Docker…</p>
-        </div>
-      </section>
-
-      <!-- Daily note -->
-      <section class="panel" data-widget="daily">
-        <div class="panel-head">
-          <h2>Today's Log</h2>
-          <span class="tag" id="daily-date"></span>
-        </div>
-        <div class="panel-body" id="daily-body">
-          <p class="muted">Loading daily note…</p>
-        </div>
-      </section>
-
-      <!-- Missions -->
-      <section class="panel" data-widget="missions">
-        <div class="panel-head">
-          <h2>Active Missions</h2>
-        </div>
-        <div class="panel-body" id="missions-body">
-          <p class="muted">Reading missions…</p>
-        </div>
-      </section>
-
-      <!-- Todoist -->
-      <section class="panel" data-widget="todoist">
-        <div class="panel-head">
-          <h2>Due &amp; Overdue</h2>
-          <span class="pip" id="todoist-pip"></span>
-        </div>
-        <div class="panel-body" id="todoist-body">
-          <p class="muted">Loading tasks…</p>
-        </div>
-      </section>
-
-      <!-- SillyTavern launcher -->
-      <section class="panel" data-widget="sillytavern">
-        <div class="panel-head">
-          <h2>SillyTavern</h2>
-        </div>
-        <div class="panel-body" id="st-body">
-          <p class="muted">—</p>
-        </div>
-      </section>
-
-      <!-- Claude Code launcher -->
-      <section class="panel" data-widget="claude">
-        <div class="panel-head">
-          <h2>Claude Code</h2>
-        </div>
-        <div class="panel-body" id="claude-body">
-          <p class="muted">—</p>
-        </div>
-      </section>
-    </main>
-
-    <script src="renderer.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
