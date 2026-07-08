@@ -1,0 +1,23 @@
+{
+  "grimoire": {
+    "vaultPath": "/absolute/path/to/your/Obsidian/vault",
+    "dailyLogDir": "5 Logs/Daily",
+    "missionsDir": "3 Missions"
+  },
+  "sillytavern": {
+    "instances": [
+      { "label": "Example", "url": "http://localhost:8000" }
+    ]
+  },
+  "claudeCode": {
+    "projects": [
+      { "label": "example-project", "path": "/absolute/path/to/project" }
+    ]
+  },
+  "docker": {
+    "refreshSeconds": 15
+  },
+  "todoist": {
+    "apiToken": ""
+  }
+}

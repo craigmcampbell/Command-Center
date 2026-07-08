@@ -1,0 +1,15 @@
+{
+  "name": "command-center",
+  "version": "0.1.0",
+  "description": "Personal command center — a single place to reach all your stuff.",
+  "main": "src/main/index.js",
+  "author": "Craig",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}

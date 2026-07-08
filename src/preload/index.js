@@ -1,0 +1,29 @@
+// The preload is the ONLY place the sandboxed UI can reach into Electron.
+// We expose a small, explicit API — the UI can call these named functions,
+// but it can't run arbitrary Node code. Each function just forwards to an
+// IPC handler defined in the main process.
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("api", {
+  getConfig: () => ipcRenderer.invoke("config:get"),
+
+  docker: {
+    list: () => ipcRenderer.invoke("docker:list"),
+  },
+
+  grimoire: {
+    dailyNote: () => ipcRenderer.invoke("grimoire:dailyNote"),
+    missions: () => ipcRenderer.invoke("grimoire:missions"),
+  },
+
+  todoist: {
+    tasks: () => ipcRenderer.invoke("todoist:tasks"),
+  },
+
+  openUrl: (url) => ipcRenderer.invoke("open:url", url),
+
+  claude: {
+    launch: (projectPath) => ipcRenderer.invoke("claude:launch", projectPath),
+  },
+});
