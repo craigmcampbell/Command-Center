@@ -1,0 +1,12 @@
+appId: com.craig.command-center
+productName: Command Center
+directories:
+  output: dist
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - config.example.json
+mac:
+  target: dir
+  category: public.app-category.utilities

@@ -14,9 +14,25 @@ import { openInTerminal } from "./services/launcher";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
 import type { AppConfig } from "../shared/types";
 
-// Load user config once at startup.
-const configPath = path.join(__dirname, "..", "..", "config.json");
-const config: AppConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+// Load user config once at startup. In dev this reads straight from the repo
+// so editing config.json just works. A packaged app's bundle is immutable
+// (and asar'd), so config.json instead lives in the standard per-app data
+// directory, seeded on first launch from the bundled config.example.json.
+function loadConfig(): AppConfig {
+  if (!app.isPackaged) {
+    const devConfigPath = path.join(__dirname, "..", "..", "config.json");
+    return JSON.parse(fs.readFileSync(devConfigPath, "utf8"));
+  }
+
+  const userConfigPath = path.join(app.getPath("userData"), "config.json");
+  if (!fs.existsSync(userConfigPath)) {
+    fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
+    fs.copyFileSync(path.join(process.resourcesPath, "config.example.json"), userConfigPath);
+  }
+  return JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
+}
+
+const config: AppConfig = loadConfig();
 
 function createWindow(): void {
   const win = new BrowserWindow({

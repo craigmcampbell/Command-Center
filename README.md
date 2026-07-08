@@ -35,8 +35,23 @@ npm start         # launches the app (electron-vite dev)
 npm run dev       # same, but opens devtools for debugging
 npm run build     # production bundle → out/
 npm run preview   # run the production bundle
+npm run package   # build a real macOS .app → dist/mac-arm64/Command Center.app
 npm run typecheck # type-check everything without emitting
 ```
+
+### Running it without a terminal
+
+`npm run package` builds an actual `Command Center.app` you can drag into
+`/Applications` and launch from Spotlight, Dock, or Finder — no terminal window
+tied to it. Two things to know:
+
+- It's unsigned (no Apple Developer cert), so Gatekeeper blocks the first launch
+  as "unidentified developer." Right-click the app → **Open** once to bypass it,
+  or run `xattr -cr "Command Center.app"`.
+- The packaged app can't read `config.json` out of its own (immutable) bundle, so
+  it keeps its own copy at `~/Library/Application Support/Command Center/config.json`,
+  seeded from `config.example.json` on first launch. Edit that copy — not the one
+  in the repo — to configure a packaged build.
 
 ### Configure it
 

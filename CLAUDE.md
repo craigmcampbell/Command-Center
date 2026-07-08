@@ -9,6 +9,8 @@ Electron app, React + TypeScript, built with electron-vite.
 - **electron-vite** + **Vite** — build tooling for main/preload/renderer.
 - **React 19 + TypeScript** — renderer UI; main/preload are TS too.
 - **Node 22 (LTS)** — pinned. See gotcha below.
+- **electron-builder** — packages the app into a real macOS `.app` (`npm run package`),
+  so it can run without a terminal attached at all.
 - No database yet. Config lives in `config.json`; SQLite planned when persistence is needed.
 
 ## Requirements
@@ -49,7 +51,11 @@ UI event → `window.api.x()` (preload, typed) → `ipcRenderer.invoke("channel"
 
 - **Config over code.** Anything user-specific (paths, ports, instances, projects) goes
   in `config.json` (gitignored — copy `config.example.json` to get started), never
-  hardcoded. Widgets read config at boot.
+  hardcoded. Widgets read config at boot. Where `config.json` actually lives depends on
+  `app.isPackaged` (see `loadConfig()` in `main/index.ts`): dev reads it straight from
+  the repo root; a packaged app's bundle is immutable, so it instead keeps a user-editable
+  copy in `app.getPath("userData")`, seeded on first launch from the bundled
+  `config.example.json`.
 - **Adding a widget** = five touch points, in order:
   1. Shared types in `src/shared/types.ts`, if the data shape is new.
   2. Service function in `src/main/services/*.ts` (if it needs OS access).
@@ -85,6 +91,7 @@ npm start            # launch (electron-vite dev)
 npm run dev          # launch with detached devtools
 npm run build         # production bundle → out/
 npm run preview       # run the production bundle
+npm run package       # build a real macOS .app → dist/mac-arm64/Command Center.app
 npm run typecheck     # tsc --noEmit across main+preload and renderer configs
 ```
 
@@ -96,3 +103,8 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   branches, as needed.
 - `config.json` is gitignored (it can hold real API tokens); `config.example.json` is
   the committed placeholder template — copy it and fill in real paths/tokens.
+- **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
+  be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
+  to bypass, or `xattr -cr "Command Center.app"`. The packaged app's config lives at
+  `~/Library/Application Support/Command Center/config.json`, seeded from
+  `config.example.json` on first launch — edit that copy, not the repo's.

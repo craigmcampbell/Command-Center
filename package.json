@@ -1,5 +1,6 @@
 {
   "name": "command-center",
+  "productName": "Command Center",
   "version": "0.1.0",
   "description": "Personal command center — a single place to reach all your stuff.",
   "main": "./out/main/index.js",
@@ -10,6 +11,7 @@
     "dev": "electron-vite dev -- --dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder --mac --dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
@@ -22,6 +24,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "electron": "^33.4.11",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.6"
