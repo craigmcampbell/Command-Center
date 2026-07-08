@@ -58,6 +58,14 @@ body {
   filter: drop-shadow(0 0 8px var(--accent-glow-strong));
 }
 
+.app-logo {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  filter: drop-shadow(0 0 8px var(--accent-glow-strong));
+}
+
 .masthead h1 {
   font-size: 18px;
   font-weight: 600;

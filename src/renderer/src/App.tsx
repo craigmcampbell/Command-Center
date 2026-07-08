@@ -21,7 +21,8 @@ import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
-import { IconMark, IconRefresh } from "./components/icons";
+import { IconRefresh } from "./components/icons";
+import appLogo from "./assets/icon.png";
 
 type TabId = "home" | "development" | "reader" | "scratchpad" | "habits";
 
@@ -163,7 +164,7 @@ export default function App() {
 
       <header className="masthead">
         <div className="mark">
-          <IconMark size={28} className="glyph" />
+          <img src={appLogo} alt="" className="app-logo" width={28} height={28} />
           <div>
             <h1>Command Center</h1>
             <p className="stardate">{clock}</p>

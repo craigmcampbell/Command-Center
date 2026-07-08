@@ -1,5 +1,6 @@
 appId: com.craig.command-center
 productName: Command Center
+icon: build/icon.png
 directories:
   output: dist
 files:

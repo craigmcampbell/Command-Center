@@ -4,7 +4,7 @@
 // it has to ask the main process to do those things. That separation is what
 // keeps an Electron app safe.
 
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -74,7 +74,18 @@ initScratchpad();
 initHabits();
 seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
 
+function appIconPath(): string {
+  return path.join(__dirname, "..", "..", "build", "icon.png");
+}
+
+function setDockIcon(): void {
+  if (process.platform !== "darwin" || !app.dock) return;
+  const icon = nativeImage.createFromPath(appIconPath());
+  if (!icon.isEmpty()) app.dock.setIcon(icon);
+}
+
 function createWindow(): void {
+  const icon = nativeImage.createFromPath(appIconPath());
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -82,6 +93,7 @@ function createWindow(): void {
     minHeight: 600,
     backgroundColor: "#12100e",
     titleBarStyle: "hiddenInset",
+    ...(icon.isEmpty() ? {} : { icon }),
     webPreferences: {
       // preload runs in a privileged context but with limited scope; it's the
       // only bridge between the sandboxed UI and this main process.
@@ -225,6 +237,7 @@ ipcMain.handle("habits:trends", (_evt, habitId?: number, weeks?: number) => {
 });
 
 app.whenReady().then(() => {
+  setDockIcon();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
