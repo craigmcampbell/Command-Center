@@ -20,6 +20,8 @@ const api: CommandCenterApi = {
 
   todoist: {
     tasks: () => ipcRenderer.invoke("todoist:tasks"),
+    complete: (taskId: string) => ipcRenderer.invoke("todoist:complete", taskId),
+    create: (content: string) => ipcRenderer.invoke("todoist:create", content),
   },
 
   openUrl: (url: string) => ipcRenderer.invoke("open:url", url),

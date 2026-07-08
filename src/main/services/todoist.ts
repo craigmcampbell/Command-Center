@@ -1,13 +1,14 @@
-// Talks to the Todoist REST API (v1) for due and overdue tasks. Requires a
-// personal API token (Todoist Settings -> Integrations -> Developer) stored
-// in config.json. Fails soft, like the other services, so a missing/bad
-// token just shows a friendly message instead of crashing the widget.
+// Talks to the Todoist API (v1) for due/overdue tasks and for completing or
+// creating them. Requires a personal API token (Todoist Settings ->
+// Integrations -> Developer) stored in config.json. Fails soft, like the
+// other services, so a missing/bad token just shows a friendly message
+// instead of crashing the widget.
 
-import type { AppConfig, TodoistResult } from "../../shared/types";
+import type { AppConfig, ActionResult, TodoistResult } from "../../shared/types";
 
+const API_ROOT = "https://api.todoist.com/api/v1";
 const TASKS_URL =
-  "https://api.todoist.com/api/v1/tasks/filter?query=" +
-  encodeURIComponent("overdue | today");
+  `${API_ROOT}/tasks/filter?query=` + encodeURIComponent("overdue | today");
 
 export async function getDueTasks(
   { apiToken }: AppConfig["todoist"] = { apiToken: "" }
@@ -41,6 +42,8 @@ export async function getDueTasks(
     .map((t: any) => ({
       id: t.id,
       content: t.content,
+      description: t.description || "",
+      url: `https://app.todoist.com/app/task/${t.id}`,
       priority: t.priority, // 4 = highest (p1), 1 = lowest (p4)
       due: t.due?.date || null,
       overdue: !!t.due?.date && t.due.date < today,
@@ -50,4 +53,60 @@ export async function getDueTasks(
     );
 
   return { ok: true, tasks };
+}
+
+export async function completeTask(
+  { apiToken }: AppConfig["todoist"],
+  taskId: string
+): Promise<ActionResult> {
+  if (!apiToken) {
+    return { ok: false, reason: "No Todoist API token configured" };
+  }
+
+  try {
+    const res = await fetch(`${API_ROOT}/tasks/${taskId}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` },
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: res.status === 401 ? "Todoist token rejected" : "Todoist rejected the request",
+      };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't reach Todoist" };
+  }
+}
+
+export async function createTask(
+  { apiToken }: AppConfig["todoist"],
+  content: string
+): Promise<ActionResult> {
+  if (!apiToken) {
+    return { ok: false, reason: "No Todoist API token configured" };
+  }
+
+  try {
+    const res = await fetch(`${API_ROOT}/tasks`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      // Default new tasks to "today" so they actually show up in this
+      // due/overdue widget instead of vanishing into the inbox with no date.
+      body: JSON.stringify({ content, due_string: "today" }),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: res.status === 401 ? "Todoist token rejected" : "Todoist rejected the request",
+      };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't reach Todoist" };
+  }
 }

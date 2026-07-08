@@ -63,6 +63,8 @@ export interface MissionsResult {
 export interface TodoistTask {
   id: string;
   content: string;
+  description: string;
+  url: string;
   priority: number;
   due: string | null;
   overdue: boolean;
@@ -74,7 +76,9 @@ export interface TodoistResult {
   tasks: TodoistTask[];
 }
 
-export interface LaunchResult {
+// Generic result for actions that either succeed or fail with a reason —
+// used for launching a terminal, completing a task, creating a task, etc.
+export interface ActionResult {
   ok: boolean;
   reason?: string;
 }
@@ -90,9 +94,11 @@ export interface CommandCenterApi {
   };
   todoist: {
     tasks: () => Promise<TodoistResult>;
+    complete: (taskId: string) => Promise<ActionResult>;
+    create: (content: string) => Promise<ActionResult>;
   };
   openUrl: (url: string) => Promise<boolean>;
   claude: {
-    launch: (projectPath: string) => Promise<LaunchResult>;
+    launch: (projectPath: string) => Promise<ActionResult>;
   };
 }

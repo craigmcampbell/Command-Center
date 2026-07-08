@@ -184,11 +184,109 @@ body {
   font-family: var(--mono);
   color: var(--ink);
 }
+.row .name.link {
+  cursor: pointer;
+}
+.row .name.link:hover {
+  color: var(--amber);
+  text-decoration: underline;
+}
 .row .status {
   margin-left: auto;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-dim);
+}
+
+/* Todoist: completion checkbox, description toggle/panel, add-task form */
+.row .check {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--dead);
+  background: transparent;
+  padding: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.row .check:hover:not(:disabled) {
+  border-color: var(--amber);
+  background: var(--amber-glow);
+}
+.row .check.alert {
+  border-color: var(--alert);
+}
+.row .check.running {
+  border-color: var(--live);
+}
+.row .check:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.desc-toggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.desc-toggle:hover {
+  opacity: 1;
+}
+.todoist-desc {
+  margin: 2px 0 8px 23px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid var(--panel-edge);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+}
+.todoist-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.todoist-add input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.todoist-add input::placeholder {
+  color: var(--ink-dim);
+}
+.todoist-add input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+.todoist-add button {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  border-radius: 8px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-family: var(--mono);
+  transition: all 0.15s ease;
+}
+.todoist-add button:hover:not(:disabled) {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.todoist-add button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* launcher buttons */

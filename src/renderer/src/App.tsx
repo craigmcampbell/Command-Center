@@ -94,7 +94,7 @@ export default function App() {
         <DockerWidget data={docker} />
         <DailyNoteWidget data={daily} />
         <MissionsWidget data={missions} />
-        <TodoistWidget data={todoist} />
+        <TodoistWidget data={todoist} onRefresh={loadTodoist} />
         <SillyTavernWidget instances={config?.sillytavern?.instances || []} />
         <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
       </main>

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { getDockerContainers } from "./services/docker";
 import { readDailyNote, listMissions } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
-import { getDueTasks } from "./services/todoist";
+import { getDueTasks, completeTask, createTask } from "./services/todoist";
 import type { AppConfig } from "../shared/types";
 
 // Load user config once at startup.
@@ -66,9 +66,15 @@ ipcMain.handle("grimoire:missions", async () => {
   return listMissions(config.grimoire);
 });
 
-// Todoist: tasks due today or overdue.
+// Todoist: tasks due today or overdue, plus completing/creating tasks.
 ipcMain.handle("todoist:tasks", async () => {
   return getDueTasks(config.todoist);
+});
+ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
+  return completeTask(config.todoist, taskId);
+});
+ipcMain.handle("todoist:create", async (_evt, content: string) => {
+  return createTask(config.todoist, content);
 });
 
 // Open a URL in the user's default browser (for SillyTavern, GitHub, etc.).

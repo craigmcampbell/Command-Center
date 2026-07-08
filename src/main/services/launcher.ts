@@ -7,13 +7,13 @@ import { exec } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { LaunchResult } from "../../shared/types";
+import type { ActionResult } from "../../shared/types";
 
 // Warp has no AppleScript "do script" support. Instead it watches
 // ~/.warp/tab_configs/*.toml and can open one by name via its URI scheme, so
 // we write a config pointing at the target directory/command and open that.
 // https://docs.warp.dev/terminal/windows/tab-configs
-function openInWarp(dir: string, command: string): Promise<LaunchResult> {
+function openInWarp(dir: string, command: string): Promise<ActionResult> {
   return new Promise((resolve) => {
     const configDir = path.join(os.homedir(), ".warp", "tab_configs");
     const configName = "command-center-launch";
@@ -41,7 +41,7 @@ commands = ["${command}"]
   });
 }
 
-export function openInTerminal(dir: string, command: string): Promise<LaunchResult> {
+export function openInTerminal(dir: string, command: string): Promise<ActionResult> {
   return new Promise((resolve) => {
     if (process.platform === "darwin") {
       openInWarp(dir, command).then(resolve);
