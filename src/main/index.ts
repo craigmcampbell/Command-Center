@@ -25,12 +25,24 @@ import {
 import type { LegacyLinkConfig } from "./services/links";
 import { initScratchpad, getScratchpad, saveScratchpad, clearScratchpad } from "./services/scratchpad";
 import {
+  initHabits,
+  listHabits,
+  addHabit,
+  updateHabit,
+  removeHabit,
+  reorderHabits,
+  getWeekView,
+  toggleCompletion,
+  getHabitTrends,
+  getAllHabitTrends,
+} from "./services/habits";
+import {
   listReaderDocuments,
   resetReaderCache,
   archiveDocument,
   deleteDocument,
 } from "./services/reader";
-import type { AppConfig, LinkListKind } from "../shared/types";
+import type { AppConfig, HabitFrequencyType, LinkListKind } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
 // so editing config.json just works. A packaged app's bundle is immutable
@@ -59,6 +71,7 @@ const config = rawConfig as unknown as AppConfig;
 
 initDatabase();
 initScratchpad();
+initHabits();
 seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
 
 function createWindow(): void {
@@ -181,6 +194,34 @@ ipcMain.handle("scratchpad:save", (_evt, content: string) => {
 });
 ipcMain.handle("scratchpad:clear", () => {
   clearScratchpad();
+});
+
+// Habit tracker: SQLite-backed habits + per-day completions.
+ipcMain.handle("habits:list", () => listHabits());
+ipcMain.handle(
+  "habits:add",
+  (_evt, name: string, frequencyType: HabitFrequencyType, targetCount?: number) =>
+    addHabit(name, frequencyType, targetCount)
+);
+ipcMain.handle(
+  "habits:update",
+  (
+    _evt,
+    id: number,
+    name: string,
+    frequencyType: HabitFrequencyType,
+    targetCount?: number
+  ) => updateHabit(id, name, frequencyType, targetCount)
+);
+ipcMain.handle("habits:remove", (_evt, id: number) => removeHabit(id));
+ipcMain.handle("habits:reorder", (_evt, orderedIds: number[]) => reorderHabits(orderedIds));
+ipcMain.handle("habits:getWeek", (_evt, weekStart?: string) => getWeekView(weekStart));
+ipcMain.handle("habits:toggle", (_evt, habitId: number, date: string) =>
+  toggleCompletion(habitId, date)
+);
+ipcMain.handle("habits:trends", (_evt, habitId?: number, weeks?: number) => {
+  if (habitId != null) return getHabitTrends(habitId, weeks ?? 12);
+  return getAllHabitTrends(weeks ?? 12);
 });
 
 app.whenReady().then(() => {

@@ -4,7 +4,7 @@
 // IPC handler defined in the main process.
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { CommandCenterApi, LinkListKind } from "../shared/types";
+import type { CommandCenterApi, HabitFrequencyType, LinkListKind } from "../shared/types";
 
 const api: CommandCenterApi = {
   getConfig: () => ipcRenderer.invoke("config:get"),
@@ -59,6 +59,25 @@ const api: CommandCenterApi = {
     get: () => ipcRenderer.invoke("scratchpad:get"),
     save: (content: string) => ipcRenderer.invoke("scratchpad:save", content),
     clear: () => ipcRenderer.invoke("scratchpad:clear"),
+  },
+
+  habits: {
+    list: () => ipcRenderer.invoke("habits:list"),
+    add: (name: string, frequencyType: HabitFrequencyType, targetCount?: number) =>
+      ipcRenderer.invoke("habits:add", name, frequencyType, targetCount),
+    update: (
+      id: number,
+      name: string,
+      frequencyType: HabitFrequencyType,
+      targetCount?: number
+    ) => ipcRenderer.invoke("habits:update", id, name, frequencyType, targetCount),
+    remove: (id: number) => ipcRenderer.invoke("habits:remove", id),
+    reorder: (orderedIds: number[]) => ipcRenderer.invoke("habits:reorder", orderedIds),
+    getWeek: (weekStart?: string) => ipcRenderer.invoke("habits:getWeek", weekStart),
+    toggle: (habitId: number, date: string) =>
+      ipcRenderer.invoke("habits:toggle", habitId, date),
+    trends: (habitId?: number, weeks?: number) =>
+      ipcRenderer.invoke("habits:trends", habitId, weeks),
   },
 };
 

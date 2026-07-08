@@ -147,6 +147,51 @@ export interface ReaderResult {
   hasPrev: boolean;
 }
 
+export type HabitFrequencyType = "daily" | "weekly" | "times_per_week";
+
+export interface Habit {
+  id: number;
+  name: string;
+  frequencyType: HabitFrequencyType;
+  targetCount: number;
+  sortOrder: number;
+  createdAt: number;
+}
+
+export interface HabitWeekDay {
+  date: string;
+  label: string;
+}
+
+export interface HabitWeekEntry {
+  habit: Habit;
+  completions: Record<string, boolean>;
+  weekCount: number;
+  weekTarget: number;
+  goalMet: boolean;
+}
+
+export interface HabitWeekView {
+  weekStart: string;
+  weekEnd: string;
+  days: HabitWeekDay[];
+  habits: HabitWeekEntry[];
+}
+
+export interface HabitTrendWeek {
+  weekStart: string;
+  weekLabel: string;
+  completed: number;
+  target: number;
+  rate: number;
+  goalMet: boolean;
+}
+
+export interface HabitTrendResult {
+  habit: Habit;
+  weeks: HabitTrendWeek[];
+}
+
 export interface CommandCenterApi {
   getConfig: () => Promise<AppConfig>;
   docker: {
@@ -187,5 +232,20 @@ export interface CommandCenterApi {
     get: () => Promise<string>;
     save: (content: string) => Promise<void>;
     clear: () => Promise<void>;
+  };
+  habits: {
+    list: () => Promise<Habit[]>;
+    add: (name: string, frequencyType: HabitFrequencyType, targetCount?: number) => Promise<Habit[]>;
+    update: (
+      id: number,
+      name: string,
+      frequencyType: HabitFrequencyType,
+      targetCount?: number
+    ) => Promise<Habit[]>;
+    remove: (id: number) => Promise<Habit[]>;
+    reorder: (orderedIds: number[]) => Promise<Habit[]>;
+    getWeek: (weekStart?: string) => Promise<HabitWeekView>;
+    toggle: (habitId: number, date: string) => Promise<HabitWeekView>;
+    trends: (habitId?: number, weeks?: number) => Promise<HabitTrendResult | HabitTrendResult[]>;
   };
 }

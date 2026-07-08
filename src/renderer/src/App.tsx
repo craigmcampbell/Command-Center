@@ -20,15 +20,17 @@ import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
+import HabitsWidget from "./components/HabitsWidget";
 import { IconMark, IconRefresh } from "./components/icons";
 
-type TabId = "home" | "development" | "reader" | "scratchpad";
+type TabId = "home" | "development" | "reader" | "scratchpad" | "habits";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "development", label: "Development" },
   { id: "reader", label: "Reader" },
   { id: "scratchpad", label: "Scratchpad" },
+  { id: "habits", label: "Habits" },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -245,6 +247,14 @@ export default function App() {
         <main className="grid grid-scratchpad">
           <div className="slot slot-scratchpad">
             <ScratchpadWidget />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "habits" && (
+        <main className="grid grid-habits">
+          <div className="slot slot-habits">
+            <HabitsWidget />
           </div>
         </main>
       )}
