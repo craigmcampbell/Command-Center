@@ -4,20 +4,21 @@
 // it has to ask the main process to do those things. That separation is what
 // keeps an Electron app safe.
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
-const path = require("path");
-const fs = require("fs");
+import { app, BrowserWindow, ipcMain, shell } from "electron";
+import path from "node:path";
+import fs from "node:fs";
 
-const { getDockerContainers } = require("./services/docker");
-const { readDailyNote, listMissions } = require("./services/grimoire");
-const { openInTerminal } = require("./services/launcher");
-const { getDueTasks } = require("./services/todoist");
+import { getDockerContainers } from "./services/docker";
+import { readDailyNote, listMissions } from "./services/grimoire";
+import { openInTerminal } from "./services/launcher";
+import { getDueTasks } from "./services/todoist";
+import type { AppConfig } from "../shared/types";
 
 // Load user config once at startup.
 const configPath = path.join(__dirname, "..", "..", "config.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const config: AppConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
-function createWindow() {
+function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -34,7 +35,13 @@ function createWindow() {
     },
   });
 
-  win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  // electron-vite's dev server serves the renderer over HTTP; only a built
+  // renderer is loaded from disk.
+  if (process.env.ELECTRON_RENDERER_URL) {
+    win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  }
 
   if (process.argv.includes("--dev")) {
     win.webContents.openDevTools({ mode: "detach" });
@@ -65,13 +72,13 @@ ipcMain.handle("todoist:tasks", async () => {
 });
 
 // Open a URL in the user's default browser (for SillyTavern, GitHub, etc.).
-ipcMain.handle("open:url", async (_evt, url) => {
+ipcMain.handle("open:url", async (_evt, url: string) => {
   await shell.openExternal(url);
   return true;
 });
 
 // Launch a Claude Code session in a terminal, scoped to a project dir.
-ipcMain.handle("claude:launch", async (_evt, projectPath) => {
+ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
 });
 

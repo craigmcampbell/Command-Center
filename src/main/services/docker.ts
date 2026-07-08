@@ -2,9 +2,10 @@
 // output so we don't have to parse a table. If Docker isn't running (or isn't
 // installed), we surface that as a friendly state rather than crashing.
 
-const { exec } = require("child_process");
+import { exec } from "node:child_process";
+import type { DockerResult } from "../../shared/types";
 
-function getDockerContainers() {
+export function getDockerContainers(): Promise<DockerResult> {
   return new Promise((resolve) => {
     // --format '{{json .}}' prints one JSON object per line, per container.
     exec(
@@ -40,12 +41,10 @@ function getDockerContainers() {
               return null;
             }
           })
-          .filter(Boolean);
+          .filter((c): c is NonNullable<typeof c> => c !== null);
 
         resolve({ ok: true, containers });
       }
     );
   });
 }
-
-module.exports = { getDockerContainers };

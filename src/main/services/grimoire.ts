@@ -1,17 +1,18 @@
 // Reads directly from the Obsidian vault on disk. No plugin or API needed —
 // Obsidian notes are just markdown files, so we read them like any text file.
 
-const fs = require("fs");
-const path = require("path");
+import fs from "node:fs";
+import path from "node:path";
+import type { GrimoireConfig, DailyNoteResult, MissionsResult } from "../../shared/types";
 
 // Obsidian daily notes are conventionally named YYYY-MM-DD.md.
-function todayFilename() {
+function todayFilename(): string {
   const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
+  const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.md`;
 }
 
-function readDailyNote({ vaultPath, dailyLogDir }) {
+export function readDailyNote({ vaultPath, dailyLogDir }: GrimoireConfig): DailyNoteResult {
   const file = path.join(vaultPath, dailyLogDir, todayFilename());
   try {
     const content = fs.readFileSync(file, "utf8");
@@ -26,7 +27,7 @@ function readDailyNote({ vaultPath, dailyLogDir }) {
   }
 }
 
-function listMissions({ vaultPath, missionsDir }) {
+export function listMissions({ vaultPath, missionsDir }: GrimoireConfig): MissionsResult {
   const dir = path.join(vaultPath, missionsDir);
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -47,5 +48,3 @@ function listMissions({ vaultPath, missionsDir }) {
     return { ok: false, reason: "Missions folder not found", missions: [] };
   }
 }
-
-module.exports = { readDailyNote, listMissions };

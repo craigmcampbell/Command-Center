@@ -3,9 +3,10 @@
 // but it can't run arbitrary Node code. Each function just forwards to an
 // IPC handler defined in the main process.
 
-const { contextBridge, ipcRenderer } = require("electron");
+import { contextBridge, ipcRenderer } from "electron";
+import type { CommandCenterApi } from "../shared/types";
 
-contextBridge.exposeInMainWorld("api", {
+const api: CommandCenterApi = {
   getConfig: () => ipcRenderer.invoke("config:get"),
 
   docker: {
@@ -21,9 +22,11 @@ contextBridge.exposeInMainWorld("api", {
     tasks: () => ipcRenderer.invoke("todoist:tasks"),
   },
 
-  openUrl: (url) => ipcRenderer.invoke("open:url", url),
+  openUrl: (url: string) => ipcRenderer.invoke("open:url", url),
 
   claude: {
-    launch: (projectPath) => ipcRenderer.invoke("claude:launch", projectPath),
+    launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
   },
-});
+};
+
+contextBridge.exposeInMainWorld("api", api);

@@ -3,16 +3,17 @@
 // on platform. macOS targets Warp; adjust to your terminal of choice
 // (Terminal.app, iTerm, etc.) if you don't use Warp.
 
-const { exec } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+import { exec } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { LaunchResult } from "../../shared/types";
 
 // Warp has no AppleScript "do script" support. Instead it watches
 // ~/.warp/tab_configs/*.toml and can open one by name via its URI scheme, so
 // we write a config pointing at the target directory/command and open that.
 // https://docs.warp.dev/terminal/windows/tab-configs
-function openInWarp(dir, command) {
+function openInWarp(dir: string, command: string): Promise<LaunchResult> {
   return new Promise((resolve) => {
     const configDir = path.join(os.homedir(), ".warp", "tab_configs");
     const configName = "command-center-launch";
@@ -29,7 +30,7 @@ commands = ["${command}"]
       fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(path.join(configDir, `${configName}.toml`), toml);
     } catch (err) {
-      resolve({ ok: false, reason: err.message });
+      resolve({ ok: false, reason: (err as Error).message });
       return;
     }
 
@@ -40,14 +41,14 @@ commands = ["${command}"]
   });
 }
 
-function openInTerminal(dir, command) {
+export function openInTerminal(dir: string, command: string): Promise<LaunchResult> {
   return new Promise((resolve) => {
     if (process.platform === "darwin") {
       openInWarp(dir, command).then(resolve);
       return;
     }
 
-    let cmd;
+    let cmd: string;
     if (process.platform === "win32") {
       cmd = `start cmd /k "cd /d ${dir} && ${command}"`;
     } else {
@@ -61,5 +62,3 @@ function openInTerminal(dir, command) {
     });
   });
 }
-
-module.exports = { openInTerminal };
