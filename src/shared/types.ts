@@ -7,17 +7,19 @@ export interface GrimoireConfig {
   missionsDir: string;
 }
 
-// A quick-launch link — a SillyTavern instance, a local app, anything
-// reachable by URL. Shared shape so one widget can render any of them.
-export interface LinkInstance {
+// A quick-launch entry — a SillyTavern instance, a local app, a Claude Code
+// project directory, anything with a display name and a link. `link` is a
+// URL for Local Apps/Learning and a directory path for Claude Code; each of
+// the three lists is its own DB table (see src/main/services/links.ts) but
+// shares this shape.
+export interface LinkItem {
+  id: number;
   label: string;
-  url: string;
+  link: string;
+  sortOrder: number;
 }
 
-export interface ClaudeProject {
-  label: string;
-  path: string;
-}
+export type LinkListKind = "localApps" | "learning" | "claudeCode";
 
 export interface GoogleCalendarConfig {
   clientId: string;
@@ -26,12 +28,10 @@ export interface GoogleCalendarConfig {
 
 export interface AppConfig {
   grimoire: GrimoireConfig;
-  localApps: { instances: LinkInstance[] };
-  learning: { instances: LinkInstance[] };
-  claudeCode: { projects: ClaudeProject[] };
   docker: { refreshSeconds: number };
   todoist: { apiToken: string };
   googleCalendar: GoogleCalendarConfig;
+  reader: { apiToken: string };
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -128,10 +128,30 @@ export interface ActionResult {
   reason?: string;
 }
 
+export interface ReaderDocument {
+  id: string;
+  title: string;
+  author: string;
+  url: string; // Reader's own read.readwise.io link — what clicking opens
+  category: string;
+  savedAt: string;
+}
+
+export interface ReaderResult {
+  ok: boolean;
+  reason?: string;
+  documents: ReaderDocument[];
+  page: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
 export interface CommandCenterApi {
   getConfig: () => Promise<AppConfig>;
   docker: {
     list: () => Promise<DockerResult>;
+    start: (name: string) => Promise<ActionResult>;
+    stop: (name: string) => Promise<ActionResult>;
   };
   grimoire: {
     dailyNote: (date?: string) => Promise<DailyNoteResult>;
@@ -149,5 +169,17 @@ export interface CommandCenterApi {
   calendar: {
     events: (date?: string) => Promise<CalendarResult>;
     connect: () => Promise<ActionResult>;
+  };
+  links: {
+    list: (kind: LinkListKind) => Promise<LinkItem[]>;
+    add: (kind: LinkListKind, label: string, link: string) => Promise<LinkItem[]>;
+    update: (kind: LinkListKind, id: number, label: string, link: string) => Promise<LinkItem[]>;
+    remove: (kind: LinkListKind, id: number) => Promise<LinkItem[]>;
+    reorder: (kind: LinkListKind, orderedIds: number[]) => Promise<LinkItem[]>;
+  };
+  reader: {
+    list: (page: number, forceRefresh?: boolean) => Promise<ReaderResult>;
+    archive: (id: string, page: number) => Promise<ReaderResult>;
+    delete: (id: string, page: number) => Promise<ReaderResult>;
   };
 }

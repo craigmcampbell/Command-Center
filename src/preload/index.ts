@@ -4,13 +4,15 @@
 // IPC handler defined in the main process.
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { CommandCenterApi } from "../shared/types";
+import type { CommandCenterApi, LinkListKind } from "../shared/types";
 
 const api: CommandCenterApi = {
   getConfig: () => ipcRenderer.invoke("config:get"),
 
   docker: {
     list: () => ipcRenderer.invoke("docker:list"),
+    start: (name: string) => ipcRenderer.invoke("docker:start", name),
+    stop: (name: string) => ipcRenderer.invoke("docker:stop", name),
   },
 
   grimoire: {
@@ -33,6 +35,24 @@ const api: CommandCenterApi = {
   calendar: {
     events: (date?: string) => ipcRenderer.invoke("calendar:events", date),
     connect: () => ipcRenderer.invoke("calendar:connect"),
+  },
+
+  links: {
+    list: (kind: LinkListKind) => ipcRenderer.invoke("links:list", kind),
+    add: (kind: LinkListKind, label: string, link: string) =>
+      ipcRenderer.invoke("links:add", kind, label, link),
+    update: (kind: LinkListKind, id: number, label: string, link: string) =>
+      ipcRenderer.invoke("links:update", kind, id, label, link),
+    remove: (kind: LinkListKind, id: number) => ipcRenderer.invoke("links:remove", kind, id),
+    reorder: (kind: LinkListKind, orderedIds: number[]) =>
+      ipcRenderer.invoke("links:reorder", kind, orderedIds),
+  },
+
+  reader: {
+    list: (page: number, forceRefresh?: boolean) =>
+      ipcRenderer.invoke("reader:list", page, forceRefresh),
+    archive: (id: string, page: number) => ipcRenderer.invoke("reader:archive", id, page),
+    delete: (id: string, page: number) => ipcRenderer.invoke("reader:delete", id, page),
   },
 };
 

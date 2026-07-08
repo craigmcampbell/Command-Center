@@ -3,10 +3,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type {
-  AppConfig,
   DockerResult,
   DailyNoteResult,
+  LinkItem,
   MissionsResult,
+  ReaderResult,
   TodoistResult,
   CalendarResult,
 } from "../../shared/types";
@@ -17,13 +18,15 @@ import TodoistWidget from "./components/TodoistWidget";
 import LinkLauncherWidget from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import CalendarWidget from "./components/CalendarWidget";
+import ReaderWidget from "./components/ReaderWidget";
 import { IconMark, IconRefresh } from "./components/icons";
 
-type TabId = "home" | "development";
+type TabId = "home" | "development" | "reader";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "development", label: "Development" },
+  { id: "reader", label: "Reader" },
 ];
 
 function tickClock(): string {
@@ -39,7 +42,6 @@ function tickClock(): string {
 }
 
 export default function App() {
-  const [config, setConfig] = useState<AppConfig | null>(null);
   const [docker, setDocker] = useState<DockerResult | null>(null);
   const [daily, setDaily] = useState<DailyNoteResult | null>(null);
   const [missions, setMissions] = useState<MissionsResult | null>(null);
@@ -50,6 +52,11 @@ export default function App() {
   const [dailyDate, setDailyDate] = useState<string | null>(null);
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [calendarDate, setCalendarDate] = useState<string | null>(null);
+  const [localApps, setLocalApps] = useState<LinkItem[]>([]);
+  const [learning, setLearning] = useState<LinkItem[]>([]);
+  const [claudeProjects, setClaudeProjects] = useState<LinkItem[]>([]);
+  const [reader, setReader] = useState<ReaderResult | null>(null);
+  const [readerPage, setReaderPage] = useState(0);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -66,6 +73,10 @@ export default function App() {
   const loadCalendar = useCallback(async () => {
     setCalendar(await window.api.calendar.events(calendarDate ?? undefined));
   }, [calendarDate]);
+  const loadReader = useCallback(async (page: number, forceRefresh = false) => {
+    setReaderPage(page);
+    setReader(await window.api.reader.list(page, forceRefresh));
+  }, []);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
@@ -86,17 +97,33 @@ export default function App() {
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]);
+    await Promise.all([
+      loadDocker(),
+      loadDaily(),
+      loadMissions(),
+      loadTodoist(),
+      loadCalendar(),
+      loadReader(readerPage, true),
+    ]);
     setRefreshing(false);
-  }, [loadDocker, loadDaily, loadMissions, loadTodoist, loadCalendar]);
+  }, [loadDocker, loadDaily, loadMissions, loadTodoist, loadCalendar, loadReader, readerPage]);
 
   // ---- boot: load config, then every widget, then start Docker's refresh ----
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval> | undefined;
     (async () => {
       const cfg = await window.api.getConfig();
-      setConfig(cfg);
-      await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]);
+      await Promise.all([
+        loadDocker(),
+        loadDaily(),
+        loadMissions(),
+        loadTodoist(),
+        loadCalendar(),
+        window.api.links.list("localApps").then(setLocalApps),
+        window.api.links.list("learning").then(setLearning),
+        window.api.links.list("claudeCode").then(setClaudeProjects),
+        loadReader(0),
+      ]);
 
       const secs = cfg.docker?.refreshSeconds || 15;
       intervalId = setInterval(loadDocker, secs * 1000);
@@ -160,13 +187,17 @@ export default function App() {
           <div className="slot slot-apps">
             <LinkLauncherWidget
               title="Local Apps"
-              instances={config?.localApps?.instances || []}
+              kind="localApps"
+              instances={localApps}
+              onChange={setLocalApps}
             />
           </div>
           <div className="slot slot-learning">
             <LinkLauncherWidget
               title="Learning"
-              instances={config?.learning?.instances || []}
+              kind="learning"
+              instances={learning}
+              onChange={setLearning}
             />
           </div>
         </main>
@@ -175,10 +206,22 @@ export default function App() {
       {activeTab === "development" && (
         <main className="grid grid-dev">
           <div className="slot slot-services">
-            <DockerWidget data={docker} />
+            <DockerWidget data={docker} onRefresh={loadDocker} />
           </div>
           <div className="slot slot-claude">
-            <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
+            <ClaudeLauncherWidget
+              kind="claudeCode"
+              projects={claudeProjects}
+              onChange={setClaudeProjects}
+            />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "reader" && (
+        <main className="grid grid-reader">
+          <div className="slot slot-reader">
+            <ReaderWidget data={reader} onNavigate={(page) => loadReader(page)} onChange={setReader} />
           </div>
         </main>
       )}

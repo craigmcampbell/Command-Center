@@ -23,6 +23,19 @@ function shiftDate(date: string, days: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function todayDateString(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Once a meeting's end time has passed, drop it off today's view — but only
+// for today (viewing a past/future day should still show its full agenda),
+// and never for all-day events (there's no meaningful "done" for those).
+function isFinished(event: CalendarEvent): boolean {
+  return !event.allDay && new Date(event.end).getTime() < Date.now();
+}
+
 function CalendarRow({ event }: { event: CalendarEvent }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -76,10 +89,15 @@ export default function CalendarWidget({ data, onNavigate, onConnect }: Calendar
     );
   } else if (!data.ok) {
     body = <p className="muted">{data.reason}.</p>;
-  } else if (data.events.length === 0) {
-    body = <p className="muted">Nothing on the calendar.</p>;
   } else {
-    body = data.events.map((e) => <CalendarRow key={e.id} event={e} />);
+    const visibleEvents =
+      data.date === todayDateString() ? data.events.filter((e) => !isFinished(e)) : data.events;
+    body =
+      visibleEvents.length === 0 ? (
+        <p className="muted">Nothing on the calendar.</p>
+      ) : (
+        visibleEvents.map((e) => <CalendarRow key={e.id} event={e} />)
+      );
   }
 
   return (
@@ -87,6 +105,14 @@ export default function CalendarWidget({ data, onNavigate, onConnect }: Calendar
       title="Today's Schedule"
       headerRight={
         <div className="daily-nav">
+          <button
+            className="daily-nav-btn today-btn"
+            disabled={data?.date === todayDateString()}
+            onClick={() => onNavigate(todayDateString())}
+            title="Jump to today"
+          >
+            Today
+          </button>
           <button
             className="daily-nav-btn"
             onClick={() => data && onNavigate(shiftDate(data.date, -1))}

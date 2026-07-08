@@ -143,6 +143,11 @@ body {
     "claude";
 }
 
+.grid-reader {
+  grid-template-columns: 1fr;
+  grid-template-areas: "reader";
+}
+
 .slot {
   min-width: 0;
   display: flex;
@@ -170,6 +175,9 @@ body {
 }
 .slot-claude {
   grid-area: claude;
+}
+.slot-reader {
+  grid-area: reader;
 }
 
 @media (max-width: 860px) {
@@ -228,6 +236,13 @@ body {
   overflow-y: auto;
 }
 
+/* Reader tab is a single full-width panel with a lot of unused vertical
+   room below it — give its scroll area much more height than the default
+   420px multi-widget cap. */
+.grid-reader .panel-body {
+  max-height: calc(100vh - 260px);
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -280,6 +295,16 @@ body {
 .daily-nav-btn:hover:not(:disabled) {
   color: var(--accent);
 }
+.today-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+}
+.today-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
 .daily-nav-btn:disabled {
   opacity: 0.25;
   cursor: default;
@@ -299,6 +324,31 @@ body {
 }
 .row:last-child {
   border-bottom: none;
+}
+
+/* Reader rows: more breathing room than the default .row, plus a tapered
+   divider line between entries (not after the last one). */
+.reader-row {
+  padding: 14px 6px;
+  border-bottom: none;
+}
+.reader-item:not(:last-child) .reader-row {
+  position: relative;
+}
+.reader-item:not(:last-child) .reader-row::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--panel-edge) 12%,
+    var(--panel-edge) 88%,
+    transparent
+  );
 }
 .row:hover {
   background: rgba(255, 255, 255, 0.025);
@@ -371,6 +421,34 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-dim);
+}
+
+/* Docker: per-service start/stop toggle */
+.docker-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  margin-left: 8px;
+  transition: all 0.15s ease;
+}
+.docker-toggle:hover:not(:disabled) {
+  color: var(--live);
+  background: rgba(95, 184, 166, 0.14);
+}
+.docker-toggle.stop:hover:not(:disabled) {
+  color: var(--alert);
+  background: rgba(209, 121, 95, 0.14);
+}
+.docker-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Todoist: completion checkbox, description toggle/panel, add-task form */
@@ -666,6 +744,170 @@ body {
 }
 .launch-chip.state-failed .chip-status {
   color: var(--alert);
+}
+
+/* link list rows (Local Apps / Learning) — drag handle + launch button + actions */
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.link-row:last-of-type {
+  margin-bottom: 0;
+}
+.link-row .launch {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+.link-row.dragging {
+  opacity: 0.5;
+  z-index: 1;
+}
+
+.drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: grab;
+  padding: 4px;
+  touch-action: none;
+}
+.drag-handle:hover {
+  color: var(--accent);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.row-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.link-row:hover .row-actions,
+.reader-row:hover .row-actions,
+.launch-chip-wrap:hover .chip-actions {
+  opacity: 1;
+}
+.row-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.row-action:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+.row-action.danger:hover {
+  color: var(--alert);
+  background: rgba(209, 121, 95, 0.14);
+}
+.row-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* add / edit forms for link lists — mirrors .todoist-add */
+.link-add-form,
+.link-edit-form {
+  display: flex;
+  gap: 8px;
+}
+.link-add-form {
+  margin-top: 12px;
+}
+.link-edit-form {
+  flex: 1;
+  align-items: center;
+}
+.link-add-form input,
+.link-edit-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.link-add-form input::placeholder,
+.link-edit-form input::placeholder {
+  color: var(--ink-dim);
+}
+.link-add-form input:focus,
+.link-edit-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.link-add-form button,
+.link-edit-form button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  border-radius: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.link-add-form button:hover:not(:disabled),
+.link-edit-form .link-edit-save:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.link-add-form button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.link-edit-form .link-edit-cancel:hover {
+  border-color: var(--alert);
+  color: var(--alert);
+}
+.link-row.editing {
+  align-items: center;
+}
+
+/* Claude Code chip drag/edit wrapper */
+.launch-chip-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.launch-chip-wrap.dragging {
+  opacity: 0.5;
+  z-index: 1;
+}
+.launch-chip-wrap.editing {
+  flex: 1 1 100%;
+}
+.chip-handle {
+  padding: 2px;
+}
+.chip-edit-form {
+  width: 100%;
 }
 
 /* markdown-ish daily note render */

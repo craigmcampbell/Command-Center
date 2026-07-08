@@ -11,7 +11,8 @@ Electron app, React + TypeScript, built with electron-vite.
 - **Node 22 (LTS)** — pinned. See gotcha below.
 - **electron-builder** — packages the app into a real macOS `.app` (`npm run package`),
   so it can run without a terminal attached at all.
-- No database yet. Config lives in `config.json`; SQLite planned when persistence is needed.
+- **better-sqlite3** — persists the Local Apps / Learning / Claude Code lists (display
+  order + CRUD). Everything else still lives in `config.json`.
 
 ## Requirements
 
@@ -36,6 +37,13 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/googleCalendar.ts` — Google Calendar API v3 via OAuth (loopback + PKCE,
     no dependency beyond `node:http`/`node:crypto`). Tokens cache to
     `app.getPath("userData")/google-tokens.json` — never in git, never in `config.json`.
+  - `services/links.ts` — SQLite (`better-sqlite3`) CRUD + reorder for the Local Apps /
+    Learning / Claude Code lists, one table per list. DB lives at
+    `app.getPath("userData")/command-center.db`; one-time migration seeds it from
+    `config.json`'s old `localApps`/`learning`/`claudeCode` arrays if a table is empty.
+  - `services/reader.ts` — Readwise Reader API v3 for the latest saved documents.
+    Cursor-paginated upstream, so this keeps a small in-memory cache and does the
+    sort-by-saved-date + 15-per-page slicing itself.
 - **Preload** (`src/preload/index.ts`) — the ONLY bridge. Exposes a small named API
   (`window.api.*`) via `contextBridge`, typed as `CommandCenterApi`. Renderer can't
   reach Node except through this. `index.d.ts` augments `Window` so every component
@@ -84,6 +92,7 @@ under `<main>` is tab-gated, state lives in `App.tsx` same as always.
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
   Missions, Local Apps, Learning.
 - **Development** — Services (Docker), Claude Code.
+- **Reader** — latest Readwise Reader documents, paginated.
 
 Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
 (grid-template-columns/areas), and a new `{activeTab === "..." && <main>...}` block.
@@ -95,19 +104,21 @@ between existing notes, deep link to open in Obsidian) · Google Calendar schedu
 (prev/next day pagination, join-meeting link, expandable notes) · active missions ·
 Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
 launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
-links) · Claude Code launcher (opens in Warp).
+links) · Claude Code launcher (opens in Warp) · Reader (latest Readwise Reader
+documents, paginated 15 at a time).
 
 Local Apps and Learning both render via the generic `LinkLauncherWidget`
-(`components/LinkLauncherWidget.tsx`) — a `{ label, url }[]` list that opens a URL on
-click. Add a new quick-launch panel by adding a config section shaped like
-`{ instances: LinkInstance[] }` and one more `<LinkLauncherWidget title=... instances=.../>`
-in `App.tsx`, no new component needed.
+(`components/LinkLauncherWidget.tsx`) — a SQLite-backed `LinkItem[]` list
+(`{ id, label, link, sortOrder }`, see `services/links.ts`) with drag-to-reorder
+(`@dnd-kit`), inline add/edit/delete, and click-to-open. `ClaudeLauncherWidget`
+is the same idea rendered as a horizontal chip row, launching a terminal instead
+of opening a URL. Both talk to `window.api.links.*` via the shared
+`useLinkList` hook (`renderer/src/hooks/useLinkList.ts`).
 
 ## Roadmap (rough effort order)
 
 1. GitHub — open PRs / CI status via GitHub API.
-2. Persistence — `better-sqlite3` for caching + history (airfare, task completion).
-3. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
+2. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
 
 ## Run
 
@@ -129,6 +140,9 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   branches, as needed.
 - `config.json` is gitignored (it can hold real API tokens); `config.example.json` is
   the committed placeholder template — copy it and fill in real paths/tokens.
+- **Reader widget** needs a Readwise access token (`https://readwise.io/access_token`)
+  in `config.json`'s `reader.apiToken` — without one it fails soft with "No Readwise
+  API token configured".
 - **Google Calendar setup**: create a Google Cloud project, enable the Calendar API,
   set the OAuth consent screen to External with yourself as a test user (skips Google's
   app-verification process entirely), then create an OAuth client of type **Desktop app**

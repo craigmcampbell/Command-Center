@@ -4,22 +4,6 @@
     "dailyLogDir": "5 Logs/Daily",
     "missionsDir": "3 Missions"
   },
-  "localApps": {
-    "instances": [
-      { "label": "Open WebUI", "url": "http://localhost:3005" },
-      { "label": "OpenCode", "url": "http://localhost:4096" }
-    ]
-  },
-  "learning": {
-    "instances": [
-      { "label": "Example course", "url": "https://example.com/course" }
-    ]
-  },
-  "claudeCode": {
-    "projects": [
-      { "label": "example-project", "path": "/absolute/path/to/project" }
-    ]
-  },
   "docker": {
     "refreshSeconds": 15
   },
@@ -29,5 +13,8 @@
   "googleCalendar": {
     "clientId": "",
     "clientSecret": ""
+  },
+  "reader": {
+    "apiToken": ""
   }
 }

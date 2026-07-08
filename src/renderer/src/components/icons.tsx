@@ -98,3 +98,68 @@ export function IconVideo({ size = 13, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconTrash({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+export function IconPencil({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      <path d="M14.5 5.5l3 3" />
+    </svg>
+  );
+}
+
+export function IconX({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M5 5l14 14M19 5 5 19" />
+    </svg>
+  );
+}
+
+export function IconGrip({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="currentColor">
+      <circle cx="8" cy="6" r="1.5" />
+      <circle cx="8" cy="12" r="1.5" />
+      <circle cx="8" cy="18" r="1.5" />
+      <circle cx="16" cy="6" r="1.5" />
+      <circle cx="16" cy="12" r="1.5" />
+      <circle cx="16" cy="18" r="1.5" />
+    </svg>
+  );
+}
+
+export function IconPlay({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="currentColor">
+      <path d="M6 4.5v15l14-7.5Z" />
+    </svg>
+  );
+}
+
+export function IconStop({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="currentColor">
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+    </svg>
+  );
+}
+
+export function IconArchive({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+      <path d="M10 13h4" />
+    </svg>
+  );
+}

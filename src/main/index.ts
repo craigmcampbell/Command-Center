@@ -8,18 +8,38 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 
-import { getDockerContainers } from "./services/docker";
+import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
 import { readDailyNote, listMissions } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
 import { getEventsForDay, connectGoogleCalendar } from "./services/googleCalendar";
-import type { AppConfig } from "../shared/types";
+import {
+  initDatabase,
+  seedFromLegacyConfig,
+  listLinks,
+  addLink,
+  updateLink,
+  removeLink,
+  reorderLinks,
+} from "./services/links";
+import type { LegacyLinkConfig } from "./services/links";
+import {
+  listReaderDocuments,
+  resetReaderCache,
+  archiveDocument,
+  deleteDocument,
+} from "./services/reader";
+import type { AppConfig, LinkListKind } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
 // so editing config.json just works. A packaged app's bundle is immutable
 // (and asar'd), so config.json instead lives in the standard per-app data
 // directory, seeded on first launch from the bundled config.example.json.
-function loadConfig(): AppConfig {
+// Returns the raw parsed JSON — callers cast it to AppConfig (the current
+// schema) or LegacyLinkConfig (for the one-time links-table migration,
+// since older config.json files still have localApps/learning/claudeCode
+// keys that AppConfig no longer declares).
+function loadConfig(): Record<string, unknown> {
   if (!app.isPackaged) {
     const devConfigPath = path.join(__dirname, "..", "..", "config.json");
     return JSON.parse(fs.readFileSync(devConfigPath, "utf8"));
@@ -33,7 +53,11 @@ function loadConfig(): AppConfig {
   return JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
 }
 
-const config: AppConfig = loadConfig();
+const rawConfig = loadConfig();
+const config = rawConfig as unknown as AppConfig;
+
+initDatabase();
+seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -70,9 +94,15 @@ function createWindow(): void {
 // Give the UI its config (so widgets know paths, ports, instances).
 ipcMain.handle("config:get", () => config);
 
-// Docker container status.
+// Docker container status, plus starting/stopping a container.
 ipcMain.handle("docker:list", async () => {
   return getDockerContainers();
+});
+ipcMain.handle("docker:start", async (_evt, name: string) => {
+  return startContainer(name);
+});
+ipcMain.handle("docker:stop", async (_evt, name: string) => {
+  return stopContainer(name);
 });
 
 // Grimoire: a daily note (raw markdown, defaults to today) and the missions list.
@@ -112,6 +142,34 @@ ipcMain.handle("calendar:events", async (_evt, date?: string) => {
 });
 ipcMain.handle("calendar:connect", async () => {
   return connectGoogleCalendar(config.googleCalendar);
+});
+
+// Local Apps / Learning / Claude Code lists (SQLite-backed).
+ipcMain.handle("links:list", (_evt, kind: LinkListKind) => listLinks(kind));
+ipcMain.handle("links:add", (_evt, kind: LinkListKind, label: string, link: string) =>
+  addLink(kind, label, link)
+);
+ipcMain.handle(
+  "links:update",
+  (_evt, kind: LinkListKind, id: number, label: string, link: string) =>
+    updateLink(kind, id, label, link)
+);
+ipcMain.handle("links:remove", (_evt, kind: LinkListKind, id: number) => removeLink(kind, id));
+ipcMain.handle("links:reorder", (_evt, kind: LinkListKind, orderedIds: number[]) =>
+  reorderLinks(kind, orderedIds)
+);
+
+// Readwise Reader: latest saved documents, paginated 15 at a time, plus
+// archiving/deleting a document.
+ipcMain.handle("reader:list", (_evt, page: number, forceRefresh?: boolean) => {
+  if (forceRefresh) resetReaderCache();
+  return listReaderDocuments(config.reader, page);
+});
+ipcMain.handle("reader:archive", (_evt, id: string, page: number) => {
+  return archiveDocument(config.reader, id, page);
+});
+ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
+  return deleteDocument(config.reader, id, page);
 });
 
 app.whenReady().then(() => {

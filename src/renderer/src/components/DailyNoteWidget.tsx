@@ -8,6 +8,12 @@ interface DailyNoteWidgetProps {
   onNavigate: (date: string | null) => Promise<void>;
 }
 
+function todayDateString(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export default function DailyNoteWidget({ data, onNavigate }: DailyNoteWidgetProps) {
   let body;
   if (!data) {
@@ -28,6 +34,14 @@ export default function DailyNoteWidget({ data, onNavigate }: DailyNoteWidgetPro
       title="Today's Log"
       headerRight={
         <div className="daily-nav">
+          <button
+            className="daily-nav-btn today-btn"
+            disabled={data?.date === todayDateString()}
+            onClick={() => onNavigate(null)}
+            title="Jump to today"
+          >
+            Today
+          </button>
           <button
             className="daily-nav-btn"
             disabled={!data?.prevDate}
