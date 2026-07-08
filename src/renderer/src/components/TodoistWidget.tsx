@@ -101,6 +101,11 @@ function TodoistRow({
           {task.content}
           <IconExternal className="external-icon" />
         </span>
+        {task.parentName && (
+          <span className="parent-tag" title={task.parentName}>
+            ↳ {task.parentName}
+          </span>
+        )}
         {hasExpandable && (
           <button
             className="desc-toggle"

@@ -48,6 +48,7 @@ export async function getDueTasks(
   const projectNames = new Map<string, string>(
     projects.map((p: any) => [p.id, p.name])
   );
+  const contentById = new Map<string, string>(allTasks.map((t: any) => [t.id, t.content]));
   const subtasksByParent = new Map<string, any[]>();
   for (const t of allTasks) {
     if (t.parent_id) {
@@ -69,6 +70,7 @@ export async function getDueTasks(
       due: t.due?.date || null,
       overdue: !!t.due?.date && t.due.date < today,
       project: projectNames.get(t.project_id) || "Inbox",
+      parentName: t.parent_id ? contentById.get(t.parent_id) || null : null,
       subtasks: (subtasksByParent.get(t.id) || []).map((s: any) => ({
         id: s.id,
         content: s.content,

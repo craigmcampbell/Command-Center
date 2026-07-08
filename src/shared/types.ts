@@ -92,6 +92,7 @@ export interface TodoistTask {
   project: string;
   labels: string[];
   subtasks: TodoistSubtask[];
+  parentName: string | null;
 }
 
 export interface TodoistResult {

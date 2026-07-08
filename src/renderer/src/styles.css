@@ -333,6 +333,16 @@ body {
   font-size: 11px;
   color: var(--ink-dim);
 }
+.parent-tag {
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
 .calendar-connect .launch {
   margin-top: 8px;
 }
