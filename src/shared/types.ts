@@ -29,6 +29,7 @@ export interface GoogleCalendarConfig {
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
+  app?: { refreshMinutes?: number };
   todoist: { apiToken: string };
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
@@ -181,5 +182,10 @@ export interface CommandCenterApi {
     list: (page: number, forceRefresh?: boolean) => Promise<ReaderResult>;
     archive: (id: string, page: number) => Promise<ReaderResult>;
     delete: (id: string, page: number) => Promise<ReaderResult>;
+  };
+  scratchpad: {
+    get: () => Promise<string>;
+    save: (content: string) => Promise<void>;
+    clear: () => Promise<void>;
   };
 }

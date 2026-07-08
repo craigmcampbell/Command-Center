@@ -19,15 +19,19 @@ import LinkLauncherWidget from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
+import ScratchpadWidget from "./components/ScratchpadWidget";
 import { IconMark, IconRefresh } from "./components/icons";
 
-type TabId = "home" | "development" | "reader";
+type TabId = "home" | "development" | "reader" | "scratchpad";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "development", label: "Development" },
   { id: "reader", label: "Reader" },
+  { id: "scratchpad", label: "Scratchpad" },
 ];
+
+const DEFAULT_REFRESH_MINUTES = 10;
 
 function tickClock(): string {
   return new Date()
@@ -57,6 +61,7 @@ export default function App() {
   const [claudeProjects, setClaudeProjects] = useState<LinkItem[]>([]);
   const [reader, setReader] = useState<ReaderResult | null>(null);
   const [readerPage, setReaderPage] = useState(0);
+  const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -113,6 +118,7 @@ export default function App() {
     let intervalId: ReturnType<typeof setInterval> | undefined;
     (async () => {
       const cfg = await window.api.getConfig();
+      setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
       await Promise.all([
         loadDocker(),
         loadDaily(),
@@ -139,6 +145,15 @@ export default function App() {
     const id = setInterval(() => setClock(tickClock()), 1000 * 30);
     return () => clearInterval(id);
   }, []);
+
+  // ---- periodic full refresh (same as the Refresh button) ----
+  useEffect(() => {
+    if (appRefreshMinutes <= 0) return;
+    const id = setInterval(() => {
+      void refreshAll();
+    }, appRefreshMinutes * 60 * 1000);
+    return () => clearInterval(id);
+  }, [refreshAll, appRefreshMinutes]);
 
   return (
     <>
@@ -222,6 +237,14 @@ export default function App() {
         <main className="grid grid-reader">
           <div className="slot slot-reader">
             <ReaderWidget data={reader} onNavigate={(page) => loadReader(page)} onChange={setReader} />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "scratchpad" && (
+        <main className="grid grid-scratchpad">
+          <div className="slot slot-scratchpad">
+            <ScratchpadWidget />
           </div>
         </main>
       )}

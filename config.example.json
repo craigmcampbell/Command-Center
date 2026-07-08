@@ -7,6 +7,9 @@
   "docker": {
     "refreshSeconds": 15
   },
+  "app": {
+    "refreshMinutes": 10
+  },
   "todoist": {
     "apiToken": ""
   },

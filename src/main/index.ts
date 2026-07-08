@@ -23,6 +23,7 @@ import {
   reorderLinks,
 } from "./services/links";
 import type { LegacyLinkConfig } from "./services/links";
+import { initScratchpad, getScratchpad, saveScratchpad, clearScratchpad } from "./services/scratchpad";
 import {
   listReaderDocuments,
   resetReaderCache,
@@ -57,6 +58,7 @@ const rawConfig = loadConfig();
 const config = rawConfig as unknown as AppConfig;
 
 initDatabase();
+initScratchpad();
 seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
 
 function createWindow(): void {
@@ -170,6 +172,15 @@ ipcMain.handle("reader:archive", (_evt, id: string, page: number) => {
 });
 ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
   return deleteDocument(config.reader, id, page);
+});
+
+// Scratchpad: single autosaved markdown note.
+ipcMain.handle("scratchpad:get", () => getScratchpad());
+ipcMain.handle("scratchpad:save", (_evt, content: string) => {
+  saveScratchpad(content);
+});
+ipcMain.handle("scratchpad:clear", () => {
+  clearScratchpad();
 });
 
 app.whenReady().then(() => {

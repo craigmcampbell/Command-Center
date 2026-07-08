@@ -26,6 +26,10 @@ export interface LegacyLinkConfig {
 
 let db: Database.Database;
 
+export function getDatabase(): Database.Database {
+  return db;
+}
+
 export function initDatabase(): void {
   const dbPath = path.join(app.getPath("userData"), "command-center.db");
   db = new Database(dbPath);

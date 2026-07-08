@@ -29,6 +29,23 @@ interface LinkLauncherWidgetProps {
   linkPlaceholder?: string;
 }
 
+function toDisplayHost(link: string): string {
+  const raw = link.trim();
+  if (!raw) return "";
+
+  try {
+    const withProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(raw) ? raw : `https://${raw}`;
+    return new URL(withProtocol).host.replace(/^www\./i, "");
+  } catch {
+    return (
+      raw
+        .replace(/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//, "")
+        .split(/[/?#]/)[0]
+        ?.replace(/^www\./i, "") ?? raw
+    );
+  }
+}
+
 function EditForm({
   item,
   linkPlaceholder,
@@ -117,7 +134,7 @@ function SortableRow({
       <button className="launch" onClick={() => window.api.openUrl(item.link)}>
         <span>{item.label}</span>
         <span className="arrow">
-          {item.link.replace(/^https?:\/\//, "")}
+          <span className="arrow-text">{toDisplayHost(item.link)}</span>
           <IconArrowRight />
         </span>
       </button>

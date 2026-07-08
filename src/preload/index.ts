@@ -54,6 +54,12 @@ const api: CommandCenterApi = {
     archive: (id: string, page: number) => ipcRenderer.invoke("reader:archive", id, page),
     delete: (id: string, page: number) => ipcRenderer.invoke("reader:delete", id, page),
   },
+
+  scratchpad: {
+    get: () => ipcRenderer.invoke("scratchpad:get"),
+    save: (content: string) => ipcRenderer.invoke("scratchpad:save", content),
+    clear: () => ipcRenderer.invoke("scratchpad:clear"),
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);
