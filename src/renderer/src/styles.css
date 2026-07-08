@@ -131,6 +131,7 @@ body {
 .grid-home {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
+    "calendar calendar calendar"
     "todoist todoist daily"
     "missions apps learning";
 }
@@ -152,6 +153,9 @@ body {
 .slot-daily {
   grid-area: daily;
 }
+.slot-calendar {
+  grid-area: calendar;
+}
 .slot-missions {
   grid-area: missions;
 }
@@ -172,6 +176,7 @@ body {
   .grid-home {
     grid-template-columns: 1fr;
     grid-template-areas:
+      "calendar"
       "todoist"
       "daily"
       "missions"
@@ -321,6 +326,16 @@ body {
   white-space: nowrap;
   min-width: 0;
 }
+.row .cal-time {
+  flex-shrink: 0;
+  min-width: 92px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.calendar-connect .launch {
+  margin-top: 8px;
+}
 .row .name.link {
   display: inline-flex;
   align-items: center;
@@ -414,7 +429,7 @@ body {
   opacity: 1;
   color: var(--accent);
 }
-.todoist-desc {
+.expand-note {
   margin: 0 0 8px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.03);
@@ -665,13 +680,19 @@ body {
   text-decoration: line-through;
 }
 
-/* scrollbar */
-.panel-body::-webkit-scrollbar {
+/* scrollbar — applies to the outer window scroll and every .panel-body alike */
+::-webkit-scrollbar {
   width: 8px;
 }
-.panel-body::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
   background: var(--panel-edge);
   border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }
 
 @keyframes fadeInUp {

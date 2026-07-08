@@ -8,6 +8,7 @@ import type {
   DailyNoteResult,
   MissionsResult,
   TodoistResult,
+  CalendarResult,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
@@ -15,6 +16,7 @@ import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
 import LinkLauncherWidget from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
+import CalendarWidget from "./components/CalendarWidget";
 import { IconMark, IconRefresh } from "./components/icons";
 
 type TabId = "home" | "development";
@@ -46,6 +48,8 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("home");
   const [dailyDate, setDailyDate] = useState<string | null>(null);
+  const [calendar, setCalendar] = useState<CalendarResult | null>(null);
+  const [calendarDate, setCalendarDate] = useState<string | null>(null);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -59,17 +63,32 @@ export default function App() {
   const loadTodoist = useCallback(async () => {
     setTodoist(await window.api.todoist.tasks());
   }, []);
+  const loadCalendar = useCallback(async () => {
+    setCalendar(await window.api.calendar.events(calendarDate ?? undefined));
+  }, [calendarDate]);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
     setDaily(await window.api.grimoire.dailyNote(date ?? undefined));
   }, []);
 
+  const navigateCalendar = useCallback(async (date: string) => {
+    setCalendarDate(date);
+    setCalendar(await window.api.calendar.events(date));
+  }, []);
+
+  const connectCalendar = useCallback(async () => {
+    const res = await window.api.calendar.connect();
+    if (res.ok) {
+      setCalendar(await window.api.calendar.events(calendarDate ?? undefined));
+    }
+  }, [calendarDate]);
+
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist()]);
+    await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]);
     setRefreshing(false);
-  }, [loadDocker, loadDaily, loadMissions, loadTodoist]);
+  }, [loadDocker, loadDaily, loadMissions, loadTodoist, loadCalendar]);
 
   // ---- boot: load config, then every widget, then start Docker's refresh ----
   useEffect(() => {
@@ -77,14 +96,14 @@ export default function App() {
     (async () => {
       const cfg = await window.api.getConfig();
       setConfig(cfg);
-      await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist()]);
+      await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]);
 
       const secs = cfg.docker?.refreshSeconds || 15;
       intervalId = setInterval(loadDocker, secs * 1000);
     })();
     return () => clearInterval(intervalId);
-    // Intentionally empty: this must run once at mount only. loadDaily's
-    // identity changes whenever dailyDate does (prev/next navigation), and
+    // Intentionally empty: this must run once at mount only. loadDaily/loadCalendar's
+    // identity changes whenever dailyDate/calendarDate does (prev/next navigation), and
     // re-running this effect would stack a second Docker refresh interval.
   }, []);
 
@@ -126,6 +145,9 @@ export default function App() {
 
       {activeTab === "home" && (
         <main className="grid grid-home">
+          <div className="slot slot-calendar">
+            <CalendarWidget data={calendar} onNavigate={navigateCalendar} onConnect={connectCalendar} />
+          </div>
           <div className="slot slot-todoist">
             <TodoistWidget data={todoist} onRefresh={loadTodoist} />
           </div>

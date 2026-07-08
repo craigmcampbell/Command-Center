@@ -12,6 +12,7 @@ import { getDockerContainers } from "./services/docker";
 import { readDailyNote, listMissions } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
+import { getEventsForDay, connectGoogleCalendar } from "./services/googleCalendar";
 import type { AppConfig } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
@@ -102,6 +103,15 @@ ipcMain.handle("open:url", async (_evt, url: string) => {
 // Launch a Claude Code session in a terminal, scoped to a project dir.
 ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
+});
+
+// Google Calendar: a day's events (defaults to today), plus the one-time
+// OAuth connect flow.
+ipcMain.handle("calendar:events", async (_evt, date?: string) => {
+  return getEventsForDay(config.googleCalendar, date);
+});
+ipcMain.handle("calendar:connect", async () => {
+  return connectGoogleCalendar(config.googleCalendar);
 });
 
 app.whenReady().then(() => {

@@ -19,6 +19,11 @@ export interface ClaudeProject {
   path: string;
 }
 
+export interface GoogleCalendarConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   localApps: { instances: LinkInstance[] };
@@ -26,6 +31,7 @@ export interface AppConfig {
   claudeCode: { projects: ClaudeProject[] };
   docker: { refreshSeconds: number };
   todoist: { apiToken: string };
+  googleCalendar: GoogleCalendarConfig;
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -94,6 +100,26 @@ export interface TodoistResult {
   tasks: TodoistTask[];
 }
 
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  location: string | null;
+  meetingUrl: string | null;
+  description: string;
+  htmlLink: string;
+}
+
+export interface CalendarResult {
+  ok: boolean;
+  reason?: string;
+  needsAuth?: boolean;
+  events: CalendarEvent[];
+  date: string;
+}
+
 // Generic result for actions that either succeed or fail with a reason —
 // used for launching a terminal, completing a task, creating a task, etc.
 export interface ActionResult {
@@ -118,5 +144,9 @@ export interface CommandCenterApi {
   openUrl: (url: string) => Promise<boolean>;
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
+  };
+  calendar: {
+    events: (date?: string) => Promise<CalendarResult>;
+    connect: () => Promise<ActionResult>;
   };
 }

@@ -125,7 +125,7 @@ function TodoistRow({
       </div>
       {expanded && (
         <div className="todoist-expand">
-          {task.description && <div className="todoist-desc">{task.description}</div>}
+          {task.description && <div className="expand-note">{task.description}</div>}
           {task.subtasks.length > 0 && (
             <ul className="todoist-subtasks">
               {task.subtasks.map((s) => (

@@ -29,6 +29,11 @@ const api: CommandCenterApi = {
   claude: {
     launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
   },
+
+  calendar: {
+    events: (date?: string) => ipcRenderer.invoke("calendar:events", date),
+    connect: () => ipcRenderer.invoke("calendar:connect"),
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);

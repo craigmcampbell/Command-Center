@@ -25,5 +25,9 @@
   },
   "todoist": {
     "apiToken": ""
+  },
+  "googleCalendar": {
+    "clientId": "",
+    "clientSecret": ""
   }
 }

@@ -11,6 +11,7 @@ Built with Electron, React, and TypeScript, using electron-vite for the build.
 | **Today's Log** | Renders today's Obsidian daily note | `services/grimoire.ts` |
 | **Active Missions** | Lists notes in your `3 Missions/` folder, newest first | `services/grimoire.ts` |
 | **Due & Overdue** | Todoist tasks due today or overdue | `services/todoist.ts` |
+| **Today's Schedule** | Google Calendar events for the day, with prev/next pagination | `services/googleCalendar.ts` |
 | **Local Apps** | One-click open of each configured local app/instance (SillyTavern, Open WebUI, OpenCode, etc.) | config-driven |
 | **Learning** | One-click open of each configured course/docs link | config-driven |
 | **Claude Code** | Opens a Warp tab in a project dir and runs `claude` | `services/launcher.ts` |
@@ -64,6 +65,10 @@ tokens) and fill in your own paths/tokens — no code editing needed:
 - `learning.instances` — label + URL for each course/docs link
 - `claudeCode.projects` — label + path for each project you launch Claude in
 - `todoist.apiToken` — a Todoist personal API token (Settings → Integrations → Developer)
+- `googleCalendar.clientId` / `clientSecret` — from a Google Cloud OAuth "Desktop app"
+  client (Calendar API enabled, OAuth consent screen set to External with yourself as
+  a test user). Then click "Connect Google Calendar" in the app for one-time browser
+  consent — tokens cache after that, never in `config.json` or git.
 
 ## Notes & gotchas
 
@@ -79,10 +84,8 @@ tokens) and fill in your own paths/tokens — no code editing needed:
 
 Good candidates to add, in rough order of effort:
 
-1. **Google Calendar** — today's events. Cleanest via the Calendar MCP server
-   from the main process, or the Google Calendar API with a stored OAuth token.
-2. **GitHub** — open PRs / CI status via the GitHub API.
-3. **Persistence** — add SQLite (e.g. `better-sqlite3`) when you want to cache
+1. **GitHub** — open PRs / CI status via the GitHub API.
+2. **Persistence** — add SQLite (e.g. `better-sqlite3`) when you want to cache
    data or track history (airfare, task completion). Not needed yet.
-4. **Drag-to-rearrange** — swap the CSS grid for `react-grid-layout` now that
+3. **Drag-to-rearrange** — swap the CSS grid for `react-grid-layout` now that
    the renderer is React.

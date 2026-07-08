@@ -33,6 +33,9 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/todoist.ts` — calls the Todoist REST API for due/overdue tasks.
   - `services/launcher.ts` — opens a terminal at a dir and runs a command (macOS:
     writes a Warp Tab Config and opens it via `warp://tab_config/...`; Linux/Windows stubbed).
+  - `services/googleCalendar.ts` — Google Calendar API v3 via OAuth (loopback + PKCE,
+    no dependency beyond `node:http`/`node:crypto`). Tokens cache to
+    `app.getPath("userData")/google-tokens.json` — never in git, never in `config.json`.
 - **Preload** (`src/preload/index.ts`) — the ONLY bridge. Exposes a small named API
   (`window.api.*`) via `contextBridge`, typed as `CommandCenterApi`. Renderer can't
   reach Node except through this. `index.d.ts` augments `Window` so every component
@@ -78,7 +81,8 @@ lesser-used widgets don't crowd the main view. All widget data still loads and
 polls in the background regardless of which tab is active — only the JSX rendered
 under `<main>` is tab-gated, state lives in `App.tsx` same as always.
 
-- **Home** — Due & Overdue, Today's Log, Active Missions, Local Apps, Learning.
+- **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
+  Missions, Local Apps, Learning.
 - **Development** — Services (Docker), Claude Code.
 
 Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
@@ -87,7 +91,8 @@ Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
 ## Current widgets
 
 Docker status (auto-refresh) · today's Grimoire daily note (prev/next navigation
-between existing notes, deep link to open in Obsidian) · active missions ·
+between existing notes, deep link to open in Obsidian) · Google Calendar schedule
+(prev/next day pagination, join-meeting link, expandable notes) · active missions ·
 Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
 launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
 links) · Claude Code launcher (opens in Warp).
@@ -100,10 +105,9 @@ in `App.tsx`, no new component needed.
 
 ## Roadmap (rough effort order)
 
-1. Google Calendar — today's events (Calendar MCP from main, or Google API + stored token).
-2. GitHub — open PRs / CI status via GitHub API.
-3. Persistence — `better-sqlite3` for caching + history (airfare, task completion).
-4. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
+1. GitHub — open PRs / CI status via GitHub API.
+2. Persistence — `better-sqlite3` for caching + history (airfare, task completion).
+3. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
 
 ## Run
 
@@ -125,6 +129,12 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   branches, as needed.
 - `config.json` is gitignored (it can hold real API tokens); `config.example.json` is
   the committed placeholder template — copy it and fill in real paths/tokens.
+- **Google Calendar setup**: create a Google Cloud project, enable the Calendar API,
+  set the OAuth consent screen to External with yourself as a test user (skips Google's
+  app-verification process entirely), then create an OAuth client of type **Desktop app**
+  under Credentials. Paste the Client ID/Secret into `config.json`'s `googleCalendar`
+  section, then click "Connect Google Calendar" in the widget — it opens your browser
+  for one-time consent and caches tokens after that.
 - **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
   be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
   to bypass, or `xattr -cr "Command Center.app"`. The packaged app's config lives at
