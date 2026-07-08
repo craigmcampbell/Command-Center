@@ -73,3 +73,19 @@ export function IconPlus({ size = 14, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconChevronLeft({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M15 5 8 12l7 7" />
+    </svg>
+  );
+}
+
+export function IconChevronRight({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}

@@ -17,6 +17,13 @@ import LinkLauncherWidget from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import { IconMark, IconRefresh } from "./components/icons";
 
+type TabId = "home" | "development";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "development", label: "Development" },
+];
+
 function tickClock(): string {
   return new Date()
     .toLocaleString("en-US", {
@@ -37,18 +44,25 @@ export default function App() {
   const [todoist, setTodoist] = useState<TodoistResult | null>(null);
   const [clock, setClock] = useState(tickClock());
   const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("home");
+  const [dailyDate, setDailyDate] = useState<string | null>(null);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
   }, []);
   const loadDaily = useCallback(async () => {
-    setDaily(await window.api.grimoire.dailyNote());
-  }, []);
+    setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
+  }, [dailyDate]);
   const loadMissions = useCallback(async () => {
     setMissions(await window.api.grimoire.missions());
   }, []);
   const loadTodoist = useCallback(async () => {
     setTodoist(await window.api.todoist.tasks());
+  }, []);
+
+  const navigateDaily = useCallback(async (date: string | null) => {
+    setDailyDate(date);
+    setDaily(await window.api.grimoire.dailyNote(date ?? undefined));
   }, []);
 
   const refreshAll = useCallback(async () => {
@@ -69,7 +83,10 @@ export default function App() {
       intervalId = setInterval(loadDocker, secs * 1000);
     })();
     return () => clearInterval(intervalId);
-  }, [loadDocker, loadDaily, loadMissions, loadTodoist]);
+    // Intentionally empty: this must run once at mount only. loadDaily's
+    // identity changes whenever dailyDate does (prev/next navigation), and
+    // re-running this effect would stack a second Docker refresh interval.
+  }, []);
 
   // ---- clock / stardate ----
   useEffect(() => {
@@ -95,35 +112,54 @@ export default function App() {
         </button>
       </header>
 
-      <main className="grid">
-        <div className="slot slot-todoist">
-          <TodoistWidget data={todoist} onRefresh={loadTodoist} />
-        </div>
-        <div className="slot slot-daily">
-          <DailyNoteWidget data={daily} />
-        </div>
-        <div className="slot slot-missions">
-          <MissionsWidget data={missions} />
-        </div>
-        <div className="slot slot-services">
-          <DockerWidget data={docker} />
-        </div>
-        <div className="slot slot-apps">
-          <LinkLauncherWidget
-            title="Local Apps"
-            instances={config?.localApps?.instances || []}
-          />
-        </div>
-        <div className="slot slot-learning">
-          <LinkLauncherWidget
-            title="Learning"
-            instances={config?.learning?.instances || []}
-          />
-        </div>
-        <div className="slot slot-claude">
-          <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
-        </div>
-      </main>
+      <nav className="tabs">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={`tab ${activeTab === tab.id ? "active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "home" && (
+        <main className="grid grid-home">
+          <div className="slot slot-todoist">
+            <TodoistWidget data={todoist} onRefresh={loadTodoist} />
+          </div>
+          <div className="slot slot-daily">
+            <DailyNoteWidget data={daily} onNavigate={navigateDaily} />
+          </div>
+          <div className="slot slot-missions">
+            <MissionsWidget data={missions} />
+          </div>
+          <div className="slot slot-apps">
+            <LinkLauncherWidget
+              title="Local Apps"
+              instances={config?.localApps?.instances || []}
+            />
+          </div>
+          <div className="slot slot-learning">
+            <LinkLauncherWidget
+              title="Learning"
+              instances={config?.learning?.instances || []}
+            />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "development" && (
+        <main className="grid grid-dev">
+          <div className="slot slot-services">
+            <DockerWidget data={docker} />
+          </div>
+          <div className="slot slot-claude">
+            <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
+          </div>
+        </main>
+      )}
     </>
   );
 }

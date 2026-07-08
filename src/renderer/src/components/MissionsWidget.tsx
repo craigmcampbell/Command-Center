@@ -1,6 +1,6 @@
 import type { MissionsResult } from "../../../shared/types";
 import Panel from "./Panel";
-import Row from "./Row";
+import { IconArrowRight } from "./icons";
 
 interface MissionsWidgetProps {
   data: MissionsResult | null;
@@ -15,13 +15,19 @@ export default function MissionsWidget({ data }: MissionsWidgetProps) {
   } else if (data.missions.length === 0) {
     body = <p className="muted">No missions yet.</p>;
   } else {
-    body = data.missions.map((m) => {
-      const when = new Date(m.modified).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-      });
-      return <Row key={m.path} dotClassName="running" name={m.name} status={when} />;
-    });
+    body = data.missions.map((m) => (
+      <button
+        key={m.path}
+        className="launch"
+        onClick={() => window.api.openUrl(m.obsidianUri)}
+      >
+        <span>{m.name}</span>
+        <span className="arrow">
+          {m.tags.join(", ")}
+          <IconArrowRight />
+        </span>
+      </button>
+    ));
   }
 
   return <Panel title="Active Missions">{body}</Panel>;

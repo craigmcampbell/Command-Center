@@ -74,9 +74,9 @@ ipcMain.handle("docker:list", async () => {
   return getDockerContainers();
 });
 
-// Grimoire: today's daily note (raw markdown) and the missions list.
-ipcMain.handle("grimoire:dailyNote", async () => {
-  return readDailyNote(config.grimoire);
+// Grimoire: a daily note (raw markdown, defaults to today) and the missions list.
+ipcMain.handle("grimoire:dailyNote", async (_evt, date?: string) => {
+  return readDailyNote(config.grimoire, date);
 });
 ipcMain.handle("grimoire:missions", async () => {
   return listMissions(config.grimoire);

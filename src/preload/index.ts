@@ -14,7 +14,7 @@ const api: CommandCenterApi = {
   },
 
   grimoire: {
-    dailyNote: () => ipcRenderer.invoke("grimoire:dailyNote"),
+    dailyNote: (date?: string) => ipcRenderer.invoke("grimoire:dailyNote", date),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
   },
 

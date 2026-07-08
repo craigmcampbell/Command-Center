@@ -49,12 +49,18 @@ export interface DailyNoteResult {
   file: string;
   reason?: string;
   content: string;
+  date: string;
+  prevDate: string | null;
+  nextDate: string | null;
+  obsidianUri: string;
 }
 
 export interface Mission {
   name: string;
   path: string;
   modified: number;
+  obsidianUri: string;
+  tags: string[];
 }
 
 export interface MissionsResult {
@@ -101,7 +107,7 @@ export interface CommandCenterApi {
     list: () => Promise<DockerResult>;
   };
   grimoire: {
-    dailyNote: () => Promise<DailyNoteResult>;
+    dailyNote: (date?: string) => Promise<DailyNoteResult>;
     missions: () => Promise<MissionsResult>;
   };
   todoist: {

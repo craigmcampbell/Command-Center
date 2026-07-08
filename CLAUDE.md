@@ -71,11 +71,26 @@ UI event → `window.api.x()` (preload, typed) → `ipcRenderer.invoke("channel"
   data slice as props; no state-management library, mirrors the old `boot()`/`load*()`
   orchestration directly.
 
+## Tabs
+
+The dashboard is split into tabs (`App.tsx`'s `activeTab` state, `TABS` array) so
+lesser-used widgets don't crowd the main view. All widget data still loads and
+polls in the background regardless of which tab is active — only the JSX rendered
+under `<main>` is tab-gated, state lives in `App.tsx` same as always.
+
+- **Home** — Due & Overdue, Today's Log, Active Missions, Local Apps, Learning.
+- **Development** — Services (Docker), Claude Code.
+
+Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
+(grid-template-columns/areas), and a new `{activeTab === "..." && <main>...}` block.
+
 ## Current widgets
 
-Docker status (auto-refresh) · today's Grimoire daily note · active missions ·
-Todoist due/overdue tasks · Local Apps launcher (SillyTavern, Open WebUI, OpenCode, etc.) ·
-Learning launcher (courses/docs links) · Claude Code launcher (opens in Warp).
+Docker status (auto-refresh) · today's Grimoire daily note (prev/next navigation
+between existing notes, deep link to open in Obsidian) · active missions ·
+Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
+launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
+links) · Claude Code launcher (opens in Warp).
 
 Local Apps and Learning both render via the generic `LinkLauncherWidget`
 (`components/LinkLauncherWidget.tsx`) — a `{ label, url }[]` list that opens a URL on

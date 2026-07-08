@@ -95,16 +95,51 @@ body {
   animation: spin 0.7s linear infinite;
 }
 
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 28px 18px;
+}
+.tab {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tab:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tab.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-areas:
-    "todoist todoist daily daily"
-    "missions services apps learning"
-    "claude claude claude claude";
   gap: 18px;
   padding: 0 28px 40px;
   align-items: stretch;
+}
+
+.grid-home {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "todoist todoist daily"
+    "missions apps learning";
+}
+
+.grid-dev {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "services"
+    "claude";
 }
 
 .slot {
@@ -134,16 +169,14 @@ body {
 }
 
 @media (max-width: 860px) {
-  .grid {
+  .grid-home {
     grid-template-columns: 1fr;
     grid-template-areas:
       "todoist"
       "daily"
       "missions"
-      "services"
       "apps"
-      "learning"
-      "claude";
+      "learning";
   }
 }
 
@@ -221,6 +254,30 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-dim);
+}
+
+.daily-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.daily-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 2px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.daily-nav-btn:hover:not(:disabled) {
+  color: var(--accent);
+}
+.daily-nav-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 
 /* container rows */
