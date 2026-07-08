@@ -11,7 +11,8 @@ Built with Electron, React, and TypeScript, using electron-vite for the build.
 | **Today's Log** | Renders today's Obsidian daily note | `services/grimoire.ts` |
 | **Active Missions** | Lists notes in your `3 Missions/` folder, newest first | `services/grimoire.ts` |
 | **Due & Overdue** | Todoist tasks due today or overdue | `services/todoist.ts` |
-| **SillyTavern** | One-click open of each configured instance | config-driven |
+| **Local Apps** | One-click open of each configured local app/instance (SillyTavern, Open WebUI, OpenCode, etc.) | config-driven |
+| **Learning** | One-click open of each configured course/docs link | config-driven |
 | **Claude Code** | Opens a Warp tab in a project dir and runs `claude` | `services/launcher.ts` |
 
 ## First-time setup
@@ -59,7 +60,8 @@ Copy `config.example.json` to `config.json` (gitignored, since it can hold real 
 tokens) and fill in your own paths/tokens — no code editing needed:
 
 - `grimoire.vaultPath` — absolute path to your Grimoire vault
-- `sillytavern.instances` — label + URL for each instance
+- `localApps.instances` — label + URL for each local app/instance
+- `learning.instances` — label + URL for each course/docs link
 - `claudeCode.projects` — label + path for each project you launch Claude in
 - `todoist.apiToken` — a Todoist personal API token (Settings → Integrations → Developer)
 

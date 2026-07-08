@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import type { TodoistTask, TodoistResult } from "../../../shared/types";
 import Panel from "./Panel";
+import { IconCheck, IconExternal, IconNote, IconPlus } from "./icons";
 
 interface TodoistWidgetProps {
   data: TodoistResult | null;
@@ -54,8 +55,8 @@ function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
         disabled={submitting}
         onChange={(e) => setText(e.target.value)}
       />
-      <button type="submit" disabled={!text.trim() || submitting}>
-        +
+      <button type="submit" disabled={!text.trim() || submitting} aria-label="Add task">
+        <IconPlus />
       </button>
     </form>
   );
@@ -81,32 +82,76 @@ function TodoistRow({
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10);
+  const pillVariant = task.overdue ? "alert" : task.due === today ? "today" : "future";
+  const hasExpandable = task.description || task.subtasks.length > 0;
+
   return (
-    <div className="todoist-item">
+    <div className={`todoist-item ${completing ? "completing" : ""}`}>
       <div className="row">
         <button
           className={`check ${task.overdue ? "alert" : "running"}`}
           disabled={completing}
           onClick={handleComplete}
           title="Mark complete"
-        ></button>
+        >
+          <IconCheck className="check-icon" />
+        </button>
         <span className="name link" onClick={() => window.api.openUrl(task.url)}>
           {task.content}
+          <IconExternal className="external-icon" />
         </span>
-        {task.description && (
+        {hasExpandable && (
           <button
             className="desc-toggle"
             onClick={() => setExpanded((v) => !v)}
-            title={expanded ? "Hide description" : "Show description"}
+            title={expanded ? "Hide details" : "Show details"}
           >
-            📝
+            <IconNote />
           </button>
         )}
-        <span className="status">{dueLabel(task.due, task.overdue)}</span>
+        <span className="due-meta">
+          {task.labels.length > 0 && (
+            <span className="tag-chips-inline">
+              {task.labels.map((label) => (
+                <span key={label} className="tag-chip">
+                  {label}
+                </span>
+              ))}
+            </span>
+          )}
+          <span className={`due-pill ${pillVariant}`}>{dueLabel(task.due, task.overdue)}</span>
+        </span>
       </div>
-      {expanded && <div className="todoist-desc">{task.description}</div>}
+      {expanded && (
+        <div className="todoist-expand">
+          {task.description && <div className="todoist-desc">{task.description}</div>}
+          {task.subtasks.length > 0 && (
+            <ul className="todoist-subtasks">
+              {task.subtasks.map((s) => (
+                <li key={s.id} className={s.checked ? "done" : ""}>
+                  {s.content}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function groupByProject(tasks: TodoistTask[]): [string, TodoistTask[]][] {
+  const groups = new Map<string, TodoistTask[]>();
+  for (const task of tasks) {
+    const list = groups.get(task.project);
+    if (list) {
+      list.push(task);
+    } else {
+      groups.set(task.project, [task]);
+    }
+  }
+  return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
 export default function TodoistWidget({ data, onRefresh }: TodoistWidgetProps) {
@@ -122,8 +167,13 @@ export default function TodoistWidget({ data, onRefresh }: TodoistWidgetProps) {
     body = <p className="muted">Nothing due. Clear runway.</p>;
   } else {
     pipClassName = data.tasks.some((t) => t.overdue) ? "pip alert" : "pip live";
-    body = data.tasks.map((t) => (
-      <TodoistRow key={t.id} task={t} onRefresh={onRefresh} />
+    body = groupByProject(data.tasks).map(([project, tasks]) => (
+      <div className="todoist-group" key={project}>
+        <h3 className="todoist-group-title">{project}</h3>
+        {tasks.map((t) => (
+          <TodoistRow key={t.id} task={t} onRefresh={onRefresh} />
+        ))}
+      </div>
     ));
   }
 

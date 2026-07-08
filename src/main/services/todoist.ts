@@ -9,6 +9,8 @@ import type { AppConfig, ActionResult, TodoistResult } from "../../shared/types"
 const API_ROOT = "https://api.todoist.com/api/v1";
 const TASKS_URL =
   `${API_ROOT}/tasks/filter?query=` + encodeURIComponent("overdue | today");
+const PROJECTS_URL = `${API_ROOT}/projects`;
+const ALL_TASKS_URL = `${API_ROOT}/tasks`;
 
 export async function getDueTasks(
   { apiToken }: AppConfig["todoist"] = { apiToken: "" }
@@ -17,25 +19,44 @@ export async function getDueTasks(
     return { ok: false, reason: "No Todoist API token configured", tasks: [] };
   }
 
-  let res: Response;
+  let tasksRes: Response;
+  let projectsRes: Response;
+  let allTasksRes: Response;
   try {
-    res = await fetch(TASKS_URL, {
-      headers: { Authorization: `Bearer ${apiToken}` },
-    });
+    [tasksRes, projectsRes, allTasksRes] = await Promise.all([
+      fetch(TASKS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
+      fetch(PROJECTS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
+      fetch(ALL_TASKS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
+    ]);
   } catch {
     return { ok: false, reason: "Couldn't reach Todoist", tasks: [] };
   }
 
-  if (!res.ok) {
+  const failed = !tasksRes.ok ? tasksRes : !projectsRes.ok ? projectsRes : !allTasksRes.ok ? allTasksRes : null;
+  if (failed) {
     return {
       ok: false,
-      reason:
-        res.status === 401 ? "Todoist token rejected" : "Todoist request failed",
+      reason: failed.status === 401 ? "Todoist token rejected" : "Todoist request failed",
       tasks: [],
     };
   }
 
-  const { results } = await res.json();
+  const { results } = await tasksRes.json();
+  const { results: projects } = await projectsRes.json();
+  const { results: allTasks } = await allTasksRes.json();
+
+  const projectNames = new Map<string, string>(
+    projects.map((p: any) => [p.id, p.name])
+  );
+  const subtasksByParent = new Map<string, any[]>();
+  for (const t of allTasks) {
+    if (t.parent_id) {
+      const list = subtasksByParent.get(t.parent_id);
+      if (list) list.push(t);
+      else subtasksByParent.set(t.parent_id, [t]);
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   const tasks = results
@@ -47,6 +68,13 @@ export async function getDueTasks(
       priority: t.priority, // 4 = highest (p1), 1 = lowest (p4)
       due: t.due?.date || null,
       overdue: !!t.due?.date && t.due.date < today,
+      project: projectNames.get(t.project_id) || "Inbox",
+      subtasks: (subtasksByParent.get(t.id) || []).map((s: any) => ({
+        id: s.id,
+        content: s.content,
+        checked: !!s.checked,
+      })),
+      labels: t.labels || [],
     }))
     .sort((a: { due: string | null }, b: { due: string | null }) =>
       (a.due || "").localeCompare(b.due || "")

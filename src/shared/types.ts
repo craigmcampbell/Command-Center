@@ -7,7 +7,9 @@ export interface GrimoireConfig {
   missionsDir: string;
 }
 
-export interface SillyTavernInstance {
+// A quick-launch link — a SillyTavern instance, a local app, anything
+// reachable by URL. Shared shape so one widget can render any of them.
+export interface LinkInstance {
   label: string;
   url: string;
 }
@@ -19,7 +21,8 @@ export interface ClaudeProject {
 
 export interface AppConfig {
   grimoire: GrimoireConfig;
-  sillytavern: { instances: SillyTavernInstance[] };
+  localApps: { instances: LinkInstance[] };
+  learning: { instances: LinkInstance[] };
   claudeCode: { projects: ClaudeProject[] };
   docker: { refreshSeconds: number };
   todoist: { apiToken: string };
@@ -60,6 +63,12 @@ export interface MissionsResult {
   missions: Mission[];
 }
 
+export interface TodoistSubtask {
+  id: string;
+  content: string;
+  checked: boolean;
+}
+
 export interface TodoistTask {
   id: string;
   content: string;
@@ -68,6 +77,9 @@ export interface TodoistTask {
   priority: number;
   due: string | null;
   overdue: boolean;
+  project: string;
+  labels: string[];
+  subtasks: TodoistSubtask[];
 }
 
 export interface TodoistResult {

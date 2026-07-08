@@ -74,7 +74,14 @@ UI event → `window.api.x()` (preload, typed) → `ipcRenderer.invoke("channel"
 ## Current widgets
 
 Docker status (auto-refresh) · today's Grimoire daily note · active missions ·
-Todoist due/overdue tasks · SillyTavern launcher · Claude Code launcher (opens in Warp).
+Todoist due/overdue tasks · Local Apps launcher (SillyTavern, Open WebUI, OpenCode, etc.) ·
+Learning launcher (courses/docs links) · Claude Code launcher (opens in Warp).
+
+Local Apps and Learning both render via the generic `LinkLauncherWidget`
+(`components/LinkLauncherWidget.tsx`) — a `{ label, url }[]` list that opens a URL on
+click. Add a new quick-launch panel by adding a config section shaped like
+`{ instances: LinkInstance[] }` and one more `<LinkLauncherWidget title=... instances=.../>`
+in `App.tsx`, no new component needed.
 
 ## Roadmap (rough effort order)
 

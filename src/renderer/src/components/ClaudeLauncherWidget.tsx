@@ -1,28 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClaudeProject } from "../../../shared/types";
 import Panel from "./Panel";
+import { IconArrowRight, IconCheck } from "./icons";
 
 interface ClaudeLauncherWidgetProps {
   projects: ClaudeProject[];
 }
 
-function LaunchButton({ project }: { project: ClaudeProject }) {
-  const [label, setLabel] = useState("launch →");
+type LaunchState = "idle" | "opening" | "opened" | "failed";
+
+function LaunchChip({ project }: { project: ClaudeProject }) {
+  const [state, setState] = useState<LaunchState>("idle");
   const revertTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => () => clearTimeout(revertTimeout.current), []);
 
   async function handleClick() {
-    setLabel("opening…");
+    setState("opening");
     const res = await window.api.claude.launch(project.path);
-    setLabel(res.ok ? "opened ✓" : "failed");
-    revertTimeout.current = setTimeout(() => setLabel("launch →"), 2000);
+    setState(res.ok ? "opened" : "failed");
+    revertTimeout.current = setTimeout(() => setState("idle"), 2000);
   }
 
   return (
-    <button className="launch" onClick={handleClick}>
+    <button className={`launch-chip state-${state}`} onClick={handleClick}>
       <span>{project.label}</span>
-      <span className="arrow">{label}</span>
+      <span className="chip-status">
+        {state === "idle" && (
+          <>
+            launch <IconArrowRight />
+          </>
+        )}
+        {state === "opening" && "opening…"}
+        {state === "opened" && (
+          <>
+            opened <IconCheck />
+          </>
+        )}
+        {state === "failed" && "failed"}
+      </span>
     </button>
   );
 }
@@ -33,7 +49,11 @@ export default function ClaudeLauncherWidget({ projects }: ClaudeLauncherWidgetP
       {projects.length === 0 ? (
         <p className="muted">No projects configured.</p>
       ) : (
-        projects.map((p) => <LaunchButton key={p.path} project={p} />)
+        <div className="chip-row">
+          {projects.map((p) => (
+            <LaunchChip key={p.path} project={p} />
+          ))}
+        </div>
       )}
     </Panel>
   );

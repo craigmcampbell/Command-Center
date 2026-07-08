@@ -4,9 +4,15 @@
     "dailyLogDir": "5 Logs/Daily",
     "missionsDir": "3 Missions"
   },
-  "sillytavern": {
+  "localApps": {
     "instances": [
-      { "label": "Example", "url": "http://localhost:8000" }
+      { "label": "Open WebUI", "url": "http://localhost:3005" },
+      { "label": "OpenCode", "url": "http://localhost:4096" }
+    ]
+  },
+  "learning": {
+    "instances": [
+      { "label": "Example course", "url": "https://example.com/course" }
     ]
   },
   "claudeCode": {

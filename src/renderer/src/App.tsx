@@ -13,8 +13,9 @@ import DockerWidget from "./components/DockerWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
-import SillyTavernWidget from "./components/SillyTavernWidget";
+import LinkLauncherWidget from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
+import { IconMark, IconRefresh } from "./components/icons";
 
 function tickClock(): string {
   return new Date()
@@ -35,6 +36,7 @@ export default function App() {
   const [missions, setMissions] = useState<MissionsResult | null>(null);
   const [todoist, setTodoist] = useState<TodoistResult | null>(null);
   const [clock, setClock] = useState(tickClock());
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -50,7 +52,9 @@ export default function App() {
   }, []);
 
   const refreshAll = useCallback(async () => {
+    setRefreshing(true);
     await Promise.all([loadDocker(), loadDaily(), loadMissions(), loadTodoist()]);
+    setRefreshing(false);
   }, [loadDocker, loadDaily, loadMissions, loadTodoist]);
 
   // ---- boot: load config, then every widget, then start Docker's refresh ----
@@ -79,24 +83,46 @@ export default function App() {
 
       <header className="masthead">
         <div className="mark">
-          <span className="glyph">◈</span>
+          <IconMark size={28} className="glyph" />
           <div>
             <h1>Command Center</h1>
             <p className="stardate">{clock}</p>
           </div>
         </div>
         <button className="refresh" title="Refresh everything" onClick={refreshAll}>
-          ⟳ Refresh
+          <IconRefresh className={refreshing ? "spin" : ""} />
+          Refresh
         </button>
       </header>
 
       <main className="grid">
-        <DockerWidget data={docker} />
-        <DailyNoteWidget data={daily} />
-        <MissionsWidget data={missions} />
-        <TodoistWidget data={todoist} onRefresh={loadTodoist} />
-        <SillyTavernWidget instances={config?.sillytavern?.instances || []} />
-        <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
+        <div className="slot slot-todoist">
+          <TodoistWidget data={todoist} onRefresh={loadTodoist} />
+        </div>
+        <div className="slot slot-daily">
+          <DailyNoteWidget data={daily} />
+        </div>
+        <div className="slot slot-missions">
+          <MissionsWidget data={missions} />
+        </div>
+        <div className="slot slot-services">
+          <DockerWidget data={docker} />
+        </div>
+        <div className="slot slot-apps">
+          <LinkLauncherWidget
+            title="Local Apps"
+            instances={config?.localApps?.instances || []}
+          />
+        </div>
+        <div className="slot slot-learning">
+          <LinkLauncherWidget
+            title="Learning"
+            instances={config?.learning?.instances || []}
+          />
+        </div>
+        <div className="slot slot-claude">
+          <ClaudeLauncherWidget projects={config?.claudeCode?.projects || []} />
+        </div>
       </main>
     </>
   );
