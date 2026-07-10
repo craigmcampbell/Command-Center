@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "../lib/markdown";
 import Panel from "./Panel";
+import MarkdownEditor from "./MarkdownEditor";
 import { IconTrash } from "./icons";
 
 type ViewMode = "edit" | "split" | "preview";
@@ -93,12 +94,11 @@ export default function ScratchpadWidget() {
     >
       <div className={`scratchpad ${mode}`}>
         {showEditor && (
-          <textarea
+          <MarkdownEditor
             className="scratchpad-editor"
             value={content}
-            onChange={(e) => handleChange(e.target.value)}
-            placeholder="Jot something down… supports markdown headings, bullets, and tasks."
-            spellCheck
+            onChange={handleChange}
+            placeholder="Jot something down… supports markdown headings, nested bullets, tasks, bold, and italic."
           />
         )}
         {showPreview && (

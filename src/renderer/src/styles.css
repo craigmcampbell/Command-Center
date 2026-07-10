@@ -697,19 +697,14 @@ body {
   height: 100%;
 }
 
+/* Sizing shell only — the CodeMirror instance mounted inside handles its
+   own visual theming (background, font, padding, colors) via
+   EditorView.theme() in lib/markdownEditor.ts. */
 .scratchpad-editor {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  resize: none;
-  border: none;
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 16px;
-  outline: none;
+  overflow: hidden;
 }
 
 .scratchpad-preview {
@@ -1447,6 +1442,13 @@ body {
 .note .task-done {
   color: var(--ink-dim);
   text-decoration: line-through;
+}
+.note code {
+  font-family: var(--mono);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
 }
 
 /* scrollbar — applies to the outer window scroll and every .panel-body alike */
