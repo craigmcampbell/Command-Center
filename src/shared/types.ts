@@ -26,6 +26,23 @@ export interface GoogleCalendarConfig {
   clientSecret: string;
 }
 
+export interface GitHubRepoConfig {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+}
+
+// Optional: older config.json files predate this feature and won't have a
+// `github` section at all — every reader of this treats it as absent, not
+// an error (see services/github.ts).
+export interface GitHubConfig {
+  token?: string;
+  refreshSeconds?: number;
+  reviewUser?: string;
+  repos?: GitHubRepoConfig[];
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
@@ -33,6 +50,7 @@ export interface AppConfig {
   todoist: { apiToken: string };
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
+  github?: GitHubConfig;
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -192,6 +210,45 @@ export interface HabitTrendResult {
   weeks: HabitTrendWeek[];
 }
 
+// GitHub Actions run status for the most recent run on a repo's configured
+// branch. `conclusion` is null while `status` isn't yet "completed".
+export interface CiRun {
+  status: string;
+  conclusion: string | null;
+  workflowName: string;
+  url: string;
+  updatedAt: string;
+}
+
+export interface GitHubPr {
+  number: number;
+  title: string;
+  author: string;
+  url: string;
+  repoLabel: string;
+}
+
+export interface GitHubRepoStatus {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  ok: boolean;
+  reason?: string;
+  ci: CiRun | null;
+  openPrCount: number;
+  openPrs: GitHubPr[];
+  prsUrl: string;
+}
+
+export interface GitHubStatusResult {
+  ok: boolean;
+  reason?: string;
+  repos: GitHubRepoStatus[];
+  reviewRequested: GitHubPr[];
+  reviewRequestedReason?: string;
+}
+
 export interface CommandCenterApi {
   getConfig: () => Promise<AppConfig>;
   docker: {
@@ -247,5 +304,8 @@ export interface CommandCenterApi {
     getWeek: (weekStart?: string) => Promise<HabitWeekView>;
     toggle: (habitId: number, date: string) => Promise<HabitWeekView>;
     trends: (habitId?: number, weeks?: number) => Promise<HabitTrendResult | HabitTrendResult[]>;
+  };
+  github: {
+    status: () => Promise<GitHubStatusResult>;
   };
 }

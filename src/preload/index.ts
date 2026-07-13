@@ -79,6 +79,10 @@ const api: CommandCenterApi = {
     trends: (habitId?: number, weeks?: number) =>
       ipcRenderer.invoke("habits:trends", habitId, weeks),
   },
+
+  github: {
+    status: () => ipcRenderer.invoke("github:status"),
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);

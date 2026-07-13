@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   DockerResult,
   DailyNoteResult,
+  GitHubStatusResult,
   LinkItem,
   MissionsResult,
   ReaderResult,
@@ -12,6 +13,7 @@ import type {
   CalendarResult,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
+import GitHubWidget from "./components/GitHubWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
@@ -21,7 +23,9 @@ import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
+import CommandPalette from "./components/CommandPalette";
 import { IconRefresh } from "./components/icons";
+import type { PaletteContext } from "./palette";
 import appLogo from "./assets/icon.png";
 
 type TabId = "home" | "development" | "reader" | "scratchpad" | "habits";
@@ -48,6 +52,14 @@ function tickClock(): string {
     .toUpperCase();
 }
 
+function formatRefreshTime(date: Date): string {
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 export default function App() {
   const [docker, setDocker] = useState<DockerResult | null>(null);
   const [daily, setDaily] = useState<DailyNoteResult | null>(null);
@@ -55,6 +67,7 @@ export default function App() {
   const [todoist, setTodoist] = useState<TodoistResult | null>(null);
   const [clock, setClock] = useState(tickClock());
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("home");
   const [dailyDate, setDailyDate] = useState<string | null>(null);
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
@@ -65,9 +78,14 @@ export default function App() {
   const [reader, setReader] = useState<ReaderResult | null>(null);
   const [readerPage, setReaderPage] = useState(0);
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [github, setGithub] = useState<GitHubStatusResult | null>(null);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
+  }, []);
+  const loadGithub = useCallback(async () => {
+    setGithub(await window.api.github.status());
   }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
@@ -112,13 +130,55 @@ export default function App() {
       loadTodoist(),
       loadCalendar(),
       loadReader(readerPage, true),
+      loadGithub(),
     ]);
     setRefreshing(false);
-  }, [loadDocker, loadDaily, loadMissions, loadTodoist, loadCalendar, loadReader, readerPage]);
+    setLastRefreshedAt(new Date());
+  }, [
+    loadDocker,
+    loadDaily,
+    loadMissions,
+    loadTodoist,
+    loadCalendar,
+    loadReader,
+    readerPage,
+    loadGithub,
+  ]);
 
-  // ---- boot: load config, then every widget, then start Docker's refresh ----
+  const newScratchpadNote = useCallback(async () => {
+    await window.api.scratchpad.clear();
+    setActiveTab("scratchpad");
+  }, []);
+
+  // ---- command palette: global ⌘K/Ctrl+K toggle, works from any tab ----
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval> | undefined;
+    function handleKeyDown(e: KeyboardEvent) {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (isMod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const paletteContext: PaletteContext = {
+    tabs: TABS,
+    onNavigateTab: (id) => setActiveTab(id as TabId),
+    claudeProjects,
+    localApps,
+    learning,
+    docker,
+    onRefreshDocker: loadDocker,
+    onRefreshAll: refreshAll,
+    onNewScratchpadNote: newScratchpadNote,
+  };
+
+  // ---- boot: load config, then every widget, then start Docker's + GitHub's refresh ----
+  useEffect(() => {
+    let dockerIntervalId: ReturnType<typeof setInterval> | undefined;
+    let githubIntervalId: ReturnType<typeof setInterval> | undefined;
     (async () => {
       const cfg = await window.api.getConfig();
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
@@ -132,15 +192,23 @@ export default function App() {
         window.api.links.list("learning").then(setLearning),
         window.api.links.list("claudeCode").then(setClaudeProjects),
         loadReader(0),
+        loadGithub(),
       ]);
+      setLastRefreshedAt(new Date());
 
-      const secs = cfg.docker?.refreshSeconds || 15;
-      intervalId = setInterval(loadDocker, secs * 1000);
+      const dockerSecs = cfg.docker?.refreshSeconds || 15;
+      dockerIntervalId = setInterval(loadDocker, dockerSecs * 1000);
+
+      const githubSecs = cfg.github?.refreshSeconds || 300;
+      githubIntervalId = setInterval(loadGithub, githubSecs * 1000);
     })();
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(dockerIntervalId);
+      clearInterval(githubIntervalId);
+    };
     // Intentionally empty: this must run once at mount only. loadDaily/loadCalendar's
     // identity changes whenever dailyDate/calendarDate does (prev/next navigation), and
-    // re-running this effect would stack a second Docker refresh interval.
+    // re-running this effect would stack a second Docker/GitHub refresh interval.
   }, []);
 
   // ---- clock / stardate ----
@@ -170,10 +238,15 @@ export default function App() {
             <p className="stardate">{clock}</p>
           </div>
         </div>
-        <button className="refresh" title="Refresh everything" onClick={refreshAll}>
-          <IconRefresh className={refreshing ? "spin" : ""} />
-          Refresh
-        </button>
+        <div className="refresh-control">
+          <button className="refresh" title="Refresh everything" onClick={refreshAll}>
+            <IconRefresh className={refreshing ? "spin" : ""} />
+            Refresh
+          </button>
+          {lastRefreshedAt && (
+            <p className="refresh-timestamp">Last refreshed {formatRefreshTime(lastRefreshedAt)}</p>
+          )}
+        </div>
       </header>
 
       <nav className="tabs">
@@ -233,6 +306,9 @@ export default function App() {
               onChange={setClaudeProjects}
             />
           </div>
+          <div className="slot slot-github">
+            <GitHubWidget data={github} />
+          </div>
         </main>
       )}
 
@@ -259,6 +335,12 @@ export default function App() {
           </div>
         </main>
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        context={paletteContext}
+      />
     </>
   );
 }

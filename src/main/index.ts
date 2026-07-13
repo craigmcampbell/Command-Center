@@ -42,6 +42,7 @@ import {
   archiveDocument,
   deleteDocument,
 } from "./services/reader";
+import { getGitHubStatus } from "./services/github";
 import type { AppConfig, HabitFrequencyType, LinkListKind } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
@@ -59,11 +60,34 @@ function loadConfig(): Record<string, unknown> {
   }
 
   const userConfigPath = path.join(app.getPath("userData"), "config.json");
+  const defaults = JSON.parse(
+    fs.readFileSync(path.join(process.resourcesPath, "config.example.json"), "utf8")
+  );
+
   if (!fs.existsSync(userConfigPath)) {
     fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
-    fs.copyFileSync(path.join(process.resourcesPath, "config.example.json"), userConfigPath);
+    fs.writeFileSync(userConfigPath, JSON.stringify(defaults, null, 2));
+    return defaults;
   }
-  return JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
+
+  // A user's config.json is seeded once and then never touched by updates, so
+  // a top-level section added to config.example.json after that (e.g.
+  // googleCalendar) would otherwise stay permanently missing — leaving
+  // `config.<newSection>` undefined and crashing any service that reads it.
+  // Backfill any missing top-level keys from the bundled defaults so old
+  // installs pick up new config sections automatically.
+  const userConfig = JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
+  let changed = false;
+  for (const key of Object.keys(defaults)) {
+    if (!(key in userConfig)) {
+      userConfig[key] = defaults[key];
+      changed = true;
+    }
+  }
+  if (changed) {
+    fs.writeFileSync(userConfigPath, JSON.stringify(userConfig, null, 2));
+  }
+  return userConfig;
 }
 
 const rawConfig = loadConfig();
@@ -198,6 +222,10 @@ ipcMain.handle("reader:archive", (_evt, id: string, page: number) => {
 ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
   return deleteDocument(config.reader, id, page);
 });
+
+// GitHub: latest CI run + open PR count per configured repo, plus
+// review-requested PRs across all of them.
+ipcMain.handle("github:status", () => getGitHubStatus(config.github));
 
 // Scratchpad: single autosaved markdown note.
 ipcMain.handle("scratchpad:get", () => getScratchpad());

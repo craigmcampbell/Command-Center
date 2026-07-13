@@ -19,5 +19,13 @@
   },
   "reader": {
     "apiToken": ""
+  },
+  "github": {
+    "token": "",
+    "refreshSeconds": 300,
+    "reviewUser": "your-github-username",
+    "repos": [
+      { "label": "my-repo", "owner": "your-github-username", "repo": "my-repo", "branch": "main" }
+    ]
   }
 }

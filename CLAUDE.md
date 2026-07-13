@@ -44,6 +44,9 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/reader.ts` — Readwise Reader API v3 for the latest saved documents.
     Cursor-paginated upstream, so this keeps a small in-memory cache and does the
     sort-by-saved-date + 15-per-page slicing itself.
+  - `services/github.ts` — GitHub REST API for latest Actions run + open PR count
+    per configured repo, plus a cross-repo review-requested search. Personal
+    access token lives in `config.json`'s `github.token`.
 - **Preload** (`src/preload/index.ts`) — the ONLY bridge. Exposes a small named API
   (`window.api.*`) via `contextBridge`, typed as `CommandCenterApi`. Renderer can't
   reach Node except through this. `index.d.ts` augments `Window` so every component
@@ -91,7 +94,7 @@ under `<main>` is tab-gated, state lives in `App.tsx` same as always.
 
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
   Missions, Local Apps, Learning.
-- **Development** — Services (Docker), Claude Code.
+- **Development** — Services (Docker), Claude Code, GitHub (CI status + PRs).
 - **Reader** — latest Readwise Reader documents, paginated.
 
 Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
@@ -105,7 +108,8 @@ between existing notes, deep link to open in Obsidian) · Google Calendar schedu
 Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
 launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
 links) · Claude Code launcher (opens in Warp) · Reader (latest Readwise Reader
-documents, paginated 15 at a time).
+documents, paginated 15 at a time) · GitHub (per-repo latest CI run + open PR
+count, cross-repo review-requested PRs, auto-refresh on `github.refreshSeconds`).
 
 Local Apps and Learning both render via the generic `LinkLauncherWidget`
 (`components/LinkLauncherWidget.tsx`) — a SQLite-backed `LinkItem[]` list
@@ -115,10 +119,22 @@ is the same idea rendered as a horizontal chip row, launching a terminal instead
 of opening a URL. Both talk to `window.api.links.*` via the shared
 `useLinkList` hook (`renderer/src/hooks/useLinkList.ts`).
 
+## Command Palette
+
+`⌘K`/`Ctrl+K` opens a global fuzzy-filter launcher over tabs, Claude Code
+projects, Local Apps/Learning links, Docker start/stop, and a couple of quick
+actions ("Refresh all", "New scratchpad note"). It's app-wide navigation, not
+a per-tab widget, so it skips the five-touch-point pattern above:
+`src/renderer/src/palette.ts` holds the action registry (`buildActions()`
+rebuilds the list fresh every time the palette opens, from whatever state
+`App.tsx` already has — no new IPC), and
+`components/CommandPalette.tsx` is the overlay itself. The global keydown
+listener lives in `App.tsx`; it's renderer-only (no Electron `globalShortcut`),
+so it only fires while a Command Center window is focused.
+
 ## Roadmap (rough effort order)
 
-1. GitHub — open PRs / CI status via GitHub API.
-2. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
+1. Drag-to-rearrange grid — now that the renderer is React, `react-grid-layout` or similar.
 
 ## Run
 
@@ -149,6 +165,11 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   under Credentials. Paste the Client ID/Secret into `config.json`'s `googleCalendar`
   section, then click "Connect Google Calendar" in the widget — it opens your browser
   for one-time consent and caches tokens after that.
+- **GitHub widget setup**: put a personal access token (repo + read:org scope) in
+  `config.json`'s `github.token`, list repos to track under `github.repos`
+  (`{ label, owner, repo, branch }` each), and set `github.reviewUser` to your GitHub
+  username for the "Needs your review" section. Without a token the widget fails soft
+  with "No GitHub token configured".
 - **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
   be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
   to bypass, or `xattr -cr "Command Center.app"`. The packaged app's config lives at
