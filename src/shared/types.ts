@@ -43,6 +43,14 @@ export interface GitHubConfig {
   repos?: GitHubRepoConfig[];
 }
 
+// Optional: a labeled Obsidian vault root for the Notes tab. Separate from
+// grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
+// point the Notes tab at several vaults, including that same one.
+export interface VaultConfig {
+  label: string;
+  path: string;
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
@@ -51,6 +59,7 @@ export interface AppConfig {
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
   github?: GitHubConfig;
+  vaults?: VaultConfig[];
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -249,6 +258,42 @@ export interface GitHubStatusResult {
   reviewRequestedReason?: string;
 }
 
+// A file or folder one level down from wherever browseVault() was pointed —
+// `path` is relative to the vault root, used as-is by subsequent browse/read/
+// save calls so the renderer never needs to know the vault's real disk path.
+export interface NoteFileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+export interface NoteBrowseResult {
+  ok: boolean;
+  reason?: string;
+  folders: NoteFileEntry[];
+  files: NoteFileEntry[];
+}
+
+export interface NoteContent {
+  ok: boolean;
+  reason?: string;
+  content: string;
+}
+
+// A note pinned into the Notes tab's left nav. Deleting one only removes
+// this row — the file on disk is untouched.
+export interface NoteNavItem {
+  id: number;
+  vaultLabel: string;
+  filePath: string;
+  label: string;
+}
+
+export interface NotesSession {
+  openNoteIds: number[];
+  activeNoteId: number | null;
+}
+
 export interface CommandCenterApi {
   getConfig: () => Promise<AppConfig>;
   docker: {
@@ -307,5 +352,20 @@ export interface CommandCenterApi {
   };
   github: {
     status: () => Promise<GitHubStatusResult>;
+  };
+  notes: {
+    vaults: () => Promise<VaultConfig[]>;
+    browse: (vaultLabel: string, subPath?: string) => Promise<NoteBrowseResult>;
+    read: (vaultLabel: string, filePath: string) => Promise<NoteContent>;
+    save: (vaultLabel: string, filePath: string, content: string) => Promise<ActionResult>;
+    nav: {
+      list: () => Promise<NoteNavItem[]>;
+      add: (vaultLabel: string, filePath: string, label: string) => Promise<NoteNavItem[]>;
+      remove: (id: number) => Promise<NoteNavItem[]>;
+    };
+    session: {
+      get: () => Promise<NotesSession>;
+      set: (openNoteIds: number[], activeNoteId: number | null) => Promise<NotesSession>;
+    };
   };
 }

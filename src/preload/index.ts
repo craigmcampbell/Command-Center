@@ -83,6 +83,27 @@ const api: CommandCenterApi = {
   github: {
     status: () => ipcRenderer.invoke("github:status"),
   },
+
+  notes: {
+    vaults: () => ipcRenderer.invoke("notes:vaults"),
+    browse: (vaultLabel: string, subPath?: string) =>
+      ipcRenderer.invoke("notes:browse", vaultLabel, subPath),
+    read: (vaultLabel: string, filePath: string) =>
+      ipcRenderer.invoke("notes:read", vaultLabel, filePath),
+    save: (vaultLabel: string, filePath: string, content: string) =>
+      ipcRenderer.invoke("notes:save", vaultLabel, filePath, content),
+    nav: {
+      list: () => ipcRenderer.invoke("notes:nav:list"),
+      add: (vaultLabel: string, filePath: string, label: string) =>
+        ipcRenderer.invoke("notes:nav:add", vaultLabel, filePath, label),
+      remove: (id: number) => ipcRenderer.invoke("notes:nav:remove", id),
+    },
+    session: {
+      get: () => ipcRenderer.invoke("notes:session:get"),
+      set: (openNoteIds: number[], activeNoteId: number | null) =>
+        ipcRenderer.invoke("notes:session:set", openNoteIds, activeNoteId),
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);

@@ -27,5 +27,8 @@
     "repos": [
       { "label": "my-repo", "owner": "your-github-username", "repo": "my-repo", "branch": "main" }
     ]
-  }
+  },
+  "vaults": [
+    { "label": "My Vault", "path": "/absolute/path/to/your/Obsidian/vault" }
+  ]
 }

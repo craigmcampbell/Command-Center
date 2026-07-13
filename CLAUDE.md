@@ -12,7 +12,8 @@ Electron app, React + TypeScript, built with electron-vite.
 - **electron-builder** — packages the app into a real macOS `.app` (`npm run package`),
   so it can run without a terminal attached at all.
 - **better-sqlite3** — persists the Local Apps / Learning / Claude Code lists (display
-  order + CRUD). Everything else still lives in `config.json`.
+  order + CRUD), the Notes tab's nav list + open-tabs session, Habits, and the
+  Scratchpad. Everything else still lives in `config.json`.
 
 ## Requirements
 
@@ -47,6 +48,13 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/github.ts` — GitHub REST API for latest Actions run + open PR count
     per configured repo, plus a cross-repo review-requested search. Personal
     access token lives in `config.json`'s `github.token`.
+  - `services/notes.ts` — browses/reads/writes markdown files directly in
+    configured Obsidian vaults (`config.json`'s `vaults` list) for the Notes tab.
+    All paths are resolved and checked against the vault root before any read/
+    write, so a stray `../` can't escape the vault. The left-nav pin list and
+    open-tabs session live in SQLite (`notes` / `notes_session` tables) — they
+    only ever reference a file by `(vaultLabel, filePath)`, never copy its
+    content, so the file on disk stays the single source of truth.
 - **Preload** (`src/preload/index.ts`) — the ONLY bridge. Exposes a small named API
   (`window.api.*`) via `contextBridge`, typed as `CommandCenterApi`. Renderer can't
   reach Node except through this. `index.d.ts` augments `Window` so every component
@@ -96,6 +104,9 @@ under `<main>` is tab-gated, state lives in `App.tsx` same as always.
   Missions, Local Apps, Learning.
 - **Development** — Services (Docker), Claude Code, GitHub (CI status + PRs).
 - **Reader** — latest Readwise Reader documents, paginated.
+- **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
+  of widgets (see below); each gets one full-bleed `.slot` instead of the
+  five-touch-point widget pattern.
 
 Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
 (grid-template-columns/areas), and a new `{activeTab === "..." && <main>...}` block.
@@ -118,6 +129,31 @@ Local Apps and Learning both render via the generic `LinkLauncherWidget`
 is the same idea rendered as a horizontal chip row, launching a terminal instead
 of opening a URL. Both talk to `window.api.links.*` via the shared
 `useLinkList` hook (`renderer/src/hooks/useLinkList.ts`).
+
+## Notes tab
+
+Browses into one or more configured Obsidian vaults (`config.json`'s `vaults`
+list — separate from `grimoire.vaultPath`, which only backs the Home tab's
+daily note/missions), pins specific notes into a left nav grouped by vault,
+opens several at once as tabs, and edits them with the same autosave pattern
+as Scratchpad — no explicit save, no on-disk conflict detection, so an edit
+made in real Obsidian while a note's open here can get overwritten on the
+next autosave. Deleting a nav entry only removes that row, never the file.
+
+`components/NotesWidget.tsx` owns all the state itself (nav list, which notes
+are open, per-note content cache, per-note debounced autosave) — same
+self-contained pattern as `ScratchpadWidget`/`HabitsWidget`, nothing lifted to
+`App.tsx`. `components/NoteBrowserModal.tsx` is the "+" file-tree browser
+(always opens at the vault root, lazy per-folder fetches via `notes:browse`,
+no recursive walk). The editor pane reuses `MarkdownEditor` +
+`lib/markdown.ts`'s `renderMarkdown` and the write/split/preview toggle
+verbatim from Scratchpad's CSS (`.scratchpad`/`.scratchpad-editor`/
+`.scratchpad-preview`/`.scratchpad-mode`/`.scratchpad-status`) — the Notes-
+specific CSS only covers the nav/tab-strip/browser-modal chrome around it.
+
+Open tabs + the active tab persist across restarts in a `notes_session`
+singleton row (same shape as `services/scratchpad.ts`'s single-row table), so
+relaunching the app restores where you left off.
 
 ## Command Palette
 
@@ -170,6 +206,11 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   (`{ label, owner, repo, branch }` each), and set `github.reviewUser` to your GitHub
   username for the "Needs your review" section. Without a token the widget fails soft
   with "No GitHub token configured".
+- **Notes tab setup**: list vaults to browse under `config.json`'s `vaults`
+  (`{ label, path }` each — `path` is the vault's root folder). Without any
+  configured, the nav shows "No vaults configured in config.json"; with none
+  yet pinned for a given vault, its group still shows so you can click "+" to
+  add the first one.
 - **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
   be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
   to bypass, or `xattr -cr "Command Center.app"`. The packaged app's config lives at

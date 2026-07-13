@@ -43,6 +43,18 @@ import {
   deleteDocument,
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
+import {
+  initNotes,
+  listVaults,
+  browseVault,
+  readNoteFile,
+  saveNoteFile,
+  listNavNotes,
+  addNavNote,
+  removeNavNote,
+  getSession,
+  setSession,
+} from "./services/notes";
 import type { AppConfig, HabitFrequencyType, LinkListKind } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
@@ -96,6 +108,7 @@ const config = rawConfig as unknown as AppConfig;
 initDatabase();
 initScratchpad();
 initHabits();
+initNotes();
 seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
 
 function appIconPath(): string {
@@ -226,6 +239,28 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 // GitHub: latest CI run + open PR count per configured repo, plus
 // review-requested PRs across all of them.
 ipcMain.handle("github:status", () => getGitHubStatus(config.github));
+
+// Notes: browsing/reading/writing files in configured Obsidian vaults, plus
+// the left-nav pin list and open-tabs session (both SQLite).
+ipcMain.handle("notes:vaults", () => listVaults(config));
+ipcMain.handle("notes:browse", (_evt, vaultLabel: string, subPath?: string) =>
+  browseVault(config, vaultLabel, subPath)
+);
+ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
+  readNoteFile(config, vaultLabel, filePath)
+);
+ipcMain.handle("notes:save", (_evt, vaultLabel: string, filePath: string, content: string) =>
+  saveNoteFile(config, vaultLabel, filePath, content)
+);
+ipcMain.handle("notes:nav:list", () => listNavNotes());
+ipcMain.handle("notes:nav:add", (_evt, vaultLabel: string, filePath: string, label: string) =>
+  addNavNote(vaultLabel, filePath, label)
+);
+ipcMain.handle("notes:nav:remove", (_evt, id: number) => removeNavNote(id));
+ipcMain.handle("notes:session:get", () => getSession());
+ipcMain.handle("notes:session:set", (_evt, openNoteIds: number[], activeNoteId: number | null) =>
+  setSession(openNoteIds, activeNoteId)
+);
 
 // Scratchpad: single autosaved markdown note.
 ipcMain.handle("scratchpad:get", () => getScratchpad());

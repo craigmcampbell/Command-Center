@@ -23,12 +23,13 @@ import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
+import NotesWidget from "./components/NotesWidget";
 import CommandPalette from "./components/CommandPalette";
 import { IconRefresh } from "./components/icons";
 import type { PaletteContext } from "./palette";
 import appLogo from "./assets/icon.png";
 
-type TabId = "home" | "development" | "reader" | "scratchpad" | "habits";
+type TabId = "home" | "development" | "reader" | "scratchpad" | "habits" | "notes";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "home", label: "Home" },
@@ -36,6 +37,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "reader", label: "Reader" },
   { id: "scratchpad", label: "Scratchpad" },
   { id: "habits", label: "Habits" },
+  { id: "notes", label: "Notes" },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -332,6 +334,14 @@ export default function App() {
         <main className="grid grid-habits">
           <div className="slot slot-habits">
             <HabitsWidget />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "notes" && (
+        <main className="grid grid-notes">
+          <div className="slot slot-notes">
+            <NotesWidget />
           </div>
         </main>
       )}
