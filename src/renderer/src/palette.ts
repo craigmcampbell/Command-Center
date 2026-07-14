@@ -24,6 +24,7 @@ export interface PaletteContext {
   claudeProjects: LinkItem[];
   localApps: LinkItem[];
   learning: LinkItem[];
+  fileLinks: LinkItem[];
   docker: DockerResult | null;
   onRefreshDocker: () => Promise<void>;
   onRefreshAll: () => Promise<void>;
@@ -71,6 +72,17 @@ export function buildActions(ctx: PaletteContext): PaletteAction[] {
       category: "Learning",
       run: async () => {
         await window.api.openUrl(item.link);
+      },
+    });
+  }
+
+  for (const item of ctx.fileLinks) {
+    actions.push({
+      id: `fileLink:${item.id}`,
+      title: item.label,
+      category: "File Link",
+      run: async () => {
+        await window.api.forklift.open(item.link);
       },
     });
   }

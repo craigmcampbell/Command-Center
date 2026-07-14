@@ -118,6 +118,30 @@ body {
   opacity: 0.7;
 }
 
+.refresh-control-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  padding: 7px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-trigger:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
 .tabs {
   display: flex;
   gap: 8px;
@@ -156,7 +180,8 @@ body {
   grid-template-areas:
     "calendar calendar calendar"
     "todoist todoist daily"
-    "missions apps learning";
+    "missions apps learning"
+    "filelinks filelinks filelinks";
 }
 
 .grid-dev {
@@ -213,6 +238,9 @@ body {
 .slot-learning {
   grid-area: learning;
 }
+.slot-filelinks {
+  grid-area: filelinks;
+}
 .slot-claude {
   grid-area: claude;
 }
@@ -244,7 +272,8 @@ body {
       "daily"
       "missions"
       "apps"
-      "learning";
+      "learning"
+      "filelinks";
   }
 }
 
@@ -2167,6 +2196,338 @@ body {
   to {
     opacity: 1;
   }
+}
+
+/* Settings overlay — full-screen scrim + panel, opened via the gear icon.
+   Left section-nav + right scrollable content, same scrim/panel skeleton as
+   the command palette / notes browser modal, just sized near-fullscreen. */
+.settings-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 13, 0.6);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease both;
+}
+
+.settings-panel {
+  width: min(880px, calc(100vw - 64px));
+  height: min(680px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 var(--panel-edge-soft) inset,
+    0 24px 60px -20px rgba(0, 0, 0, 0.75),
+    0 1px 3px rgba(0, 0, 0, 0.4);
+  animation: fadeInUp 0.15s ease both;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--panel-edge);
+  flex-shrink: 0;
+}
+.settings-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.settings-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+}
+.settings-close:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.settings-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.settings-nav {
+  flex-shrink: 0;
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border-right: 1px solid var(--panel-edge);
+  overflow-y: auto;
+}
+.settings-nav-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-nav-item:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+.settings-nav-item.active {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-card {
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--panel-edge-soft);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.settings-card h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.settings-card-hint {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.settings-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.settings-card-footer button {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-card-footer button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.settings-card-footer button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.settings-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.settings-field-row:last-of-type {
+  margin-bottom: 0;
+}
+.settings-field-row label {
+  flex-shrink: 0;
+  width: 130px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.settings-field-row .settings-input {
+  flex: 1;
+}
+
+.settings-input {
+  min-width: 0;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.settings-input::placeholder {
+  color: var(--ink-dim);
+}
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.settings-input-narrow {
+  max-width: 140px;
+}
+
+.settings-secret-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-secret-field .settings-input {
+  flex: 1;
+}
+.settings-secret-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  padding: 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-secret-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* Vaults / GitHub Repos / Processes rows — same shape as .link-row but
+   fields vary per section, so the row's main content is free-form. */
+.settings-array-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.settings-array-row:last-of-type {
+  margin-bottom: 0;
+}
+.settings-array-row.dragging {
+  opacity: 0.5;
+  z-index: 1;
+}
+.settings-array-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 4px;
+}
+.settings-array-row-label {
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.settings-array-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.settings-array-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.settings-array-row.editing .settings-array-form {
+  flex: 1;
+  align-items: center;
+  margin-top: 0;
+}
+.settings-array-form .settings-input {
+  flex: 1;
+  min-width: 90px;
+}
+.settings-array-form > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  border-radius: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-array-form > button:hover:not(:disabled),
+.settings-array-save:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.settings-array-form > button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.settings-array-cancel:hover {
+  border-color: var(--alert);
+  color: var(--alert);
+}
+
+.settings-process-form {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+.settings-process-id {
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-bottom: 2px;
+}
+.settings-process-id code {
+  font-family: var(--mono);
+  color: var(--ink);
+}
+.settings-array-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.settings-array-form-actions button {
+  width: auto;
 }
 
 /* GitHub widget: review-requested rows reuse .row/.name.link/.tag as-is;

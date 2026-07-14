@@ -171,3 +171,31 @@ export function IconArchive({ size = 13, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconGear({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <circle cx="12" cy="12" r="3.25" />
+      <path d="M12 3.5v2.4M12 18.1v2.4M4.9 6.1l1.7 1.7M17.4 16.2l1.7 1.7M3.5 12h2.4M18.1 12h2.4M4.9 17.9l1.7-1.7M17.4 7.8l1.7-1.7" />
+    </svg>
+  );
+}
+
+export function IconEye({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function IconEyeOff({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 5.2A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a15.5 15.5 0 0 1-3.6 4.4M6.6 6.6C4 8.3 2 12 2 12s3.5 7 10 7c1.4 0 2.6-.3 3.7-.8" />
+      <path d="M9.9 10c-.6.5-.9 1.2-.9 2a3 3 0 0 0 3 3c.8 0 1.5-.3 2-.9" />
+    </svg>
+  );
+}

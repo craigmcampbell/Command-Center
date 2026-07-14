@@ -1,6 +1,6 @@
 // Notes tab: browsing/reading/writing files directly in configured Obsidian
 // vaults, plus the left-nav pin list and open-tabs session state (both
-// SQLite, via services/links.ts's shared db connection). A note's file on
+// SQLite, via services/db.ts's shared db connection). A note's file on
 // disk is the source of truth — the nav/session tables only ever reference
 // it by (vaultLabel, filePath), never copy its content.
 
@@ -8,7 +8,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   ActionResult,
-  AppConfig,
   NoteBrowseResult,
   NoteContent,
   NoteCreateResult,
@@ -20,7 +19,8 @@ import type {
   VaultNoteIndexEntry,
   VaultNoteIndexResult,
 } from "../../shared/types";
-import { getDatabase } from "./links";
+import { getDatabase } from "./db";
+import { listVaultSettings } from "./settings";
 
 const SESSION_ROW_ID = 1;
 
@@ -49,19 +49,18 @@ export function initNotes(): void {
 
 // ---- vault path resolution + safety ----
 
-function findVault(config: AppConfig, vaultLabel: string): VaultConfig | undefined {
-  return (config.vaults ?? []).find((v) => v.label === vaultLabel);
+function findVault(vaultLabel: string): VaultConfig | undefined {
+  return listVaultSettings().find((v) => v.label === vaultLabel);
 }
 
 // Resolves a vault-relative path to an absolute one and rejects anything
 // that would land outside the vault root — cheap defense against a stray
 // "../" (typed by hand or from a bug) ever reading/writing outside it.
 function resolveInVault(
-  config: AppConfig,
   vaultLabel: string,
   relativePath: string
 ): { ok: true; absPath: string } | { ok: false; reason: string } {
-  const vault = findVault(config, vaultLabel);
+  const vault = findVault(vaultLabel);
   if (!vault) return { ok: false, reason: `Vault "${vaultLabel}" isn't configured` };
 
   const root = path.resolve(vault.path);
@@ -74,16 +73,8 @@ function resolveInVault(
 
 // ---- browsing / reading / writing files ----
 
-export function listVaults(config: AppConfig): VaultConfig[] {
-  return config.vaults ?? [];
-}
-
-export function browseVault(
-  config: AppConfig,
-  vaultLabel: string,
-  subPath = ""
-): NoteBrowseResult {
-  const resolved = resolveInVault(config, vaultLabel, subPath);
+export function browseVault(vaultLabel: string, subPath = ""): NoteBrowseResult {
+  const resolved = resolveInVault(vaultLabel, subPath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason, folders: [], files: [] };
 
   let entries: fs.Dirent[];
@@ -119,8 +110,8 @@ export function browseVault(
 // resolution as browseVault. Sorted by path, so a caller matching by
 // basename against duplicate names across folders gets a deterministic
 // "first by path" pick rather than whatever order the filesystem returns.
-export function buildVaultIndex(config: AppConfig, vaultLabel: string): VaultNoteIndexResult {
-  const resolved = resolveInVault(config, vaultLabel, "");
+export function buildVaultIndex(vaultLabel: string): VaultNoteIndexResult {
+  const resolved = resolveInVault(vaultLabel, "");
   if (!resolved.ok) return { ok: false, reason: resolved.reason, entries: [] };
 
   const entries: VaultNoteIndexEntry[] = [];
@@ -152,8 +143,8 @@ export function buildVaultIndex(config: AppConfig, vaultLabel: string): VaultNot
   return { ok: true, entries };
 }
 
-export function readNoteFile(config: AppConfig, vaultLabel: string, filePath: string): NoteContent {
-  const resolved = resolveInVault(config, vaultLabel, filePath);
+export function readNoteFile(vaultLabel: string, filePath: string): NoteContent {
+  const resolved = resolveInVault(vaultLabel, filePath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason, content: "" };
 
   try {
@@ -163,13 +154,8 @@ export function readNoteFile(config: AppConfig, vaultLabel: string, filePath: st
   }
 }
 
-export function saveNoteFile(
-  config: AppConfig,
-  vaultLabel: string,
-  filePath: string,
-  content: string
-): ActionResult {
-  const resolved = resolveInVault(config, vaultLabel, filePath);
+export function saveNoteFile(vaultLabel: string, filePath: string, content: string): ActionResult {
+  const resolved = resolveInVault(vaultLabel, filePath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
 
   try {
@@ -186,8 +172,8 @@ export function saveNoteFile(
 // state, not an error, so a missing-folder readdir failure comes back as an
 // empty list rather than `ok: false`. A bad vaultLabel is a real error and
 // still propagates through resolveInVault.
-export function listTemplates(config: AppConfig, vaultLabel: string): TemplateListResult {
-  const resolved = resolveInVault(config, vaultLabel, TEMPLATES_DIR);
+export function listTemplates(vaultLabel: string): TemplateListResult {
+  const resolved = resolveInVault(vaultLabel, TEMPLATES_DIR);
   if (!resolved.ok) return { ok: false, reason: resolved.reason, templates: [] };
 
   let entries: fs.Dirent[];
@@ -214,7 +200,6 @@ export function listTemplates(config: AppConfig, vaultLabel: string): TemplateLi
 // seeds the new file — Obsidian's Templater plugin owns evaluating any
 // `<% %>` tags inside it, this just copies the text verbatim.
 export function createNoteFile(
-  config: AppConfig,
   vaultLabel: string,
   dirPath: string,
   name: string,
@@ -228,7 +213,7 @@ export function createNoteFile(
 
   const fileName = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
   const relPath = dirPath ? `${dirPath}/${fileName}` : fileName;
-  const resolved = resolveInVault(config, vaultLabel, relPath);
+  const resolved = resolveInVault(vaultLabel, relPath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason, filePath: "" };
 
   if (fs.existsSync(resolved.absPath)) {
@@ -237,7 +222,7 @@ export function createNoteFile(
 
   let content = "";
   if (templatePath) {
-    const templateResolved = resolveInVault(config, vaultLabel, templatePath);
+    const templateResolved = resolveInVault(vaultLabel, templatePath);
     if (!templateResolved.ok) return { ok: false, reason: templateResolved.reason, filePath: "" };
     try {
       content = fs.readFileSync(templateResolved.absPath, "utf8");

@@ -1,18 +1,17 @@
-// Persistence for the three quick-launch lists (Local Apps, Learning, Claude
-// Code). Each list is its own SQLite table, all with the same shape:
-// (id, label, link, sort_order). `link` is a URL for the first two and a
-// directory path for Claude Code — the widgets, not this module, decide what
-// to do with it.
+// Persistence for the four quick-launch lists (Local Apps, Learning, Claude
+// Code, File Links). Each list is its own SQLite table, all with the same
+// shape: (id, label, link, sort_order). `link` is a URL for Local Apps/
+// Learning and a directory path for Claude Code/File Links — the widgets,
+// not this module, decide what to do with it.
 
-import { app } from "electron";
-import Database from "better-sqlite3";
-import path from "node:path";
 import type { LinkItem, LinkListKind } from "../../shared/types";
+import { getDatabase } from "./db";
 
 const TABLES: Record<LinkListKind, string> = {
   localApps: "local_apps",
   learning: "learning_links",
   claudeCode: "claude_projects",
+  fileLinks: "file_links",
 };
 
 // Shape of the localApps/learning/claudeCode keys that used to live in
@@ -24,16 +23,8 @@ export interface LegacyLinkConfig {
   claudeCode?: { projects?: { label: string; path: string }[] };
 }
 
-let db: Database.Database;
-
-export function getDatabase(): Database.Database {
-  return db;
-}
-
-export function initDatabase(): void {
-  const dbPath = path.join(app.getPath("userData"), "command-center.db");
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+export function initLinks(): void {
+  const db = getDatabase();
   for (const table of Object.values(TABLES)) {
     db.exec(`CREATE TABLE IF NOT EXISTS ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +36,7 @@ export function initDatabase(): void {
 }
 
 function seedTable(table: string, entries: { label: string; link: string }[]): void {
+  const db = getDatabase();
   const { count } = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as {
     count: number;
   };
@@ -75,7 +67,7 @@ export function seedFromLegacyConfig(legacy: LegacyLinkConfig): void {
 }
 
 function rowsToItems(table: string): LinkItem[] {
-  return db
+  return getDatabase()
     .prepare(`SELECT id, label, link, sort_order as sortOrder FROM ${table} ORDER BY sort_order ASC`)
     .all() as LinkItem[];
 }
@@ -85,6 +77,7 @@ export function listLinks(kind: LinkListKind): LinkItem[] {
 }
 
 export function addLink(kind: LinkListKind, label: string, link: string): LinkItem[] {
+  const db = getDatabase();
   const table = TABLES[kind];
   const { maxOrder } = db
     .prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM ${table}`)
@@ -104,17 +97,20 @@ export function updateLink(
   link: string
 ): LinkItem[] {
   const table = TABLES[kind];
-  db.prepare(`UPDATE ${table} SET label = ?, link = ? WHERE id = ?`).run(label, link, id);
+  getDatabase()
+    .prepare(`UPDATE ${table} SET label = ?, link = ? WHERE id = ?`)
+    .run(label, link, id);
   return rowsToItems(table);
 }
 
 export function removeLink(kind: LinkListKind, id: number): LinkItem[] {
   const table = TABLES[kind];
-  db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
+  getDatabase().prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
   return rowsToItems(table);
 }
 
 export function reorderLinks(kind: LinkListKind, orderedIds: number[]): LinkItem[] {
+  const db = getDatabase();
   const table = TABLES[kind];
   const update = db.prepare(`UPDATE ${table} SET sort_order = ? WHERE id = ?`);
   const updateAll = db.transaction((ids: number[]) => {
