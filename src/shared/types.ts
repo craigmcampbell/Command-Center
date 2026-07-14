@@ -289,6 +289,20 @@ export interface NoteCreateResult {
   filePath: string;
 }
 
+// An Obsidian Templater template, listed from a vault's fixed
+// _System/templates folder — path is vault-relative, same shape createNote
+// expects back.
+export interface TemplateEntry {
+  name: string;
+  path: string;
+}
+
+export interface TemplateListResult {
+  ok: boolean;
+  reason?: string;
+  templates: TemplateEntry[];
+}
+
 // A note pinned into the Notes tab's left nav. Deleting one only removes
 // this row — the file on disk is untouched.
 export interface NoteNavItem {
@@ -383,7 +397,13 @@ export interface CommandCenterApi {
     index: (vaultLabel: string) => Promise<VaultNoteIndexResult>;
     read: (vaultLabel: string, filePath: string) => Promise<NoteContent>;
     save: (vaultLabel: string, filePath: string, content: string) => Promise<ActionResult>;
-    create: (vaultLabel: string, dirPath: string, name: string) => Promise<NoteCreateResult>;
+    create: (
+      vaultLabel: string,
+      dirPath: string,
+      name: string,
+      templatePath?: string | null
+    ) => Promise<NoteCreateResult>;
+    templates: (vaultLabel: string) => Promise<TemplateListResult>;
     nav: {
       list: () => Promise<NoteNavItem[]>;
       add: (vaultLabel: string, filePath: string, label: string) => Promise<NoteNavItem[]>;

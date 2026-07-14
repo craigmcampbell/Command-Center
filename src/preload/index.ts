@@ -95,8 +95,9 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("notes:read", vaultLabel, filePath),
     save: (vaultLabel: string, filePath: string, content: string) =>
       ipcRenderer.invoke("notes:save", vaultLabel, filePath, content),
-    create: (vaultLabel: string, dirPath: string, name: string) =>
-      ipcRenderer.invoke("notes:create", vaultLabel, dirPath, name),
+    create: (vaultLabel: string, dirPath: string, name: string, templatePath?: string | null) =>
+      ipcRenderer.invoke("notes:create", vaultLabel, dirPath, name, templatePath),
+    templates: (vaultLabel: string) => ipcRenderer.invoke("notes:templates", vaultLabel),
     nav: {
       list: () => ipcRenderer.invoke("notes:nav:list"),
       add: (vaultLabel: string, filePath: string, label: string) =>

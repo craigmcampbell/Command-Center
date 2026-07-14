@@ -51,6 +51,7 @@ import {
   readNoteFile,
   saveNoteFile,
   createNoteFile,
+  listTemplates,
   listNavNotes,
   addNavNote,
   removeNavNote,
@@ -258,9 +259,12 @@ ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
 ipcMain.handle("notes:save", (_evt, vaultLabel: string, filePath: string, content: string) =>
   saveNoteFile(config, vaultLabel, filePath, content)
 );
-ipcMain.handle("notes:create", (_evt, vaultLabel: string, dirPath: string, name: string) =>
-  createNoteFile(config, vaultLabel, dirPath, name)
+ipcMain.handle(
+  "notes:create",
+  (_evt, vaultLabel: string, dirPath: string, name: string, templatePath?: string | null) =>
+    createNoteFile(config, vaultLabel, dirPath, name, templatePath)
 );
+ipcMain.handle("notes:templates", (_evt, vaultLabel: string) => listTemplates(config, vaultLabel));
 ipcMain.handle("notes:nav:list", () => listNavNotes());
 ipcMain.handle("notes:nav:add", (_evt, vaultLabel: string, filePath: string, label: string) =>
   addNavNote(vaultLabel, filePath, label)

@@ -15,6 +15,7 @@ import type {
   NoteFileEntry,
   NoteNavItem,
   NotesSession,
+  TemplateListResult,
   VaultConfig,
   VaultNoteIndexEntry,
   VaultNoteIndexResult,
@@ -22,6 +23,10 @@ import type {
 import { getDatabase } from "./links";
 
 const SESSION_ROW_ID = 1;
+
+// Fixed across every vault — where Obsidian's Templater plugin keeps its
+// templates. Flat (no subfolders), per the user's setup.
+const TEMPLATES_DIR = "_System/templates";
 
 export function initNotes(): void {
   const db = getDatabase();
@@ -175,16 +180,45 @@ export function saveNoteFile(
   }
 }
 
-// Creates an empty .md file in a vault folder (picked via the same browser
-// used to open existing notes) and hands back its vault-relative path, so
-// the caller can pin/open it exactly like an existing file. `name` is a bare
+// Lists the flat set of .md templates Obsidian's Templater plugin reads
+// from, for the "create a new note" template picker. A vault that doesn't
+// use Templater simply has no _System/templates folder — that's a normal
+// state, not an error, so a missing-folder readdir failure comes back as an
+// empty list rather than `ok: false`. A bad vaultLabel is a real error and
+// still propagates through resolveInVault.
+export function listTemplates(config: AppConfig, vaultLabel: string): TemplateListResult {
+  const resolved = resolveInVault(config, vaultLabel, TEMPLATES_DIR);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, templates: [] };
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(resolved.absPath, { withFileTypes: true });
+  } catch {
+    return { ok: true, templates: [] };
+  }
+
+  const templates = entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".md"))
+    .map((e) => ({ name: e.name.slice(0, -3), path: `${TEMPLATES_DIR}/${e.name}` }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { ok: true, templates };
+}
+
+// Creates a .md file in a vault folder (picked via the same browser used to
+// open existing notes) and hands back its vault-relative path, so the
+// caller can pin/open it exactly like an existing file. `name` is a bare
 // filename, not a path — rejected if it tries to smuggle in a separator,
-// since dirPath is what the folder browser already chose.
+// since dirPath is what the folder browser already chose. `templatePath`,
+// if given, is a vault-relative path (from listTemplates) whose raw text
+// seeds the new file — Obsidian's Templater plugin owns evaluating any
+// `<% %>` tags inside it, this just copies the text verbatim.
 export function createNoteFile(
   config: AppConfig,
   vaultLabel: string,
   dirPath: string,
-  name: string
+  name: string,
+  templatePath?: string | null
 ): NoteCreateResult {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, reason: "Name can't be empty", filePath: "" };
@@ -201,8 +235,19 @@ export function createNoteFile(
     return { ok: false, reason: "A note with that name already exists", filePath: "" };
   }
 
+  let content = "";
+  if (templatePath) {
+    const templateResolved = resolveInVault(config, vaultLabel, templatePath);
+    if (!templateResolved.ok) return { ok: false, reason: templateResolved.reason, filePath: "" };
+    try {
+      content = fs.readFileSync(templateResolved.absPath, "utf8");
+    } catch {
+      return { ok: false, reason: "Couldn't read that template", filePath: "" };
+    }
+  }
+
   try {
-    fs.writeFileSync(resolved.absPath, "", "utf8");
+    fs.writeFileSync(resolved.absPath, content, "utf8");
     return { ok: true, filePath: relPath };
   } catch {
     return { ok: false, reason: "Couldn't create that note", filePath: "" };

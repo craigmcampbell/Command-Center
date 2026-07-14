@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent, MouseEvent } from "react";
-import type { NoteBrowseResult } from "../../../shared/types";
+import type { NoteBrowseResult, TemplateEntry } from "../../../shared/types";
 import { IconFolder, IconNote, IconPlus, IconX } from "./icons";
 
 interface NoteBrowserModalProps {
@@ -19,6 +19,8 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [templates, setTemplates] = useState<TemplateEntry[]>([]);
+  const [templateChoice, setTemplateChoice] = useState("");
 
   const load = useCallback(
     async (nextPath: string) => {
@@ -30,6 +32,15 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
   useEffect(() => {
     load(subPath);
   }, [subPath, load]);
+
+  // Fetched once per modal open, not tied to the browsed subPath — a chosen
+  // template stays selected as the user navigates to pick a destination
+  // folder.
+  useEffect(() => {
+    window.api.notes.templates(vaultLabel).then((result) => {
+      setTemplates(result.ok ? result.templates : []);
+    });
+  }, [vaultLabel]);
 
   // Switching folders invalidates any in-progress "name already exists" error
   // and clears the draft name — a name that collided in one folder is fine
@@ -47,7 +58,7 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
     if (!newName.trim() || creating) return;
     setCreating(true);
     setCreateError(null);
-    const result = await window.api.notes.create(vaultLabel, subPath, newName);
+    const result = await window.api.notes.create(vaultLabel, subPath, newName, templateChoice || null);
     setCreating(false);
     if (!result.ok) {
       setCreateError(result.reason || "Couldn't create that note");
@@ -125,6 +136,20 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
           />
+          {templates.length > 0 && (
+            <select
+              value={templateChoice}
+              onChange={(e) => setTemplateChoice(e.target.value)}
+              title="Start from a template"
+            >
+              <option value="">No template</option>
+              {templates.map((t) => (
+                <option key={t.path} value={t.path}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
           <button type="submit" disabled={!newName.trim() || creating} title="Create note here">
             <IconPlus size={12} />
           </button>
