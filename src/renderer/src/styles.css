@@ -2176,12 +2176,27 @@ body {
 }
 .github-repo-label {
   flex-shrink: 0;
-  width: 108px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   white-space: nowrap;
   font-family: var(--mono);
   color: var(--ink);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.github-repo-label:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.github-repo-label .external-icon {
+  opacity: 0;
+  color: var(--ink-dim);
+  transition: opacity 0.15s ease;
+}
+.github-repo-label:hover .external-icon {
+  opacity: 1;
+  color: var(--accent);
 }
 .github-ci-info {
   flex: 1;
@@ -2202,4 +2217,27 @@ body {
 }
 .github-pr-row .tag {
   flex-shrink: 0;
+}
+.github-ci-history {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0 6px 16px;
+}
+.ci-history-pip {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dead);
+  cursor: pointer;
+}
+.ci-history-pip.live {
+  background: var(--live);
+}
+.ci-history-pip.alert {
+  background: var(--alert);
+}
+.ci-history-pip.pending {
+  background: var(--pending);
 }

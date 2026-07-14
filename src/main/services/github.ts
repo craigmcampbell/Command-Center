@@ -40,22 +40,34 @@ function repoLabelFromApiUrl(repositoryUrl: string | undefined): string {
   return repositoryUrl?.split("/").slice(-2).join("/") ?? "unknown";
 }
 
+// How many recent runs (any branch — main pushes and PR branches alike) to
+// show in the widget's history strip. The Actions runs endpoint already
+// returns newest-first with no filter needed.
+const CI_HISTORY_LIMIT = 6;
+
 export async function getRepoStatus(
   repoConfig: GitHubRepoConfig,
   token: string
 ): Promise<GitHubRepoStatus> {
   const { label, owner, repo, branch } = repoConfig;
   const prsUrl = `https://github.com/${owner}/${repo}/pulls`;
-  const empty = { label, owner, repo, branch, prsUrl, ci: null, openPrCount: 0, openPrs: [] };
+  const empty = {
+    label,
+    owner,
+    repo,
+    branch,
+    prsUrl,
+    ci: null,
+    ciHistory: [],
+    openPrCount: 0,
+    openPrs: [],
+  };
 
   let runsRes: Response;
   let prsRes: Response;
   try {
     [runsRes, prsRes] = await Promise.all([
-      githubFetch(
-        `${API_ROOT}/repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=1`,
-        token
-      ),
+      githubFetch(`${API_ROOT}/repos/${owner}/${repo}/actions/runs?per_page=${CI_HISTORY_LIMIT}`, token),
       githubFetch(
         `${API_ROOT}/repos/${owner}/${repo}/pulls?state=open&per_page=100&sort=created&direction=desc`,
         token
@@ -80,16 +92,15 @@ export async function getRepoStatus(
   const runsData = await runsRes.json();
   const prsData: any[] = await prsRes.json();
 
-  const latestRun = runsData.workflow_runs?.[0];
-  const ci: CiRun | null = latestRun
-    ? {
-        status: latestRun.status,
-        conclusion: latestRun.conclusion,
-        workflowName: latestRun.name || latestRun.display_title || "Workflow",
-        url: latestRun.html_url,
-        updatedAt: latestRun.updated_at,
-      }
-    : null;
+  const ciHistory: CiRun[] = (runsData.workflow_runs ?? []).map((run: any) => ({
+    status: run.status,
+    conclusion: run.conclusion,
+    workflowName: run.name || run.display_title || "Workflow",
+    url: run.html_url,
+    updatedAt: run.updated_at,
+    branch: run.head_branch || "unknown",
+  }));
+  const ci = ciHistory[0] ?? null;
 
   const openPrs: GitHubPr[] = prsData.slice(0, 5).map((pr) => ({
     number: pr.number,
@@ -99,7 +110,7 @@ export async function getRepoStatus(
     repoLabel: label,
   }));
 
-  return { ...empty, ok: true, ci, openPrCount: prsData.length, openPrs };
+  return { ...empty, ok: true, ci, ciHistory, openPrCount: prsData.length, openPrs };
 }
 
 export async function getReviewRequests(
