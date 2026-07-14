@@ -11,6 +11,7 @@ import type {
   AppConfig,
   NoteBrowseResult,
   NoteContent,
+  NoteCreateResult,
   NoteFileEntry,
   NoteNavItem,
   NotesSession,
@@ -171,6 +172,40 @@ export function saveNoteFile(
     return { ok: true };
   } catch {
     return { ok: false, reason: "Couldn't save that note" };
+  }
+}
+
+// Creates an empty .md file in a vault folder (picked via the same browser
+// used to open existing notes) and hands back its vault-relative path, so
+// the caller can pin/open it exactly like an existing file. `name` is a bare
+// filename, not a path — rejected if it tries to smuggle in a separator,
+// since dirPath is what the folder browser already chose.
+export function createNoteFile(
+  config: AppConfig,
+  vaultLabel: string,
+  dirPath: string,
+  name: string
+): NoteCreateResult {
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false, reason: "Name can't be empty", filePath: "" };
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    return { ok: false, reason: "Name can't contain a path separator", filePath: "" };
+  }
+
+  const fileName = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
+  const relPath = dirPath ? `${dirPath}/${fileName}` : fileName;
+  const resolved = resolveInVault(config, vaultLabel, relPath);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, filePath: "" };
+
+  if (fs.existsSync(resolved.absPath)) {
+    return { ok: false, reason: "A note with that name already exists", filePath: "" };
+  }
+
+  try {
+    fs.writeFileSync(resolved.absPath, "", "utf8");
+    return { ok: true, filePath: relPath };
+  } catch {
+    return { ok: false, reason: "Couldn't create that note", filePath: "" };
   }
 }
 

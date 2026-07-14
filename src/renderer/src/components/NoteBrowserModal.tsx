@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { MouseEvent } from "react";
+import type { FormEvent, MouseEvent } from "react";
 import type { NoteBrowseResult } from "../../../shared/types";
-import { IconFolder, IconNote, IconX } from "./icons";
+import { IconFolder, IconNote, IconPlus, IconX } from "./icons";
 
 interface NoteBrowserModalProps {
   vaultLabel: string;
@@ -10,9 +10,15 @@ interface NoteBrowserModalProps {
 }
 
 // Always opens at the vault root — no per-vault "last folder" memory for v1.
+// Doubles as the "create a new note" flow: the same folder browser picks the
+// destination, and a successful create hands off to the same onPick callback
+// used for an existing file, so the caller can't tell the two apart.
 export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBrowserModalProps) {
   const [subPath, setSubPath] = useState("");
   const [result, setResult] = useState<NoteBrowseResult | null>(null);
+  const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(
     async (nextPath: string) => {
@@ -25,8 +31,29 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
     load(subPath);
   }, [subPath, load]);
 
+  // Switching folders invalidates any in-progress "name already exists" error
+  // and clears the draft name — a name that collided in one folder is fine
+  // in another.
+  useEffect(() => {
+    setCreateError(null);
+  }, [subPath]);
+
   function handleScrimClick(e: MouseEvent<HTMLDivElement>) {
     if (e.target === e.currentTarget) onClose();
+  }
+
+  async function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    if (!newName.trim() || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    const result = await window.api.notes.create(vaultLabel, subPath, newName);
+    setCreating(false);
+    if (!result.ok) {
+      setCreateError(result.reason || "Couldn't create that note");
+      return;
+    }
+    onPick(result.filePath, newName.trim().replace(/\.md$/i, ""));
   }
 
   const crumbs = subPath ? subPath.split("/") : [];
@@ -90,6 +117,19 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
             </>
           )}
         </div>
+
+        <form className="notes-browser-create" onSubmit={handleCreate}>
+          <input
+            type="text"
+            placeholder={`New note in ${subPath || vaultLabel}…`}
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <button type="submit" disabled={!newName.trim() || creating} title="Create note here">
+            <IconPlus size={12} />
+          </button>
+          {createError && <p className="notes-browser-create-error">{createError}</p>}
+        </form>
       </div>
     </div>
   );

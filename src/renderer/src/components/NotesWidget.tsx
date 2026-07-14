@@ -210,7 +210,7 @@ export default function NotesWidget() {
                   <h3 className="todoist-group-title">{vault.label}</h3>
                   <button
                     className="notes-nav-add"
-                    title={`Add a note from ${vault.label}`}
+                    title={`Add or create a note in ${vault.label}`}
                     onClick={() => setBrowserVault(vault.label)}
                   >
                     <IconPlus size={11} />

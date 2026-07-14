@@ -50,6 +50,7 @@ import {
   buildVaultIndex,
   readNoteFile,
   saveNoteFile,
+  createNoteFile,
   listNavNotes,
   addNavNote,
   removeNavNote,
@@ -256,6 +257,9 @@ ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
 );
 ipcMain.handle("notes:save", (_evt, vaultLabel: string, filePath: string, content: string) =>
   saveNoteFile(config, vaultLabel, filePath, content)
+);
+ipcMain.handle("notes:create", (_evt, vaultLabel: string, dirPath: string, name: string) =>
+  createNoteFile(config, vaultLabel, dirPath, name)
 );
 ipcMain.handle("notes:nav:list", () => listNavNotes());
 ipcMain.handle("notes:nav:add", (_evt, vaultLabel: string, filePath: string, label: string) =>

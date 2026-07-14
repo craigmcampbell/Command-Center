@@ -280,6 +280,15 @@ export interface NoteContent {
   content: string;
 }
 
+// Result of creating a new note file — filePath is vault-relative, same
+// shape callers already pass to notes.read/save, so a fresh note slots into
+// the nav-pin/open flow exactly like picking an existing one.
+export interface NoteCreateResult {
+  ok: boolean;
+  reason?: string;
+  filePath: string;
+}
+
 // A note pinned into the Notes tab's left nav. Deleting one only removes
 // this row — the file on disk is untouched.
 export interface NoteNavItem {
@@ -374,6 +383,7 @@ export interface CommandCenterApi {
     index: (vaultLabel: string) => Promise<VaultNoteIndexResult>;
     read: (vaultLabel: string, filePath: string) => Promise<NoteContent>;
     save: (vaultLabel: string, filePath: string, content: string) => Promise<ActionResult>;
+    create: (vaultLabel: string, dirPath: string, name: string) => Promise<NoteCreateResult>;
     nav: {
       list: () => Promise<NoteNavItem[]>;
       add: (vaultLabel: string, filePath: string, label: string) => Promise<NoteNavItem[]>;
