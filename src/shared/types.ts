@@ -51,6 +51,34 @@ export interface VaultConfig {
   path: string;
 }
 
+// A locally-managed long-running process (dev server, watcher, a tool like
+// opencode) that the Development tab can start/stop/tail. `cwd` is optional
+// — omit it for tools that don't care where they run; include it for ones
+// that do. `url`/`autoOpenUrl`/`openDelayMs` are for a process that serves a
+// web UI worth jumping straight to once it's up.
+export interface ProcessConfig {
+  id: string;
+  label: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  url?: string;
+  autoOpenUrl?: boolean;
+  openDelayMs?: number;
+}
+
+// Runtime state for one managed process. `logs` is a tail of raw
+// stdout/stderr chunks (not pre-split into lines) — the renderer just joins
+// and displays them. A process that's never been started this session has
+// no status yet; callers treat that the same as `{ running: false,
+// exitCode: null, logs: [] }`.
+export interface ProcessStatus {
+  id: string;
+  running: boolean;
+  exitCode: number | null;
+  logs: string[];
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
@@ -60,6 +88,7 @@ export interface AppConfig {
   reader: { apiToken: string };
   github?: GitHubConfig;
   vaults?: VaultConfig[];
+  processes?: ProcessConfig[];
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -413,5 +442,11 @@ export interface CommandCenterApi {
       get: () => Promise<NotesSession>;
       set: (openNoteIds: number[], activeNoteId: number | null) => Promise<NotesSession>;
     };
+  };
+  process: {
+    start: (id: string) => Promise<ActionResult>;
+    stop: (id: string) => Promise<ActionResult>;
+    status: (id: string) => Promise<ProcessStatus>;
+    statusAll: () => Promise<ProcessStatus[]>;
   };
 }

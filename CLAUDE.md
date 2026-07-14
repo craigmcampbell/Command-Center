@@ -55,6 +55,23 @@ Three walled-off parts — this separation is the security model, keep it intact
     open-tabs session live in SQLite (`notes` / `notes_session` tables) — they
     only ever reference a file by `(vaultLabel, filePath)`, never copy its
     content, so the file on disk stays the single source of truth.
+  - `services/processes.ts` — starts/stops/tails arbitrary long-running local
+    processes listed in `config.json`'s `processes` (dev servers, watchers,
+    tools like `opencode`). In-memory only (no SQLite/config writes) — a
+    `Map<id, { child, logs, exitCode }>` is the sole source of runtime truth,
+    keyed by the same `id` used in config; a process that's never been
+    started this session just has no entry. Not a terminal emulator — no
+    PTY/`node-pty`/`xterm.js`, no interactive stdin, just spawn + capped
+    log-tail + a reliable kill. Spawns with `detached: true` on
+    macOS/Linux so the child is its own process group leader, and stops it
+    with `process.kill(-pid, "SIGTERM")` (escalating to `SIGKILL` after 3s)
+    — a plain `child.kill()` only hits the parent and would orphan a dev
+    server's own forked children. Windows has no such group signaling, so it
+    uses `taskkill /pid <pid> /T /F` instead, which walks the real process
+    tree; no `tree-kill` dependency needed for either path. Killed en masse
+    via `stopAll()` on `app`'s `before-quit` (main/index.ts holds quitting up
+    until the kills resolve) so closing the dashboard never leaves an
+    orphaned server running.
 - **Preload** (`src/preload/index.ts`) — the ONLY bridge. Exposes a small named API
   (`window.api.*`) via `contextBridge`, typed as `CommandCenterApi`. Renderer can't
   reach Node except through this. `index.d.ts` augments `Window` so every component
@@ -102,7 +119,8 @@ under `<main>` is tab-gated, state lives in `App.tsx` same as always.
 
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
   Missions, Local Apps, Learning.
-- **Development** — Services (Docker), Claude Code, GitHub (CI status + PRs).
+- **Development** — Services (Docker), Claude Code, Processes (managed local
+  processes), GitHub (CI status + PRs).
 - **Reader** — latest Readwise Reader documents, paginated.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
@@ -120,7 +138,8 @@ Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
 launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
 links) · Claude Code launcher (opens in Warp) · Reader (latest Readwise Reader
 documents, paginated 15 at a time) · GitHub (per-repo latest CI run + open PR
-count, cross-repo review-requested PRs, auto-refresh on `github.refreshSeconds`).
+count, cross-repo review-requested PRs, auto-refresh on `github.refreshSeconds`) ·
+Managed Processes (start/stop/tail arbitrary local tools, see below).
 
 Local Apps and Learning both render via the generic `LinkLauncherWidget`
 (`components/LinkLauncherWidget.tsx`) — a SQLite-backed `LinkItem[]` list
@@ -154,6 +173,30 @@ specific CSS only covers the nav/tab-strip/browser-modal chrome around it.
 Open tabs + the active tab persist across restarts in a `notes_session`
 singleton row (same shape as `services/scratchpad.ts`'s single-row table), so
 relaunching the app restores where you left off.
+
+## Managed Processes (Development tab)
+
+Config-driven start/stop/log-tail for arbitrary long-running local processes
+(dev servers, watchers, tools like `opencode`) — a generic "local services
+control panel" rather than a one-off per tool. Adding a new entry to
+`config.json`'s `processes` list is the entire integration; no code changes
+needed. Deliberately NOT a terminal emulator — the user interacts with the
+process's own web UI (opened via `url`/`autoOpenUrl`, reusing the existing
+`open:url` → `shell.openExternal` path), not a console, so there's no PTY,
+no `node-pty`, no `xterm.js`, no interactive stdin. See `services/processes.ts`
+above for the tree-kill approach.
+
+`components/ManagedProcessesWidget.tsx` follows the standard five-touch-point
+widget pattern — `App.tsx` owns `processConfigs` (static, from
+`getConfig().processes`) and `processStatuses` (live, `process:statusAll`
+polled every ~3s alongside Docker/GitHub's own intervals, plus on "Refresh
+all"). The widget itself additionally self-polls `process:status` for
+whichever row's log panel is expanded on a faster ~1.5s cadence, merged over
+the App-fed status for just that row — pips don't need low latency, a log
+tail you're actively watching does. A process that's never been started this
+session has no entry in `processStatuses`; the widget falls back to an empty
+"stopped" status for it, using the config list as the source of truth for
+what rows exist at all.
 
 ## Command Palette
 
@@ -211,6 +254,13 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   configured, the nav shows "No vaults configured in config.json"; with none
   yet pinned for a given vault, its group still shows so you can click "+" to
   add the first one.
+- **Managed Processes setup**: list processes under `config.json`'s `processes`
+  (`{ id, label, command, args?, cwd?, url?, autoOpenUrl?, openDelayMs? }` each —
+  `id` must be unique/stable, `cwd` is optional and omitted entirely from spawn
+  options when absent rather than defaulting to something). Without any
+  configured, the widget shows "No processes configured in config.json". Prefer
+  an explicit `args` array over a shell string where possible (matches
+  `docker.ts`'s `execFile`-over-`exec` preference elsewhere in this codebase).
 - **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
   be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
   to bypass, or `xattr -cr "Command Center.app"`. The packaged app's config lives at

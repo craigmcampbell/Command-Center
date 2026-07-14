@@ -8,12 +8,15 @@ import type {
   GitHubStatusResult,
   LinkItem,
   MissionsResult,
+  ProcessConfig,
+  ProcessStatus,
   ReaderResult,
   TodoistResult,
   CalendarResult,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
+import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
@@ -82,12 +85,17 @@ export default function App() {
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
+  const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
+  const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
   }, []);
   const loadGithub = useCallback(async () => {
     setGithub(await window.api.github.status());
+  }, []);
+  const loadProcessStatuses = useCallback(async () => {
+    setProcessStatuses(await window.api.process.statusAll());
   }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
@@ -133,6 +141,7 @@ export default function App() {
       loadCalendar(),
       loadReader(readerPage, true),
       loadGithub(),
+      loadProcessStatuses(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -145,6 +154,7 @@ export default function App() {
     loadReader,
     readerPage,
     loadGithub,
+    loadProcessStatuses,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -177,13 +187,15 @@ export default function App() {
     onNewScratchpadNote: newScratchpadNote,
   };
 
-  // ---- boot: load config, then every widget, then start Docker's + GitHub's refresh ----
+  // ---- boot: load config, then every widget, then start Docker's + GitHub's + Processes' refresh ----
   useEffect(() => {
     let dockerIntervalId: ReturnType<typeof setInterval> | undefined;
     let githubIntervalId: ReturnType<typeof setInterval> | undefined;
+    let processesIntervalId: ReturnType<typeof setInterval> | undefined;
     (async () => {
       const cfg = await window.api.getConfig();
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
+      setProcessConfigs(cfg.processes ?? []);
       await Promise.all([
         loadDocker(),
         loadDaily(),
@@ -195,6 +207,7 @@ export default function App() {
         window.api.links.list("claudeCode").then(setClaudeProjects),
         loadReader(0),
         loadGithub(),
+        loadProcessStatuses(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -203,14 +216,20 @@ export default function App() {
 
       const githubSecs = cfg.github?.refreshSeconds || 300;
       githubIntervalId = setInterval(loadGithub, githubSecs * 1000);
+
+      // Pips only need to be "roughly fresh" — the widget itself polls
+      // faster (window.api.process.status) for whichever row's logs panel
+      // is actually open.
+      processesIntervalId = setInterval(loadProcessStatuses, 3000);
     })();
     return () => {
       clearInterval(dockerIntervalId);
       clearInterval(githubIntervalId);
+      clearInterval(processesIntervalId);
     };
     // Intentionally empty: this must run once at mount only. loadDaily/loadCalendar's
     // identity changes whenever dailyDate/calendarDate does (prev/next navigation), and
-    // re-running this effect would stack a second Docker/GitHub refresh interval.
+    // re-running this effect would stack a second Docker/GitHub/Processes refresh interval.
   }, []);
 
   // ---- clock / stardate ----
@@ -310,6 +329,13 @@ export default function App() {
           </div>
           <div className="slot slot-github">
             <GitHubWidget data={github} />
+          </div>
+          <div className="slot slot-processes">
+            <ManagedProcessesWidget
+              configs={processConfigs}
+              statuses={processStatuses}
+              onRefresh={loadProcessStatuses}
+            />
           </div>
         </main>
       )}

@@ -58,6 +58,13 @@ import {
   getSession,
   setSession,
 } from "./services/notes";
+import {
+  startProcess,
+  stopProcess,
+  getStatus as getProcessStatus,
+  getAllStatus as getAllProcessStatus,
+  stopAll as stopAllProcesses,
+} from "./services/processes";
 import type { AppConfig, HabitFrequencyType, LinkListKind } from "../shared/types";
 
 // Load user config once at startup. In dev this reads straight from the repo
@@ -312,6 +319,25 @@ ipcMain.handle("habits:trends", (_evt, habitId?: number, weeks?: number) => {
   return getAllHabitTrends(weeks ?? 12);
 });
 
+// Managed local processes (Development tab): start/stop/tail arbitrary
+// long-running tools from config.json's `processes` list. Not a terminal —
+// no PTY/interactive input, just spawn + log tail + a reliable group kill.
+ipcMain.handle("process:start", (_evt, id: string) => {
+  const procConfig = (config.processes ?? []).find((p) => p.id === id);
+  if (!procConfig) return { ok: false, reason: "Unknown process" };
+
+  const result = startProcess(procConfig);
+  if (result.ok && procConfig.autoOpenUrl && procConfig.url) {
+    setTimeout(() => {
+      shell.openExternal(procConfig.url!);
+    }, procConfig.openDelayMs ?? 0);
+  }
+  return result;
+});
+ipcMain.handle("process:stop", (_evt, id: string) => stopProcess(id));
+ipcMain.handle("process:status", (_evt, id: string) => getProcessStatus(id));
+ipcMain.handle("process:statusAll", () => getAllProcessStatus());
+
 app.whenReady().then(() => {
   setDockIcon();
   createWindow();
@@ -322,4 +348,21 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// Kill every managed process before the app actually exits, so closing the
+// dashboard never leaves an orphaned dev server/tool running. The group
+// kills are async, so we hold up quitting until they resolve rather than
+// firing-and-forgetting. Once cleanup is done we use app.exit() rather than
+// calling app.quit() again — app.exit() terminates immediately without
+// re-emitting before-quit/will-quit, which sidesteps a real-world case
+// where a second app.quit() from inside this handler never actually
+// completed the exit (observed in dev mode with the detached DevTools
+// window still open).
+let quitting = false;
+app.on("before-quit", (event) => {
+  if (quitting) return;
+  quitting = true;
+  event.preventDefault();
+  stopAllProcesses().finally(() => app.exit());
 });

@@ -30,5 +30,24 @@
   },
   "vaults": [
     { "label": "My Vault", "path": "/absolute/path/to/your/Obsidian/vault" }
+  ],
+  "processes": [
+    {
+      "id": "my-tool",
+      "label": "my-tool",
+      "command": "my-tool",
+      "args": [],
+      "url": "http://localhost:PORT",
+      "autoOpenUrl": true,
+      "openDelayMs": 1500
+    },
+    {
+      "id": "my-app-dev",
+      "label": "my-app (dev)",
+      "command": "pnpm",
+      "args": ["dev"],
+      "cwd": "/absolute/path/to/your/project",
+      "autoOpenUrl": false
+    }
   ]
 }

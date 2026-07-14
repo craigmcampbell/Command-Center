@@ -110,6 +110,13 @@ const api: CommandCenterApi = {
         ipcRenderer.invoke("notes:session:set", openNoteIds, activeNoteId),
     },
   },
+
+  process: {
+    start: (id: string) => ipcRenderer.invoke("process:start", id),
+    stop: (id: string) => ipcRenderer.invoke("process:stop", id),
+    status: (id: string) => ipcRenderer.invoke("process:status", id),
+    statusAll: () => ipcRenderer.invoke("process:statusAll"),
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);
