@@ -2218,3 +2218,26 @@ body {
 .github-pr-row .tag {
   flex-shrink: 0;
 }
+.github-ci-history {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0 6px 16px;
+}
+.ci-history-pip {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dead);
+  cursor: pointer;
+}
+.ci-history-pip.live {
+  background: var(--live);
+}
+.ci-history-pip.alert {
+  background: var(--alert);
+}
+.ci-history-pip.pending {
+  background: var(--pending);
+}

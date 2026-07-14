@@ -248,14 +248,16 @@ export interface HabitTrendResult {
   weeks: HabitTrendWeek[];
 }
 
-// GitHub Actions run status for the most recent run on a repo's configured
-// branch. `conclusion` is null while `status` isn't yet "completed".
+// GitHub Actions run status for one workflow run, on any branch (not just
+// the repo's configured main branch) — so PR-branch runs show up too.
+// `conclusion` is null while `status` isn't yet "completed".
 export interface CiRun {
   status: string;
   conclusion: string | null;
   workflowName: string;
   url: string;
   updatedAt: string;
+  branch: string;
 }
 
 export interface GitHubPr {
@@ -274,6 +276,7 @@ export interface GitHubRepoStatus {
   ok: boolean;
   reason?: string;
   ci: CiRun | null;
+  ciHistory: CiRun[];
   openPrCount: number;
   openPrs: GitHubPr[];
   prsUrl: string;

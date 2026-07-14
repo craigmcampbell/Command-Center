@@ -17,12 +17,16 @@ function relativeTime(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+function ciStatusClass(ci: CiRun | null, base: string): string {
+  if (!ci) return base;
+  if (ci.status !== "completed") return `${base} pending`;
+  if (ci.conclusion === "success") return `${base} live`;
+  if (ci.conclusion && FAILURE_CONCLUSIONS.has(ci.conclusion)) return `${base} alert`;
+  return base;
+}
+
 function ciPipClass(ci: CiRun | null): string {
-  if (!ci) return "pip";
-  if (ci.status !== "completed") return "pip pending";
-  if (ci.conclusion === "success") return "pip live";
-  if (ci.conclusion && FAILURE_CONCLUSIONS.has(ci.conclusion)) return "pip alert";
-  return "pip";
+  return ciStatusClass(ci, "pip");
 }
 
 function overallPipClass(data: GitHubStatusResult): string {
@@ -64,33 +68,51 @@ function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
 
 function RepoRow({ repo }: { repo: GitHubRepoStatus }) {
   const repoUrl = `https://github.com/${repo.owner}/${repo.repo}`;
+  // Oldest-to-newest, left-to-right, so the strip reads like a timeline
+  // ending at the same "now" the leading pip and CI info line describe.
+  const history = repo.ciHistory.slice().reverse();
   return (
-    <div className="row github-repo-row">
-      <span className={ciPipClass(repo.ci)}></span>
-      <span
-        className="github-repo-label"
-        onClick={() => window.api.openUrl(repoUrl)}
-        title="Open repo on GitHub"
-      >
-        {repo.label}
-        <IconExternal className="external-icon" />
-      </span>
-      {!repo.ok ? (
-        <span className="tag github-ci-info">{repo.reason}</span>
-      ) : repo.ci ? (
+    <div className="github-repo-group">
+      <div className="row github-repo-row">
+        <span className={ciPipClass(repo.ci)}></span>
         <span
-          className="name link github-ci-info"
-          onClick={() => window.api.openUrl(repo.ci!.url)}
+          className="github-repo-label"
+          onClick={() => window.api.openUrl(repoUrl)}
+          title="Open repo on GitHub"
         >
-          {repo.ci.workflowName} · {relativeTime(repo.ci.updatedAt)}
+          {repo.label}
           <IconExternal className="external-icon" />
         </span>
-      ) : (
-        <span className="tag github-ci-info">No runs on {repo.branch}</span>
-      )}
-      <span className="github-pr-badge" onClick={() => window.api.openUrl(repo.prsUrl)}>
-        {repo.openPrCount} PR{repo.openPrCount === 1 ? "" : "s"}
-      </span>
+        {!repo.ok ? (
+          <span className="tag github-ci-info">{repo.reason}</span>
+        ) : repo.ci ? (
+          <span
+            className="name link github-ci-info"
+            onClick={() => window.api.openUrl(repo.ci!.url)}
+          >
+            {repo.ci.workflowName} · {relativeTime(repo.ci.updatedAt)}
+            {repo.ci.branch !== repo.branch ? ` · ${repo.ci.branch}` : ""}
+            <IconExternal className="external-icon" />
+          </span>
+        ) : (
+          <span className="tag github-ci-info">No CI runs yet</span>
+        )}
+        <span className="github-pr-badge" onClick={() => window.api.openUrl(repo.prsUrl)}>
+          {repo.openPrCount} PR{repo.openPrCount === 1 ? "" : "s"}
+        </span>
+      </div>
+      {history.length > 1 ? (
+        <div className="github-ci-history">
+          {history.map((run, i) => (
+            <span
+              key={`${run.url}-${i}`}
+              className={ciStatusClass(run, "ci-history-pip")}
+              title={`${run.branch} · ${relativeTime(run.updatedAt)}`}
+              onClick={() => window.api.openUrl(run.url)}
+            ></span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
