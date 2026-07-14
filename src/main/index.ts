@@ -9,7 +9,7 @@ import path from "node:path";
 import fs from "node:fs";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
-import { readDailyNote, listMissions } from "./services/grimoire";
+import { readDailyNote, saveDailyNote, listMissions } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
 import { getEventsForDay, connectGoogleCalendar } from "./services/googleCalendar";
@@ -47,6 +47,7 @@ import {
   initNotes,
   listVaults,
   browseVault,
+  buildVaultIndex,
   readNoteFile,
   saveNoteFile,
   listNavNotes,
@@ -173,6 +174,9 @@ ipcMain.handle("docker:stop", async (_evt, name: string) => {
 ipcMain.handle("grimoire:dailyNote", async (_evt, date?: string) => {
   return readDailyNote(config.grimoire, date);
 });
+ipcMain.handle("grimoire:dailyNote:save", async (_evt, date: string, content: string) => {
+  return saveDailyNote(config.grimoire, date, content);
+});
 ipcMain.handle("grimoire:missions", async () => {
   return listMissions(config.grimoire);
 });
@@ -246,6 +250,7 @@ ipcMain.handle("notes:vaults", () => listVaults(config));
 ipcMain.handle("notes:browse", (_evt, vaultLabel: string, subPath?: string) =>
   browseVault(config, vaultLabel, subPath)
 );
+ipcMain.handle("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(config, vaultLabel));
 ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
   readNoteFile(config, vaultLabel, filePath)
 );

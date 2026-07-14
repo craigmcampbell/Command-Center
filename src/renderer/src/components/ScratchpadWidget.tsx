@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "../lib/markdown";
+import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import Panel from "./Panel";
 import MarkdownEditor from "./MarkdownEditor";
 import { IconTrash } from "./icons";
@@ -40,6 +41,10 @@ export default function ScratchpadWidget() {
   function handleChange(text: string) {
     setContent(text);
     scheduleSave(text);
+  }
+
+  function handleToggleTask(from: number, to: number, checked: boolean) {
+    handleChange(content.slice(0, from) + (checked ? "[x]" : "[ ]") + content.slice(to));
   }
 
   async function handleClear() {
@@ -104,8 +109,9 @@ export default function ScratchpadWidget() {
         {showPreview && (
           <div
             className="scratchpad-preview note"
+            onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
             dangerouslySetInnerHTML={{
-              __html: renderMarkdown(content) || '<p class="muted">Nothing to preview yet.</p>',
+              __html: renderMarkdown(content, { interactiveTasks: true }),
             }}
           />
         )}

@@ -272,7 +272,7 @@ export default function App() {
             <TodoistWidget data={todoist} onRefresh={loadTodoist} />
           </div>
           <div className="slot slot-daily">
-            <DailyNoteWidget data={daily} onNavigate={navigateDaily} />
+            <DailyNoteWidget data={daily} onNavigate={navigateDaily} onChange={setDaily} />
           </div>
           <div className="slot slot-missions">
             <MissionsWidget data={missions} />

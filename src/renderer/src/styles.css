@@ -1717,26 +1717,103 @@ body {
   width: 100%;
 }
 
-/* markdown-ish daily note render */
+/* markdown preview render */
+.note h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 18px 0 8px;
+}
+.note h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 16px 0 7px;
+}
 .note h3 {
   font-size: 13px;
   color: var(--accent);
   margin: 12px 0 6px;
   letter-spacing: 0.02em;
 }
+.note h4,
+.note h5,
+.note h6 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  margin: 10px 0 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
 .note p,
 .note li {
   font-size: 13px;
   line-height: 1.55;
   color: var(--ink);
-  margin: 4px 0;
+}
+/* The renderer never wraps a list item's own text in <p> (see
+   renderListItem in lib/markdown.ts), so this only ever matches a real
+   paragraph — safe to give it a bigger margin than list items without a
+   child combinator. A blank line in the source is otherwise invisible in
+   the preview: adjacent block margins collapse to the smaller of the two,
+   so a blank-line-separated paragraph looked the same as a tight list item. */
+.note p {
+  margin: 10px 0;
 }
 .note li {
-  margin-left: 18px;
+  margin: 4px 0;
+}
+.note ul,
+.note ol {
+  padding-left: 22px;
+  margin: 4px 0;
+}
+.note li.task-item {
+  list-style: none;
+  margin-left: -2px;
+}
+.note li.task-item input[type="checkbox"] {
+  margin-right: 6px;
+  vertical-align: middle;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.note li.task-item input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 .note .task-done {
   color: var(--ink-dim);
   text-decoration: line-through;
+}
+.note blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.note hr {
+  border: none;
+  border-top: 1px solid var(--panel-edge);
+  margin: 16px 0;
+}
+.note table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  width: 100%;
+}
+.note th,
+.note td {
+  border: 1px solid var(--panel-edge);
+  padding: 4px 8px;
+  text-align: left;
+}
+.note th {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
 }
 .note code {
   font-family: var(--mono);
@@ -1744,6 +1821,112 @@ body {
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.9em;
+}
+.note pre {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.note pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.note pre[data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang);
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+}
+.note img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 6px 0;
+  display: block;
+}
+.note a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.note a:hover {
+  color: var(--live);
+}
+.note .wikilink {
+  color: var(--live);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--live);
+  cursor: pointer;
+}
+.note .wikilink:hover {
+  border-bottom-style: solid;
+}
+.note .wikilink-embed::before {
+  content: "⇲ ";
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.note .wikilink-broken {
+  color: var(--ink-dim);
+  border-bottom: 1px dashed var(--alert);
+  cursor: default;
+}
+.note .wikilink-unavailable {
+  color: var(--ink-dim);
+  border-bottom: 1px dashed var(--panel-edge);
+  cursor: default;
+}
+
+/* @lezer/highlight classHighlighter tok-* classes, used inside .note pre code */
+.note .tok-keyword,
+.note .tok-atom,
+.note .tok-bool {
+  color: var(--accent);
+}
+.note .tok-string,
+.note .tok-string2,
+.note .tok-inserted {
+  color: var(--live);
+}
+.note .tok-comment,
+.note .tok-meta {
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.note .tok-number,
+.note .tok-literal {
+  color: var(--pending);
+}
+.note .tok-typeName,
+.note .tok-className,
+.note .tok-namespace {
+  color: var(--alert);
+}
+.note .tok-propertyName,
+.note .tok-labelName {
+  color: var(--accent);
+}
+.note .tok-variableName,
+.note .tok-definition {
+  color: var(--ink);
+}
+.note .tok-operator,
+.note .tok-punctuation {
+  color: var(--ink-dim);
+}
+.note .tok-invalid {
+  color: var(--alert);
+  text-decoration: wavy underline;
 }
 
 /* scrollbar — applies to the outer window scroll and every .panel-body alike */

@@ -3,7 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { GrimoireConfig, DailyNoteResult, MissionsResult } from "../../shared/types";
+import type { ActionResult, GrimoireConfig, DailyNoteResult, MissionsResult } from "../../shared/types";
 
 const DAILY_NOTE_NAME = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
@@ -103,6 +103,23 @@ export function readDailyNote(
       nextDate,
       obsidianUri,
     };
+  }
+}
+
+// For the daily note's interactive task checkboxes — mirrors
+// services/notes.ts's saveNoteFile shape/fail-soft behavior. Only ever
+// writes to the exact same path readDailyNote() already reads from.
+export function saveDailyNote(
+  { vaultPath, dailyLogDir }: GrimoireConfig,
+  date: string,
+  content: string
+): ActionResult {
+  const file = path.join(vaultPath, dailyLogDir, `${date}.md`);
+  try {
+    fs.writeFileSync(file, content, "utf8");
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't save that note" };
   }
 }
 

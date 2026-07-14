@@ -17,6 +17,8 @@ const api: CommandCenterApi = {
 
   grimoire: {
     dailyNote: (date?: string) => ipcRenderer.invoke("grimoire:dailyNote", date),
+    saveDailyNote: (date: string, content: string) =>
+      ipcRenderer.invoke("grimoire:dailyNote:save", date, content),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
   },
 
@@ -88,6 +90,7 @@ const api: CommandCenterApi = {
     vaults: () => ipcRenderer.invoke("notes:vaults"),
     browse: (vaultLabel: string, subPath?: string) =>
       ipcRenderer.invoke("notes:browse", vaultLabel, subPath),
+    index: (vaultLabel: string) => ipcRenderer.invoke("notes:index", vaultLabel),
     read: (vaultLabel: string, filePath: string) =>
       ipcRenderer.invoke("notes:read", vaultLabel, filePath),
     save: (vaultLabel: string, filePath: string, content: string) =>

@@ -15,6 +15,8 @@ import type {
   NoteNavItem,
   NotesSession,
   VaultConfig,
+  VaultNoteIndexEntry,
+  VaultNoteIndexResult,
 } from "../../shared/types";
 import { getDatabase } from "./links";
 
@@ -102,6 +104,46 @@ export function browseVault(
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return { ok: true, folders, files };
+}
+
+// Recursively indexes every .md file in a vault (basename → relative path),
+// for wikilink resolution — browseVault only ever looks at one directory
+// level at a time, which isn't enough to resolve a [[Note Name]] that could
+// be anywhere in the vault. Same dotfolder exclusion and path-safety
+// resolution as browseVault. Sorted by path, so a caller matching by
+// basename against duplicate names across folders gets a deterministic
+// "first by path" pick rather than whatever order the filesystem returns.
+export function buildVaultIndex(config: AppConfig, vaultLabel: string): VaultNoteIndexResult {
+  const resolved = resolveInVault(config, vaultLabel, "");
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, entries: [] };
+
+  const entries: VaultNoteIndexEntry[] = [];
+  function walk(absDir: string, relDir: string) {
+    let dirEntries: fs.Dirent[];
+    try {
+      dirEntries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of dirEntries) {
+      if (e.name.startsWith(".")) continue;
+      const rel = relDir ? `${relDir}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        walk(path.join(absDir, e.name), rel);
+      } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
+        entries.push({ basename: e.name.slice(0, -3), path: rel });
+      }
+    }
+  }
+
+  try {
+    walk(resolved.absPath, "");
+  } catch {
+    return { ok: false, reason: "Couldn't index that vault", entries: [] };
+  }
+
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  return { ok: true, entries };
 }
 
 export function readNoteFile(config: AppConfig, vaultLabel: string, filePath: string): NoteContent {

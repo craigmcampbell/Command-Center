@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { NoteNavItem, VaultConfig } from "../../../shared/types";
+import type { NoteNavItem, VaultConfig, VaultNoteIndexEntry } from "../../../shared/types";
+import type { ResolvedWikilink } from "../lib/markdown";
 import { renderMarkdown } from "../lib/markdown";
+import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import Panel from "./Panel";
 import MarkdownEditor from "./MarkdownEditor";
 import NoteBrowserModal from "./NoteBrowserModal";
@@ -31,7 +33,9 @@ export default function NotesWidget() {
   const [mode, setMode] = useState<ViewMode>("split");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [browserVault, setBrowserVault] = useState<string | null>(null);
+  const [vaultIndexes, setVaultIndexes] = useState<Record<string, VaultNoteIndexEntry[]>>({});
   const saveTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const requestedIndexes = useRef<Set<string>>(new Set());
 
   const loadNoteContent = useCallback(async (item: NoteNavItem) => {
     const result = await window.api.notes.read(item.vaultLabel, item.filePath);
@@ -41,6 +45,36 @@ export default function NotesWidget() {
       setNoteErrors((prev) => ({ ...prev, [item.id]: result.reason || "Couldn't read note" }));
     }
   }, []);
+
+  // Fetched once per vault, the first time a note from it is opened, then
+  // cached for the rest of the session — no invalidation/refresh if the
+  // vault changes on disk externally while the app is open.
+  const ensureVaultIndex = useCallback((vaultLabel: string) => {
+    if (requestedIndexes.current.has(vaultLabel)) return;
+    requestedIndexes.current.add(vaultLabel);
+    window.api.notes.index(vaultLabel).then((result) => {
+      setVaultIndexes((prev) => ({ ...prev, [vaultLabel]: result.ok ? result.entries : [] }));
+    });
+  }, []);
+
+  // Resolves a [[wikilink]] target against the given vault's index — tries
+  // an exact path match first (lets "[[Folder/Note]]" disambiguate by hand),
+  // then falls back to a basename match. Entries come back sorted by path
+  // from buildVaultIndex, so "first match" is a deterministic tie-break for
+  // duplicate basenames in different folders, not just filesystem order.
+  const resolveWikilink = useCallback(
+    (vaultLabel: string, target: string): ResolvedWikilink | null => {
+      const entries = vaultIndexes[vaultLabel];
+      if (!entries) return null;
+      const normalized = target.replace(/\.md$/i, "").toLowerCase();
+      const byPath = entries.find((e) => e.path.replace(/\.md$/i, "").toLowerCase() === normalized);
+      if (byPath) return { filePath: byPath.path, label: byPath.basename };
+      const byName = entries.find((e) => e.basename.toLowerCase() === normalized);
+      if (byName) return { filePath: byName.path, label: byName.basename };
+      return null;
+    },
+    [vaultIndexes]
+  );
 
   useEffect(() => {
     (async () => {
@@ -64,10 +98,11 @@ export default function NotesWidget() {
         .map((id) => nav.find((n) => n.id === id))
         .filter((n): n is NoteNavItem => !!n);
       await Promise.all(openItems.map(loadNoteContent));
+      openItems.forEach((item) => ensureVaultIndex(item.vaultLabel));
 
       setLoaded(true);
     })();
-  }, [loadNoteContent]);
+  }, [loadNoteContent, ensureVaultIndex]);
 
   // Pending debounced saves are cancelled on unmount (same tradeoff as
   // ScratchpadWidget) — switching tabs within the debounce window drops
@@ -82,6 +117,7 @@ export default function NotesWidget() {
     const nextOpenIds = openIds.includes(item.id) ? openIds : [...openIds, item.id];
     setOpenIds(nextOpenIds);
     setActiveId(item.id);
+    ensureVaultIndex(item.vaultLabel);
     await window.api.notes.session.set(nextOpenIds, item.id);
     if (!(item.id in contents) && !(item.id in noteErrors)) {
       await loadNoteContent(item);
@@ -116,15 +152,20 @@ export default function NotesWidget() {
     });
   }
 
-  async function handlePick(filePath: string, label: string) {
-    const vaultLabel = browserVault;
-    setBrowserVault(null);
-    if (!vaultLabel) return;
-
+  // Pins (if not already pinned) and opens a note by vault+path — shared by
+  // the file-browser "pick" flow and clicking a resolved wikilink.
+  async function openByPath(vaultLabel: string, filePath: string, label: string) {
     const updatedNav = await window.api.notes.nav.add(vaultLabel, filePath, label);
     setNavNotes(updatedNav);
     const item = updatedNav.find((n) => n.vaultLabel === vaultLabel && n.filePath === filePath);
     if (item) await openNote(item);
+  }
+
+  async function handlePick(filePath: string, label: string) {
+    const vaultLabel = browserVault;
+    setBrowserVault(null);
+    if (!vaultLabel) return;
+    await openByPath(vaultLabel, filePath, label);
   }
 
   function handleContentChange(item: NoteNavItem, text: string) {
@@ -135,6 +176,11 @@ export default function NotesWidget() {
       await window.api.notes.save(item.vaultLabel, item.filePath, text);
       setSavingId((cur) => (cur === item.id ? null : cur));
     }, AUTOSAVE_MS);
+  }
+
+  function handleToggleTask(item: NoteNavItem, from: number, to: number, checked: boolean) {
+    const current = contents[item.id] ?? "";
+    handleContentChange(item, current.slice(0, from) + (checked ? "[x]" : "[ ]") + current.slice(to));
   }
 
   if (!loaded) {
@@ -269,8 +315,19 @@ export default function NotesWidget() {
                   {showPreview && (
                     <div
                       className="scratchpad-preview note"
+                      onClick={(e) =>
+                        handleMarkdownPreviewClick(e, {
+                          onToggleTask: (from, to, checked) =>
+                            handleToggleTask(activeItem, from, to, checked),
+                          onOpenWikilink: (filePath, label) =>
+                            openByPath(activeItem.vaultLabel, filePath, label),
+                        })
+                      }
                       dangerouslySetInnerHTML={{
-                        __html: renderMarkdown(contents[activeItem.id] ?? ""),
+                        __html: renderMarkdown(contents[activeItem.id] ?? "", {
+                          interactiveTasks: true,
+                          resolveWikilink: (target) => resolveWikilink(activeItem.vaultLabel, target),
+                        }),
                       }}
                     />
                   )}

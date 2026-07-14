@@ -1,11 +1,13 @@
 import type { DailyNoteResult } from "../../../shared/types";
 import { renderMarkdown } from "../lib/markdown";
+import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import Panel from "./Panel";
 import { IconChevronLeft, IconChevronRight, IconExternal } from "./icons";
 
 interface DailyNoteWidgetProps {
   data: DailyNoteResult | null;
   onNavigate: (date: string | null) => Promise<void>;
+  onChange: (result: DailyNoteResult) => void;
 }
 
 function todayDateString(): string {
@@ -14,7 +16,14 @@ function todayDateString(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export default function DailyNoteWidget({ data, onNavigate }: DailyNoteWidgetProps) {
+export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNoteWidgetProps) {
+  async function handleToggleTask(from: number, to: number, checked: boolean) {
+    if (!data || !data.ok) return;
+    const content = data.content.slice(0, from) + (checked ? "[x]" : "[ ]") + data.content.slice(to);
+    onChange({ ...data, content });
+    await window.api.grimoire.saveDailyNote(data.date, content);
+  }
+
   let body;
   if (!data) {
     body = <p className="muted">Loading daily note…</p>;
@@ -24,7 +33,10 @@ export default function DailyNoteWidget({ data, onNavigate }: DailyNoteWidgetPro
     body = (
       <div
         className="note"
-        dangerouslySetInnerHTML={{ __html: renderMarkdown(data.content) }}
+        onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
+        dangerouslySetInnerHTML={{
+          __html: renderMarkdown(data.content, { interactiveTasks: true }),
+        }}
       />
     );
   }

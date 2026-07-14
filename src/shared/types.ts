@@ -294,6 +294,20 @@ export interface NotesSession {
   activeNoteId: number | null;
 }
 
+// A vault-wide index of every note's basename → relative path, used to
+// resolve [[wikilinks]] against files that aren't necessarily pinned to the
+// Notes tab's nav.
+export interface VaultNoteIndexEntry {
+  basename: string;
+  path: string;
+}
+
+export interface VaultNoteIndexResult {
+  ok: boolean;
+  reason?: string;
+  entries: VaultNoteIndexEntry[];
+}
+
 export interface CommandCenterApi {
   getConfig: () => Promise<AppConfig>;
   docker: {
@@ -303,6 +317,7 @@ export interface CommandCenterApi {
   };
   grimoire: {
     dailyNote: (date?: string) => Promise<DailyNoteResult>;
+    saveDailyNote: (date: string, content: string) => Promise<ActionResult>;
     missions: () => Promise<MissionsResult>;
   };
   todoist: {
@@ -356,6 +371,7 @@ export interface CommandCenterApi {
   notes: {
     vaults: () => Promise<VaultConfig[]>;
     browse: (vaultLabel: string, subPath?: string) => Promise<NoteBrowseResult>;
+    index: (vaultLabel: string) => Promise<VaultNoteIndexResult>;
     read: (vaultLabel: string, filePath: string) => Promise<NoteContent>;
     save: (vaultLabel: string, filePath: string, content: string) => Promise<ActionResult>;
     nav: {

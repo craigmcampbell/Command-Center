@@ -15,22 +15,51 @@ import {
   indentLess,
 } from "@codemirror/commands";
 import { HighlightStyle, syntaxHighlighting, indentUnit } from "@codemirror/language";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
+import { buildEditorCodeLanguageDescriptions } from "./codeLanguages";
+import { wikilinkExtension } from "./wikilinkExtension";
 
-// Only `-`/`*` bullets and tasks — deliberately matches exactly what
+// Bullets, ordered markers, and tasks — deliberately matches exactly what
 // lib/markdown.ts's preview renderer recognizes, so editor behavior and
-// preview rendering never disagree about what counts as a list.
-function matchListLine(
-  text: string
-): { indent: string; marker: string; isTask: boolean; markerEnd: number } | null {
-  const taskMatch = text.match(/^(\s*)([-*])\s+\[[ xX]\]\s*/);
-  if (taskMatch) {
-    return { indent: taskMatch[1], marker: taskMatch[2], isTask: true, markerEnd: taskMatch[0].length };
+// preview rendering never disagree about what counts as a list. `nextMarker`
+// is what continueList inserts on the following line — unchanged for
+// bullets, auto-incremented for ordered lists.
+interface ListLineInfo {
+  indent: string;
+  isTask: boolean;
+  markerEnd: number;
+  nextMarker: string;
+}
+
+function matchListLine(text: string): ListLineInfo | null {
+  const bulletTask = text.match(/^(\s*)([-*])\s+\[[ xX]\]\s*/);
+  if (bulletTask) {
+    return { indent: bulletTask[1], isTask: true, markerEnd: bulletTask[0].length, nextMarker: bulletTask[2] };
   }
-  const bulletMatch = text.match(/^(\s*)([-*])\s+/);
-  if (bulletMatch) {
-    return { indent: bulletMatch[1], marker: bulletMatch[2], isTask: false, markerEnd: bulletMatch[0].length };
+  const bullet = text.match(/^(\s*)([-*])\s+/);
+  if (bullet) {
+    return { indent: bullet[1], isTask: false, markerEnd: bullet[0].length, nextMarker: bullet[2] };
+  }
+  const orderedTask = text.match(/^(\s*)(\d+)([.)])\s+\[[ xX]\]\s*/);
+  if (orderedTask) {
+    const next = Number(orderedTask[2]) + 1;
+    return {
+      indent: orderedTask[1],
+      isTask: true,
+      markerEnd: orderedTask[0].length,
+      nextMarker: `${next}${orderedTask[3]}`,
+    };
+  }
+  const ordered = text.match(/^(\s*)(\d+)([.)])\s+/);
+  if (ordered) {
+    const next = Number(ordered[2]) + 1;
+    return {
+      indent: ordered[1],
+      isTask: false,
+      markerEnd: ordered[0].length,
+      nextMarker: `${next}${ordered[3]}`,
+    };
   }
   return null;
 }
@@ -55,7 +84,7 @@ function continueList(view: EditorView): boolean {
     return true;
   }
 
-  const insert = `\n${info.indent}${info.marker} ${info.isTask ? "[ ] " : ""}`;
+  const insert = `\n${info.indent}${info.nextMarker} ${info.isTask ? "[ ] " : ""}`;
   view.dispatch({
     changes: { from: main.head, insert },
     selection: EditorSelection.cursor(main.head + insert.length),
@@ -115,6 +144,7 @@ function wrapSelection(view: EditorView, wrapper: string): boolean {
 
 const toggleBold = (view: EditorView): boolean => wrapSelection(view, "**");
 const toggleItalic = (view: EditorView): boolean => wrapSelection(view, "_");
+const toggleStrikethrough = (view: EditorView): boolean => wrapSelection(view, "~~");
 
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.4em", fontWeight: "700", color: "var(--accent)" },
@@ -130,6 +160,20 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.list, color: "var(--ink-dim)" },
   { tag: t.processingInstruction, color: "var(--ink-dim)" },
   { tag: t.contentSeparator, color: "var(--ink-dim)" },
+  // Generic code tokens — only exercised inside fenced code blocks, once
+  // codeLanguages (see buildMarkdownEditorExtensions) hands that region off
+  // to a nested language's own parser. Mirrors the .tok-* CSS classes
+  // lib/codeHighlight.ts's classHighlighter produces for the static preview,
+  // so a fence looks the same whether you're editing or previewing it.
+  { tag: [t.keyword, t.atom, t.bool], color: "var(--accent)" },
+  { tag: [t.string, t.special(t.string), t.inserted], color: "var(--live)" },
+  { tag: [t.comment, t.meta], color: "var(--ink-dim)", fontStyle: "italic" },
+  { tag: [t.number, t.literal], color: "var(--pending)" },
+  { tag: [t.typeName, t.className, t.namespace], color: "var(--alert)" },
+  { tag: [t.propertyName, t.labelName], color: "var(--accent)" },
+  { tag: [t.variableName, t.definition(t.variableName)], color: "var(--ink)" },
+  { tag: [t.operator, t.punctuation], color: "var(--ink-dim)" },
+  { tag: t.invalid, color: "var(--alert)" },
 ]);
 
 const markdownTheme = EditorView.theme(
@@ -178,6 +222,7 @@ export function buildMarkdownEditorExtensions(
       { key: "Enter", run: continueList },
       { key: "Mod-b", run: toggleBold },
       { key: "Mod-i", run: toggleItalic },
+      { key: "Mod-Shift-x", run: toggleStrikethrough },
       ...defaultKeymap,
       ...historyKeymap,
     ]),
@@ -186,7 +231,21 @@ export function buildMarkdownEditorExtensions(
     // deleteMarkupBackward) that would shadow our own Enter binding above
     // (normal-precedence bindings never get a chance to run if a
     // higher-precedence one matches the same key first).
-    markdown({ addKeymap: false }),
+    // base: markdownLanguage — GFM (tables/strikethrough/tasklists/
+    // autolinks) instead of the default bare-CommonMark commonmarkLanguage,
+    // matching lib/markdown.ts's preview parser so the editor's syntax
+    // highlighting and the preview agree on what's a table/strikethrough/etc.
+    // codeLanguages — the same curated set lib/codeHighlight.ts uses for the
+    // static preview, so fenced code blocks get real syntax coloring live in
+    // the editor too, not just in preview.
+    // extensions: wikilinkExtension — the same [[Target]]/![[Target]] grammar
+    // lib/markdown.ts's preview uses, so the editor highlights wikilinks too.
+    markdown({
+      addKeymap: false,
+      base: markdownLanguage,
+      codeLanguages: buildEditorCodeLanguageDescriptions(),
+      extensions: [wikilinkExtension],
+    }),
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
     EditorView.lineWrapping,
