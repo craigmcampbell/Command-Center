@@ -36,6 +36,18 @@ function overallPipClass(data: GitHubStatusResult): string {
   return "pip";
 }
 
+function groupReposByOwner(repos: GitHubRepoStatus[]): [string, GitHubRepoStatus[]][] {
+  const groups = new Map<string, GitHubRepoStatus[]>();
+  for (const repo of repos) {
+    const group = groups.get(repo.owner) ?? [];
+    group.push(repo);
+    groups.set(repo.owner, group);
+  }
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([owner, group]) => [owner, group.slice().sort((a, b) => a.label.localeCompare(b.label))]);
+}
+
 function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
   return (
     <div className="row github-pr-row">
@@ -51,10 +63,18 @@ function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
 }
 
 function RepoRow({ repo }: { repo: GitHubRepoStatus }) {
+  const repoUrl = `https://github.com/${repo.owner}/${repo.repo}`;
   return (
     <div className="row github-repo-row">
       <span className={ciPipClass(repo.ci)}></span>
-      <span className="github-repo-label">{repo.label}</span>
+      <span
+        className="github-repo-label"
+        onClick={() => window.api.openUrl(repoUrl)}
+        title="Open repo on GitHub"
+      >
+        {repo.label}
+        <IconExternal className="external-icon" />
+      </span>
       {!repo.ok ? (
         <span className="tag github-ci-info">{repo.reason}</span>
       ) : repo.ci ? (
@@ -113,12 +133,14 @@ export default function GitHubWidget({ data }: GitHubWidgetProps) {
       {data.repos.length === 0 ? (
         <p className="muted">No repos configured in config.json.</p>
       ) : (
-        <div className="todoist-group">
-          <h3 className="todoist-group-title">Repos</h3>
-          {data.repos.map((repo) => (
-            <RepoRow key={`${repo.owner}/${repo.repo}`} repo={repo} />
-          ))}
-        </div>
+        groupReposByOwner(data.repos).map(([owner, repos]) => (
+          <div className="todoist-group" key={owner}>
+            <h3 className="todoist-group-title">{owner}</h3>
+            {repos.map((repo) => (
+              <RepoRow key={`${repo.owner}/${repo.repo}`} repo={repo} />
+            ))}
+          </div>
+        ))
       )}
     </Panel>
   );
