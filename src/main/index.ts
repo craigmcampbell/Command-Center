@@ -6,15 +6,16 @@
 
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
 import path from "node:path";
-import fs from "node:fs";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
 import { readDailyNote, saveDailyNote, listMissions } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
+import { openInForkLift } from "./services/forklift";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
 import { getEventsForDay, connectGoogleCalendar } from "./services/googleCalendar";
+import { initDatabase } from "./services/db";
 import {
-  initDatabase,
+  initLinks,
   seedFromLegacyConfig,
   listLinks,
   addLink,
@@ -45,7 +46,6 @@ import {
 import { getGitHubStatus } from "./services/github";
 import {
   initNotes,
-  listVaults,
   browseVault,
   buildVaultIndex,
   readNoteFile,
@@ -65,61 +65,66 @@ import {
   getAllStatus as getAllProcessStatus,
   stopAll as stopAllProcesses,
 } from "./services/processes";
-import type { AppConfig, HabitFrequencyType, LinkListKind } from "../shared/types";
-
-// Load user config once at startup. In dev this reads straight from the repo
-// so editing config.json just works. A packaged app's bundle is immutable
-// (and asar'd), so config.json instead lives in the standard per-app data
-// directory, seeded on first launch from the bundled config.example.json.
-// Returns the raw parsed JSON — callers cast it to AppConfig (the current
-// schema) or LegacyLinkConfig (for the one-time links-table migration,
-// since older config.json files still have localApps/learning/claudeCode
-// keys that AppConfig no longer declares).
-function loadConfig(): Record<string, unknown> {
-  if (!app.isPackaged) {
-    const devConfigPath = path.join(__dirname, "..", "..", "config.json");
-    return JSON.parse(fs.readFileSync(devConfigPath, "utf8"));
-  }
-
-  const userConfigPath = path.join(app.getPath("userData"), "config.json");
-  const defaults = JSON.parse(
-    fs.readFileSync(path.join(process.resourcesPath, "config.example.json"), "utf8")
-  );
-
-  if (!fs.existsSync(userConfigPath)) {
-    fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
-    fs.writeFileSync(userConfigPath, JSON.stringify(defaults, null, 2));
-    return defaults;
-  }
-
-  // A user's config.json is seeded once and then never touched by updates, so
-  // a top-level section added to config.example.json after that (e.g.
-  // googleCalendar) would otherwise stay permanently missing — leaving
-  // `config.<newSection>` undefined and crashing any service that reads it.
-  // Backfill any missing top-level keys from the bundled defaults so old
-  // installs pick up new config sections automatically.
-  const userConfig = JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
-  let changed = false;
-  for (const key of Object.keys(defaults)) {
-    if (!(key in userConfig)) {
-      userConfig[key] = defaults[key];
-      changed = true;
-    }
-  }
-  if (changed) {
-    fs.writeFileSync(userConfigPath, JSON.stringify(userConfig, null, 2));
-  }
-  return userConfig;
-}
-
-const rawConfig = loadConfig();
-const config = rawConfig as unknown as AppConfig;
+import {
+  initSettings,
+  readLegacyConfigFile,
+  seedSettingsFromLegacyConfig,
+  getAllSettings,
+  getGrimoireSettings,
+  updateGrimoireSettings,
+  getDockerSettings,
+  updateDockerSettings,
+  getAppSettings,
+  updateAppSettings,
+  getTodoistSettings,
+  updateTodoistSettings,
+  getGoogleCalendarSettings,
+  updateGoogleCalendarSettings,
+  getReaderSettings,
+  updateReaderSettings,
+  getGithubScalarSettings,
+  updateGithubScalarSettings,
+  listVaultSettings,
+  addVault,
+  updateVault,
+  removeVault,
+  reorderVaults,
+  listGithubRepoSettings,
+  addGithubRepo,
+  updateGithubRepo,
+  removeGithubRepo,
+  reorderGithubRepos,
+  listProcessSettings,
+  addProcess,
+  updateProcess,
+  removeProcess,
+  reorderProcesses,
+} from "./services/settings";
+import type {
+  GoogleCalendarConfig,
+  GrimoireConfig,
+  GitHubScalarConfig,
+  HabitFrequencyType,
+  LinkListKind,
+  ProcessConfig,
+} from "../shared/types";
 
 initDatabase();
+initLinks();
 initScratchpad();
 initHabits();
 initNotes();
-seedFromLegacyConfig(rawConfig as LegacyLinkConfig);
+initSettings();
+
+// One-time migration: reads config.json (if present — dev's repo-root copy,
+// or an existing packaged install's userData copy) and seeds every settings
+// table/row that's still empty. Read-only: this app never writes to
+// config.json again, and a brand-new install that has no config.json at all
+// just seeds straight from the bundled config.example.json defaults instead.
+// Idempotent, so it's safe to call every boot.
+const legacyConfig = readLegacyConfigFile();
+seedFromLegacyConfig((legacyConfig ?? {}) as LegacyLinkConfig);
+seedSettingsFromLegacyConfig(legacyConfig);
 
 function appIconPath(): string {
   return path.join(__dirname, "..", "..", "build", "icon.png");
@@ -165,9 +170,6 @@ function createWindow(): void {
 
 // ---- IPC handlers: each one is something the UI can invoke by name. ----
 
-// Give the UI its config (so widgets know paths, ports, instances).
-ipcMain.handle("config:get", () => config);
-
 // Docker container status, plus starting/stopping a container.
 ipcMain.handle("docker:list", async () => {
   return getDockerContainers();
@@ -181,24 +183,24 @@ ipcMain.handle("docker:stop", async (_evt, name: string) => {
 
 // Grimoire: a daily note (raw markdown, defaults to today) and the missions list.
 ipcMain.handle("grimoire:dailyNote", async (_evt, date?: string) => {
-  return readDailyNote(config.grimoire, date);
+  return readDailyNote(getGrimoireSettings(), date);
 });
 ipcMain.handle("grimoire:dailyNote:save", async (_evt, date: string, content: string) => {
-  return saveDailyNote(config.grimoire, date, content);
+  return saveDailyNote(getGrimoireSettings(), date, content);
 });
 ipcMain.handle("grimoire:missions", async () => {
-  return listMissions(config.grimoire);
+  return listMissions(getGrimoireSettings());
 });
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
 ipcMain.handle("todoist:tasks", async () => {
-  return getDueTasks(config.todoist);
+  return getDueTasks(getTodoistSettings());
 });
 ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
-  return completeTask(config.todoist, taskId);
+  return completeTask(getTodoistSettings(), taskId);
 });
 ipcMain.handle("todoist:create", async (_evt, content: string) => {
-  return createTask(config.todoist, content);
+  return createTask(getTodoistSettings(), content);
 });
 
 // Open a URL in the user's default browser (for SillyTavern, GitHub, etc.).
@@ -212,13 +214,18 @@ ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
 });
 
+// Open a local directory in ForkLift (File Links widget).
+ipcMain.handle("forklift:open", async (_evt, dirPath: string) => {
+  return openInForkLift(dirPath);
+});
+
 // Google Calendar: a day's events (defaults to today), plus the one-time
 // OAuth connect flow.
 ipcMain.handle("calendar:events", async (_evt, date?: string) => {
-  return getEventsForDay(config.googleCalendar, date);
+  return getEventsForDay(getGoogleCalendarSettings(), date);
 });
 ipcMain.handle("calendar:connect", async () => {
-  return connectGoogleCalendar(config.googleCalendar);
+  return connectGoogleCalendar(getGoogleCalendarSettings());
 });
 
 // Local Apps / Learning / Claude Code lists (SQLite-backed).
@@ -240,38 +247,40 @@ ipcMain.handle("links:reorder", (_evt, kind: LinkListKind, orderedIds: number[])
 // archiving/deleting a document.
 ipcMain.handle("reader:list", (_evt, page: number, forceRefresh?: boolean) => {
   if (forceRefresh) resetReaderCache();
-  return listReaderDocuments(config.reader, page);
+  return listReaderDocuments(getReaderSettings(), page);
 });
 ipcMain.handle("reader:archive", (_evt, id: string, page: number) => {
-  return archiveDocument(config.reader, id, page);
+  return archiveDocument(getReaderSettings(), id, page);
 });
 ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
-  return deleteDocument(config.reader, id, page);
+  return deleteDocument(getReaderSettings(), id, page);
 });
 
 // GitHub: latest CI run + open PR count per configured repo, plus
 // review-requested PRs across all of them.
-ipcMain.handle("github:status", () => getGitHubStatus(config.github));
+ipcMain.handle("github:status", () =>
+  getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
+);
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).
-ipcMain.handle("notes:vaults", () => listVaults(config));
+ipcMain.handle("notes:vaults", () => listVaultSettings());
 ipcMain.handle("notes:browse", (_evt, vaultLabel: string, subPath?: string) =>
-  browseVault(config, vaultLabel, subPath)
+  browseVault(vaultLabel, subPath)
 );
-ipcMain.handle("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(config, vaultLabel));
+ipcMain.handle("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(vaultLabel));
 ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
-  readNoteFile(config, vaultLabel, filePath)
+  readNoteFile(vaultLabel, filePath)
 );
 ipcMain.handle("notes:save", (_evt, vaultLabel: string, filePath: string, content: string) =>
-  saveNoteFile(config, vaultLabel, filePath, content)
+  saveNoteFile(vaultLabel, filePath, content)
 );
 ipcMain.handle(
   "notes:create",
   (_evt, vaultLabel: string, dirPath: string, name: string, templatePath?: string | null) =>
-    createNoteFile(config, vaultLabel, dirPath, name, templatePath)
+    createNoteFile(vaultLabel, dirPath, name, templatePath)
 );
-ipcMain.handle("notes:templates", (_evt, vaultLabel: string) => listTemplates(config, vaultLabel));
+ipcMain.handle("notes:templates", (_evt, vaultLabel: string) => listTemplates(vaultLabel));
 ipcMain.handle("notes:nav:list", () => listNavNotes());
 ipcMain.handle("notes:nav:add", (_evt, vaultLabel: string, filePath: string, label: string) =>
   addNavNote(vaultLabel, filePath, label)
@@ -320,10 +329,10 @@ ipcMain.handle("habits:trends", (_evt, habitId?: number, weeks?: number) => {
 });
 
 // Managed local processes (Development tab): start/stop/tail arbitrary
-// long-running tools from config.json's `processes` list. Not a terminal —
-// no PTY/interactive input, just spawn + log tail + a reliable group kill.
+// long-running tools configured in Settings. Not a terminal — no
+// PTY/interactive input, just spawn + log tail + a reliable group kill.
 ipcMain.handle("process:start", (_evt, id: string) => {
-  const procConfig = (config.processes ?? []).find((p) => p.id === id);
+  const procConfig = listProcessSettings().find((p) => p.id === id);
   if (!procConfig) return { ok: false, reason: "Unknown process" };
 
   const result = startProcess(procConfig);
@@ -337,6 +346,73 @@ ipcMain.handle("process:start", (_evt, id: string) => {
 ipcMain.handle("process:stop", (_evt, id: string) => stopProcess(id));
 ipcMain.handle("process:status", (_evt, id: string) => getProcessStatus(id));
 ipcMain.handle("process:statusAll", () => getAllProcessStatus());
+
+// Settings: everything that used to live in config.json, now SQLite-backed
+// and editable live from the Settings overlay (gear icon). Scalar sections
+// each get a get-implicitly-via-getAll + explicit update; the three array
+// sections (vaults, github repos, processes) get full CRUD + reorder,
+// mirroring the links:* handlers above.
+ipcMain.handle("settings:getAll", () => getAllSettings());
+ipcMain.handle("settings:grimoire:update", (_evt, values: GrimoireConfig) =>
+  updateGrimoireSettings(values)
+);
+ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
+  updateDockerSettings(values)
+);
+ipcMain.handle("settings:app:update", (_evt, values: { refreshMinutes?: number }) =>
+  updateAppSettings(values)
+);
+ipcMain.handle("settings:todoist:update", (_evt, values: { apiToken: string }) =>
+  updateTodoistSettings(values)
+);
+ipcMain.handle("settings:googleCalendar:update", (_evt, values: GoogleCalendarConfig) =>
+  updateGoogleCalendarSettings(values)
+);
+ipcMain.handle("settings:reader:update", (_evt, values: { apiToken: string }) =>
+  updateReaderSettings(values)
+);
+ipcMain.handle("settings:github:update", (_evt, values: GitHubScalarConfig) =>
+  updateGithubScalarSettings(values)
+);
+
+ipcMain.handle("settings:vaults:list", () => listVaultSettings());
+ipcMain.handle("settings:vaults:add", (_evt, label: string, vaultPath: string) =>
+  addVault(label, vaultPath)
+);
+ipcMain.handle("settings:vaults:update", (_evt, id: number, label: string, vaultPath: string) =>
+  updateVault(id, label, vaultPath)
+);
+ipcMain.handle("settings:vaults:remove", (_evt, id: number) => removeVault(id));
+ipcMain.handle("settings:vaults:reorder", (_evt, orderedIds: number[]) => reorderVaults(orderedIds));
+
+ipcMain.handle("settings:githubRepos:list", () => listGithubRepoSettings());
+ipcMain.handle(
+  "settings:githubRepos:add",
+  (_evt, label: string, owner: string, repo: string, branch: string) =>
+    addGithubRepo(label, owner, repo, branch)
+);
+ipcMain.handle(
+  "settings:githubRepos:update",
+  (_evt, id: number, label: string, owner: string, repo: string, branch: string) =>
+    updateGithubRepo(id, label, owner, repo, branch)
+);
+ipcMain.handle("settings:githubRepos:remove", (_evt, id: number) => removeGithubRepo(id));
+ipcMain.handle("settings:githubRepos:reorder", (_evt, orderedIds: number[]) =>
+  reorderGithubRepos(orderedIds)
+);
+
+ipcMain.handle("settings:processes:list", () => listProcessSettings());
+ipcMain.handle("settings:processes:add", (_evt, proc: Omit<ProcessConfig, "sortOrder">) =>
+  addProcess(proc)
+);
+ipcMain.handle(
+  "settings:processes:update",
+  (_evt, id: string, proc: Omit<ProcessConfig, "id" | "sortOrder">) => updateProcess(id, proc)
+);
+ipcMain.handle("settings:processes:remove", (_evt, id: string) => removeProcess(id));
+ipcMain.handle("settings:processes:reorder", (_evt, orderedIds: string[]) =>
+  reorderProcesses(orderedIds)
+);
 
 app.whenReady().then(() => {
   setDockIcon();

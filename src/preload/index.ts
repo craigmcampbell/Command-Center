@@ -4,11 +4,17 @@
 // IPC handler defined in the main process.
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { CommandCenterApi, HabitFrequencyType, LinkListKind } from "../shared/types";
+import type {
+  CommandCenterApi,
+  GoogleCalendarConfig,
+  GrimoireConfig,
+  GitHubScalarConfig,
+  HabitFrequencyType,
+  LinkListKind,
+  ProcessConfig,
+} from "../shared/types";
 
 const api: CommandCenterApi = {
-  getConfig: () => ipcRenderer.invoke("config:get"),
-
   docker: {
     list: () => ipcRenderer.invoke("docker:list"),
     start: (name: string) => ipcRenderer.invoke("docker:start", name),
@@ -32,6 +38,10 @@ const api: CommandCenterApi = {
 
   claude: {
     launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
+  },
+
+  forklift: {
+    open: (dirPath: string) => ipcRenderer.invoke("forklift:open", dirPath),
   },
 
   calendar: {
@@ -116,6 +126,62 @@ const api: CommandCenterApi = {
     stop: (id: string) => ipcRenderer.invoke("process:stop", id),
     status: (id: string) => ipcRenderer.invoke("process:status", id),
     statusAll: () => ipcRenderer.invoke("process:statusAll"),
+  },
+
+  settings: {
+    getAll: () => ipcRenderer.invoke("settings:getAll"),
+    grimoire: {
+      update: (values: GrimoireConfig) => ipcRenderer.invoke("settings:grimoire:update", values),
+    },
+    docker: {
+      update: (values: { refreshSeconds: number }) =>
+        ipcRenderer.invoke("settings:docker:update", values),
+    },
+    app: {
+      update: (values: { refreshMinutes?: number }) =>
+        ipcRenderer.invoke("settings:app:update", values),
+    },
+    todoist: {
+      update: (values: { apiToken: string }) => ipcRenderer.invoke("settings:todoist:update", values),
+    },
+    googleCalendar: {
+      update: (values: GoogleCalendarConfig) =>
+        ipcRenderer.invoke("settings:googleCalendar:update", values),
+    },
+    reader: {
+      update: (values: { apiToken: string }) => ipcRenderer.invoke("settings:reader:update", values),
+    },
+    github: {
+      update: (values: GitHubScalarConfig) => ipcRenderer.invoke("settings:github:update", values),
+    },
+    vaults: {
+      list: () => ipcRenderer.invoke("settings:vaults:list"),
+      add: (label: string, path: string) => ipcRenderer.invoke("settings:vaults:add", label, path),
+      update: (id: number, label: string, path: string) =>
+        ipcRenderer.invoke("settings:vaults:update", id, label, path),
+      remove: (id: number) => ipcRenderer.invoke("settings:vaults:remove", id),
+      reorder: (orderedIds: number[]) => ipcRenderer.invoke("settings:vaults:reorder", orderedIds),
+    },
+    githubRepos: {
+      list: () => ipcRenderer.invoke("settings:githubRepos:list"),
+      add: (label: string, owner: string, repo: string, branch: string) =>
+        ipcRenderer.invoke("settings:githubRepos:add", label, owner, repo, branch),
+      update: (id: number, label: string, owner: string, repo: string, branch: string) =>
+        ipcRenderer.invoke("settings:githubRepos:update", id, label, owner, repo, branch),
+      remove: (id: number) => ipcRenderer.invoke("settings:githubRepos:remove", id),
+      reorder: (orderedIds: number[]) =>
+        ipcRenderer.invoke("settings:githubRepos:reorder", orderedIds),
+    },
+    processes: {
+      list: () => ipcRenderer.invoke("settings:processes:list"),
+      add: (proc: Omit<ProcessConfig, "sortOrder">) =>
+        ipcRenderer.invoke("settings:processes:add", proc),
+      update: (id: string, proc: Omit<ProcessConfig, "id" | "sortOrder">) =>
+        ipcRenderer.invoke("settings:processes:update", id, proc),
+      remove: (id: string) => ipcRenderer.invoke("settings:processes:remove", id),
+      reorder: (orderedIds: string[]) =>
+        ipcRenderer.invoke("settings:processes:reorder", orderedIds),
+    },
   },
 };
 

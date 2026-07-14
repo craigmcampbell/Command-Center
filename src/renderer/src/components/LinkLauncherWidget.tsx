@@ -27,6 +27,8 @@ interface LinkLauncherWidgetProps {
   onChange: (items: LinkItem[]) => void;
   emptyLabel?: string;
   linkPlaceholder?: string;
+  onLaunch?: (link: string) => void;
+  formatDisplay?: (link: string) => string;
 }
 
 function toDisplayHost(link: string): string {
@@ -44,6 +46,15 @@ function toDisplayHost(link: string): string {
         ?.replace(/^www\./i, "") ?? raw
     );
   }
+}
+
+// Default `formatDisplay` for a filesystem path (File Links) rather than a
+// URL — shows just the last path segment, same idea as toDisplayHost showing
+// just the host.
+export function toDisplayBasename(pathStr: string): string {
+  const trimmed = pathStr.trim().replace(/\/+$/, "");
+  const parts = trimmed.split("/");
+  return parts[parts.length - 1] || trimmed;
 }
 
 function EditForm({
@@ -95,10 +106,14 @@ function SortableRow({
   item,
   onSave,
   onDelete,
+  onLaunch,
+  formatDisplay,
 }: {
   item: LinkItem;
   onSave: (label: string, link: string) => void;
   onDelete: () => void;
+  onLaunch: (link: string) => void;
+  formatDisplay: (link: string) => string;
 }) {
   const [editing, setEditing] = useState(false);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -131,10 +146,10 @@ function SortableRow({
       <button className="drag-handle" {...attributes} {...listeners} aria-label="Reorder">
         <IconGrip />
       </button>
-      <button className="launch" onClick={() => window.api.openUrl(item.link)}>
+      <button className="launch" onClick={() => onLaunch(item.link)}>
         <span>{item.label}</span>
         <span className="arrow">
-          <span className="arrow-text">{toDisplayHost(item.link)}</span>
+          <span className="arrow-text">{formatDisplay(item.link)}</span>
           <IconArrowRight />
         </span>
       </button>
@@ -198,6 +213,8 @@ export default function LinkLauncherWidget({
   onChange,
   emptyLabel = "No instances configured.",
   linkPlaceholder = "https://…",
+  onLaunch = (link) => void window.api.openUrl(link),
+  formatDisplay = toDisplayHost,
 }: LinkLauncherWidgetProps) {
   const { add, update, remove, reorder } = useLinkList(kind, onChange);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -227,6 +244,8 @@ export default function LinkLauncherWidget({
                 item={item}
                 onSave={(label, link) => update(item.id, label, link)}
                 onDelete={() => remove(item.id)}
+                onLaunch={onLaunch}
+                formatDisplay={formatDisplay}
               />
             ))}
           </SortableContext>

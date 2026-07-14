@@ -129,10 +129,7 @@ export default function GitHubWidget({ data }: GitHubWidgetProps) {
   if (!data.ok) {
     return (
       <Panel title="GitHub" headerRight={<span className="pip alert"></span>}>
-        <p className="muted">
-          {data.reason}. Set the GITHUB_TOKEN environment variable, or add a
-          github-token file next to config.json.
-        </p>
+        <p className="muted">{data.reason}. Add one in Settings under Integrations.</p>
       </Panel>
     );
   }
@@ -153,7 +150,7 @@ export default function GitHubWidget({ data }: GitHubWidgetProps) {
       </div>
 
       {data.repos.length === 0 ? (
-        <p className="muted">No repos configured in config.json.</p>
+        <p className="muted">No repos configured. Add one in Settings.</p>
       ) : (
         groupReposByOwner(data.repos).map(([owner, repos]) => (
           <div className="todoist-group" key={owner}>

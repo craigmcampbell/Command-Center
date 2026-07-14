@@ -20,7 +20,7 @@ import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
-import LinkLauncherWidget from "./components/LinkLauncherWidget";
+import LinkLauncherWidget, { toDisplayBasename } from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
@@ -28,7 +28,8 @@ import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
 import NotesWidget from "./components/NotesWidget";
 import CommandPalette from "./components/CommandPalette";
-import { IconRefresh } from "./components/icons";
+import SettingsPage from "./components/SettingsPage";
+import { IconGear, IconRefresh } from "./components/icons";
 import type { PaletteContext } from "./palette";
 import appLogo from "./assets/icon.png";
 
@@ -44,6 +45,8 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
+const DEFAULT_DOCKER_REFRESH_SECONDS = 15;
+const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
 
 function tickClock(): string {
   return new Date()
@@ -80,10 +83,14 @@ export default function App() {
   const [localApps, setLocalApps] = useState<LinkItem[]>([]);
   const [learning, setLearning] = useState<LinkItem[]>([]);
   const [claudeProjects, setClaudeProjects] = useState<LinkItem[]>([]);
+  const [fileLinks, setFileLinks] = useState<LinkItem[]>([]);
   const [reader, setReader] = useState<ReaderResult | null>(null);
   const [readerPage, setReaderPage] = useState(0);
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
+  const [dockerRefreshSeconds, setDockerRefreshSeconds] = useState(DEFAULT_DOCKER_REFRESH_SECONDS);
+  const [githubRefreshSeconds, setGithubRefreshSeconds] = useState(DEFAULT_GITHUB_REFRESH_SECONDS);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
   const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
@@ -181,20 +188,24 @@ export default function App() {
     claudeProjects,
     localApps,
     learning,
+    fileLinks,
     docker,
     onRefreshDocker: loadDocker,
     onRefreshAll: refreshAll,
     onNewScratchpadNote: newScratchpadNote,
   };
 
-  // ---- boot: load config, then every widget, then start Docker's + GitHub's + Processes' refresh ----
+  // ---- boot: load settings, then every widget, then start Processes' refresh ----
+  // Docker's + GitHub's refresh intervals live in their own effects below,
+  // keyed on dockerRefreshSeconds/githubRefreshSeconds, so a live Settings
+  // edit to either takes effect without a restart.
   useEffect(() => {
-    let dockerIntervalId: ReturnType<typeof setInterval> | undefined;
-    let githubIntervalId: ReturnType<typeof setInterval> | undefined;
     let processesIntervalId: ReturnType<typeof setInterval> | undefined;
     (async () => {
-      const cfg = await window.api.getConfig();
+      const cfg = await window.api.settings.getAll();
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
+      setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
+      setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setProcessConfigs(cfg.processes ?? []);
       await Promise.all([
         loadDocker(),
@@ -205,17 +216,12 @@ export default function App() {
         window.api.links.list("localApps").then(setLocalApps),
         window.api.links.list("learning").then(setLearning),
         window.api.links.list("claudeCode").then(setClaudeProjects),
+        window.api.links.list("fileLinks").then(setFileLinks),
         loadReader(0),
         loadGithub(),
         loadProcessStatuses(),
       ]);
       setLastRefreshedAt(new Date());
-
-      const dockerSecs = cfg.docker?.refreshSeconds || 15;
-      dockerIntervalId = setInterval(loadDocker, dockerSecs * 1000);
-
-      const githubSecs = cfg.github?.refreshSeconds || 300;
-      githubIntervalId = setInterval(loadGithub, githubSecs * 1000);
 
       // Pips only need to be "roughly fresh" — the widget itself polls
       // faster (window.api.process.status) for whichever row's logs panel
@@ -223,14 +229,24 @@ export default function App() {
       processesIntervalId = setInterval(loadProcessStatuses, 3000);
     })();
     return () => {
-      clearInterval(dockerIntervalId);
-      clearInterval(githubIntervalId);
       clearInterval(processesIntervalId);
     };
     // Intentionally empty: this must run once at mount only. loadDaily/loadCalendar's
     // identity changes whenever dailyDate/calendarDate does (prev/next navigation), and
-    // re-running this effect would stack a second Docker/GitHub/Processes refresh interval.
+    // re-running this effect would stack a second Processes refresh interval.
   }, []);
+
+  // ---- Docker refresh, reactive to Settings edits ----
+  useEffect(() => {
+    const id = setInterval(loadDocker, dockerRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadDocker, dockerRefreshSeconds]);
+
+  // ---- GitHub refresh, reactive to Settings edits ----
+  useEffect(() => {
+    const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadGithub, githubRefreshSeconds]);
 
   // ---- clock / stardate ----
   useEffect(() => {
@@ -260,10 +276,15 @@ export default function App() {
           </div>
         </div>
         <div className="refresh-control">
-          <button className="refresh" title="Refresh everything" onClick={refreshAll}>
-            <IconRefresh className={refreshing ? "spin" : ""} />
-            Refresh
-          </button>
+          <div className="refresh-control-row">
+            <button className="refresh" title="Refresh everything" onClick={refreshAll}>
+              <IconRefresh className={refreshing ? "spin" : ""} />
+              Refresh
+            </button>
+            <button className="settings-trigger" title="Settings" onClick={() => setSettingsOpen(true)}>
+              <IconGear />
+            </button>
+          </div>
           {lastRefreshedAt && (
             <p className="refresh-timestamp">Last refreshed {formatRefreshTime(lastRefreshedAt)}</p>
           )}
@@ -310,6 +331,18 @@ export default function App() {
               kind="learning"
               instances={learning}
               onChange={setLearning}
+            />
+          </div>
+          <div className="slot slot-filelinks">
+            <LinkLauncherWidget
+              title="File Links"
+              kind="fileLinks"
+              instances={fileLinks}
+              onChange={setFileLinks}
+              onLaunch={(link) => void window.api.forklift.open(link)}
+              formatDisplay={toDisplayBasename}
+              linkPlaceholder="/absolute/path/to/folder"
+              emptyLabel="No folders configured."
             />
           </div>
         </main>
@@ -376,6 +409,15 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         context={paletteContext}
+      />
+
+      <SettingsPage
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onProcessConfigsChange={setProcessConfigs}
+        onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
+        onDockerRefreshSecondsChange={setDockerRefreshSeconds}
+        onGithubRefreshSecondsChange={setGithubRefreshSeconds}
       />
     </>
   );

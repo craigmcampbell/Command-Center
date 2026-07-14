@@ -1,6 +1,6 @@
 // Single-row scratchpad note — autosaved markdown for quick temporary notes.
 
-import { getDatabase } from "./links";
+import { getDatabase } from "./db";
 
 const ROW_ID = 1;
 

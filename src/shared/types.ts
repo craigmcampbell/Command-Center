@@ -19,7 +19,7 @@ export interface LinkItem {
   sortOrder: number;
 }
 
-export type LinkListKind = "localApps" | "learning" | "claudeCode";
+export type LinkListKind = "localApps" | "learning" | "claudeCode" | "fileLinks";
 
 export interface GoogleCalendarConfig {
   clientId: string;
@@ -27,28 +27,37 @@ export interface GoogleCalendarConfig {
 }
 
 export interface GitHubRepoConfig {
+  id: number;
   label: string;
   owner: string;
   repo: string;
   branch: string;
+  sortOrder: number;
+}
+
+// The non-array part of GitHub settings, editable as one scalar section in
+// Settings. `repos` is its own DB table/CRUD surface (see GitHubRepoConfig).
+export interface GitHubScalarConfig {
+  token?: string;
+  refreshSeconds?: number;
+  reviewUser?: string;
 }
 
 // Optional: older config.json files predate this feature and won't have a
 // `github` section at all — every reader of this treats it as absent, not
 // an error (see services/github.ts).
-export interface GitHubConfig {
-  token?: string;
-  refreshSeconds?: number;
-  reviewUser?: string;
+export interface GitHubConfig extends GitHubScalarConfig {
   repos?: GitHubRepoConfig[];
 }
 
-// Optional: a labeled Obsidian vault root for the Notes tab. Separate from
+// A labeled Obsidian vault root for the Notes tab. Separate from
 // grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
 // point the Notes tab at several vaults, including that same one.
 export interface VaultConfig {
+  id: number;
   label: string;
   path: string;
+  sortOrder: number;
 }
 
 // A locally-managed long-running process (dev server, watcher, a tool like
@@ -65,6 +74,7 @@ export interface ProcessConfig {
   url?: string;
   autoOpenUrl?: boolean;
   openDelayMs?: number;
+  sortOrder: number;
 }
 
 // Runtime state for one managed process. `logs` is a tail of raw
@@ -364,7 +374,6 @@ export interface VaultNoteIndexResult {
 }
 
 export interface CommandCenterApi {
-  getConfig: () => Promise<AppConfig>;
   docker: {
     list: () => Promise<DockerResult>;
     start: (name: string) => Promise<ActionResult>;
@@ -383,6 +392,9 @@ export interface CommandCenterApi {
   openUrl: (url: string) => Promise<boolean>;
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
+  };
+  forklift: {
+    open: (dirPath: string) => Promise<ActionResult>;
   };
   calendar: {
     events: (date?: string) => Promise<CalendarResult>;
@@ -451,5 +463,56 @@ export interface CommandCenterApi {
     stop: (id: string) => Promise<ActionResult>;
     status: (id: string) => Promise<ProcessStatus>;
     statusAll: () => Promise<ProcessStatus[]>;
+  };
+  settings: {
+    getAll: () => Promise<AppConfig>;
+    grimoire: {
+      update: (values: GrimoireConfig) => Promise<GrimoireConfig>;
+    };
+    docker: {
+      update: (values: { refreshSeconds: number }) => Promise<{ refreshSeconds: number }>;
+    };
+    app: {
+      update: (values: { refreshMinutes?: number }) => Promise<{ refreshMinutes?: number }>;
+    };
+    todoist: {
+      update: (values: { apiToken: string }) => Promise<{ apiToken: string }>;
+    };
+    googleCalendar: {
+      update: (values: GoogleCalendarConfig) => Promise<GoogleCalendarConfig>;
+    };
+    reader: {
+      update: (values: { apiToken: string }) => Promise<{ apiToken: string }>;
+    };
+    github: {
+      update: (values: GitHubScalarConfig) => Promise<GitHubScalarConfig>;
+    };
+    vaults: {
+      list: () => Promise<VaultConfig[]>;
+      add: (label: string, path: string) => Promise<VaultConfig[]>;
+      update: (id: number, label: string, path: string) => Promise<VaultConfig[]>;
+      remove: (id: number) => Promise<VaultConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<VaultConfig[]>;
+    };
+    githubRepos: {
+      list: () => Promise<GitHubRepoConfig[]>;
+      add: (label: string, owner: string, repo: string, branch: string) => Promise<GitHubRepoConfig[]>;
+      update: (
+        id: number,
+        label: string,
+        owner: string,
+        repo: string,
+        branch: string
+      ) => Promise<GitHubRepoConfig[]>;
+      remove: (id: number) => Promise<GitHubRepoConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<GitHubRepoConfig[]>;
+    };
+    processes: {
+      list: () => Promise<ProcessConfig[]>;
+      add: (proc: Omit<ProcessConfig, "sortOrder">) => Promise<ProcessConfig[]>;
+      update: (id: string, proc: Omit<ProcessConfig, "id" | "sortOrder">) => Promise<ProcessConfig[]>;
+      remove: (id: string) => Promise<ProcessConfig[]>;
+      reorder: (orderedIds: string[]) => Promise<ProcessConfig[]>;
+    };
   };
 }

@@ -1,7 +1,7 @@
 // Habit tracker — habits + per-day completions in SQLite. Weekly views and
 // trend data are computed from completions at read time.
 
-import { getDatabase } from "./links";
+import { getDatabase } from "./db";
 import type {
   Habit,
   HabitFrequencyType,

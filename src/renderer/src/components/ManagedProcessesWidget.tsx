@@ -136,7 +136,7 @@ export default function ManagedProcessesWidget({
   return (
     <Panel title="Processes">
       {configs.length === 0 ? (
-        <p className="muted">No processes configured in config.json.</p>
+        <p className="muted">No processes configured. Add one in Settings.</p>
       ) : (
         configs.map((config) => {
           const base = statusById.get(config.id) ?? emptyStatus(config.id);

@@ -202,7 +202,7 @@ export default function NotesWidget() {
       <div className="notes-layout">
         <nav className="notes-nav">
           {vaults.length === 0 ? (
-            <p className="muted">No vaults configured in config.json.</p>
+            <p className="muted">No vaults configured. Add one in Settings.</p>
           ) : (
             groups.map(({ vault, notes }) => (
               <div className="notes-nav-group" key={vault.label}>
