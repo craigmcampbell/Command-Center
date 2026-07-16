@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { YnabScheduledResult, YnabScheduledTransaction } from "../../../shared/types";
 import Panel from "./Panel";
 
@@ -9,8 +10,13 @@ function formatAmount(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
+// Parsing "YYYY-MM-DD" alone is read as UTC midnight, which formats a day
+// early in negative-UTC-offset zones — pin it to local noon instead.
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function groupByAccount(
@@ -32,15 +38,14 @@ function groupByAccount(
 
 function ScheduledRow({ transaction }: { transaction: YnabScheduledTransaction }) {
   return (
-    <div className="row">
-      <span className="name">{transaction.payeeName ?? "(no payee)"}</span>
-      <span className="tag">
-        {formatDate(transaction.dateNext)} · {transaction.frequency}
-      </span>
-      <span className={`tag ynab-balance ${transaction.amount < 0 ? "negative" : ""}`}>
+    <tr>
+      <td className="ynab-col-date">{formatDate(transaction.dateNext)}</td>
+      <td className="ynab-col-payee">{transaction.payeeName ?? "(no payee)"}</td>
+      <td className="ynab-col-frequency">{transaction.frequency}</td>
+      <td className={`ynab-col-amount ynab-balance ${transaction.amount < 0 ? "negative" : ""}`}>
         {formatAmount(transaction.amount)}
-      </span>
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -71,14 +76,30 @@ export default function YnabScheduledWidget({ data }: YnabScheduledWidgetProps) 
 
   return (
     <Panel title="Scheduled Transactions">
-      {groupByAccount(data.transactions).map(([account, transactions]) => (
-        <div className="todoist-group" key={account}>
-          <h3 className="todoist-group-title">{account}</h3>
-          {transactions.map((t) => (
-            <ScheduledRow key={t.id} transaction={t} />
+      <table className="ynab-table">
+        <thead>
+          <tr>
+            <th className="ynab-col-date">Date</th>
+            <th className="ynab-col-payee">Payee</th>
+            <th className="ynab-col-frequency">Frequency</th>
+            <th className="ynab-col-amount">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groupByAccount(data.transactions).map(([account, transactions]) => (
+            <Fragment key={account}>
+              <tr className="ynab-table-group-row">
+                <td colSpan={4} className="ynab-table-group-title">
+                  {account}
+                </td>
+              </tr>
+              {transactions.map((t) => (
+                <ScheduledRow key={t.id} transaction={t} />
+              ))}
+            </Fragment>
           ))}
-        </div>
-      ))}
+        </tbody>
+      </table>
     </Panel>
   );
 }

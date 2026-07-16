@@ -13,6 +13,7 @@ import type {
   LinkListKind,
   ProcessConfig,
   YnabScalarConfig,
+  YnabNewTransactionInput,
 } from "../shared/types";
 
 const api: CommandCenterApi = {
@@ -27,6 +28,7 @@ const api: CommandCenterApi = {
     saveDailyNote: (date: string, content: string) =>
       ipcRenderer.invoke("grimoire:dailyNote:save", date, content),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
+    financeReviewLog: () => ipcRenderer.invoke("grimoire:financeReviewLog"),
   },
 
   todoist: {
@@ -106,6 +108,10 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("ynab:approveTransaction", transactionId),
     setTransactionCategory: (transactionId: string, categoryId: string) =>
       ipcRenderer.invoke("ynab:setTransactionCategory", transactionId, categoryId),
+    setTransactionMemo: (transactionId: string, memo: string) =>
+      ipcRenderer.invoke("ynab:setTransactionMemo", transactionId, memo),
+    createTransaction: (input: YnabNewTransactionInput) =>
+      ipcRenderer.invoke("ynab:createTransaction", input),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
   },

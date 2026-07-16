@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { YnabAccount, YnabAccountsResult } from "../../../shared/types";
 import Panel from "./Panel";
 import { IconEye, IconEyeOff } from "./icons";
@@ -9,7 +9,11 @@ interface YnabAccountsWidgetProps {
 }
 
 function formatBalance(n: number): string {
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
 }
 
 function typeLabel(type: string): string {
@@ -36,19 +40,46 @@ function AccountRow({
   onToggleHidden: (id: string) => void;
 }) {
   return (
-    <div className="row">
-      <span className="name">{account.name}</span>
-      <span className={`tag ynab-balance ${account.balance < 0 ? "negative" : ""}`}>
+    <tr>
+      <td className="ynab-col-name">{account.name}</td>
+      <td className={`ynab-col-amount ynab-balance ${account.balance < 0 ? "negative" : ""}`}>
         {formatBalance(account.balance)}
-      </span>
-      <button
-        className="row-action"
-        onClick={() => onToggleHidden(account.id)}
-        title={account.hidden ? "Show account" : "Hide account"}
-      >
-        {account.hidden ? <IconEyeOff /> : <IconEye />}
-      </button>
-    </div>
+      </td>
+      <td className="ynab-col-hide">
+        <button
+          className="row-action"
+          onClick={() => onToggleHidden(account.id)}
+          title={account.hidden ? "Show account" : "Hide account"}
+        >
+          {account.hidden ? <IconEyeOff /> : <IconEye />}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function AccountGroups({
+  groups,
+  onToggleHidden,
+}: {
+  groups: [string, YnabAccount[]][];
+  onToggleHidden: (id: string) => void;
+}) {
+  return (
+    <>
+      {groups.map(([type, accounts]) => (
+        <Fragment key={type}>
+          <tr className="ynab-table-group-row">
+            <td colSpan={3} className="ynab-table-group-title">
+              {typeLabel(type)}
+            </td>
+          </tr>
+          {accounts.map((a) => (
+            <AccountRow key={a.id} account={a} onToggleHidden={onToggleHidden} />
+          ))}
+        </Fragment>
+      ))}
+    </>
   );
 }
 
@@ -83,26 +114,27 @@ export default function YnabAccountsWidget({ data, onChange }: YnabAccountsWidge
       {visible.length === 0 ? (
         <p className="muted">No accounts to show.</p>
       ) : (
-        groupByType(visible).map(([type, accounts]) => (
-          <div className="todoist-group" key={type}>
-            <h3 className="todoist-group-title">{typeLabel(type)}</h3>
-            {accounts.map((a) => (
-              <AccountRow key={a.id} account={a} onToggleHidden={toggleHidden} />
-            ))}
-          </div>
-        ))
+        <table className="ynab-table">
+          <thead>
+            <tr>
+              <th className="ynab-col-name">Name</th>
+              <th className="ynab-col-amount">Balance</th>
+              <th className="ynab-col-hide" aria-label="Hide" />
+            </tr>
+          </thead>
+          <tbody>
+            <AccountGroups groups={groupByType(visible)} onToggleHidden={toggleHidden} />
+          </tbody>
+        </table>
       )}
       {hidden.length > 0 && (
-        <div className="todoist-group">
+        <div className="ynab-hidden-section">
           {showHidden ? (
-            groupByType(hidden).map(([type, accounts]) => (
-              <div key={type}>
-                <h3 className="todoist-group-title">{typeLabel(type)}</h3>
-                {accounts.map((a) => (
-                  <AccountRow key={a.id} account={a} onToggleHidden={toggleHidden} />
-                ))}
-              </div>
-            ))
+            <table className="ynab-table">
+              <tbody>
+                <AccountGroups groups={groupByType(hidden)} onToggleHidden={toggleHidden} />
+              </tbody>
+            </table>
           ) : (
             <button className="ynab-show-hidden" onClick={() => setShowHidden(true)}>
               {hidden.length} hidden — show

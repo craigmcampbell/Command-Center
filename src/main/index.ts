@@ -8,7 +8,12 @@ import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
-import { readDailyNote, saveDailyNote, listMissions } from "./services/grimoire";
+import {
+  readDailyNote,
+  saveDailyNote,
+  listMissions,
+  readFinanceReviewLog,
+} from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
@@ -51,6 +56,8 @@ import {
   getCategories as getYnabCategories,
   approveTransaction as approveYnabTransaction,
   setTransactionCategory as setYnabTransactionCategory,
+  setTransactionMemo as setYnabTransactionMemo,
+  createTransaction as createYnabTransaction,
 } from "./services/ynab";
 import {
   initNotes,
@@ -119,6 +126,7 @@ import type {
   LinkListKind,
   ProcessConfig,
   YnabScalarConfig,
+  YnabNewTransactionInput,
 } from "../shared/types";
 
 initDatabase();
@@ -202,6 +210,9 @@ ipcMain.handle("grimoire:dailyNote:save", async (_evt, date: string, content: st
 });
 ipcMain.handle("grimoire:missions", async () => {
   return listMissions(getGrimoireSettings());
+});
+ipcMain.handle("grimoire:financeReviewLog", async () => {
+  return readFinanceReviewLog(getGrimoireSettings());
 });
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
@@ -291,6 +302,12 @@ ipcMain.handle(
   "ynab:setTransactionCategory",
   (_evt, transactionId: string, categoryId: string) =>
     setYnabTransactionCategory(getYnabSettings(), transactionId, categoryId)
+);
+ipcMain.handle("ynab:setTransactionMemo", (_evt, transactionId: string, memo: string) =>
+  setYnabTransactionMemo(getYnabSettings(), transactionId, memo)
+);
+ipcMain.handle("ynab:createTransaction", (_evt, input: YnabNewTransactionInput) =>
+  createYnabTransaction(getYnabSettings(), input)
 );
 ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);

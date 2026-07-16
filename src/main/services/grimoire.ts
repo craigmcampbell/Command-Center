@@ -3,7 +3,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { ActionResult, GrimoireConfig, DailyNoteResult, MissionsResult } from "../../shared/types";
+import type {
+  ActionResult,
+  GrimoireConfig,
+  DailyNoteResult,
+  MissionsResult,
+  NoteContent,
+} from "../../shared/types";
+
+// Fixed vault-relative path — not user-configurable, same convention as the
+// Notes tab's fixed _System/templates folder.
+const FINANCE_REVIEW_LOG_PATH = "4 Sectors/Finance/Finance Review Log.md";
 
 const DAILY_NOTE_NAME = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
@@ -120,6 +130,23 @@ export function saveDailyNote(
     return { ok: true };
   } catch {
     return { ok: false, reason: "Couldn't save that note" };
+  }
+}
+
+// The lezer-markdown-based renderer isn't frontmatter-aware — left in, a
+// leading "---" block gets parsed as a thematic break followed by a setext
+// heading (the frontmatter's last line before the closing "---" reads as a
+// heading), so strip it before rendering.
+function stripFrontmatter(content: string): string {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+}
+
+export function readFinanceReviewLog({ vaultPath }: GrimoireConfig): NoteContent {
+  const file = path.join(vaultPath, FINANCE_REVIEW_LOG_PATH);
+  try {
+    return { ok: true, content: stripFrontmatter(fs.readFileSync(file, "utf8")) };
+  } catch {
+    return { ok: false, reason: "Finance Review Log note not found", content: "" };
   }
 }
 

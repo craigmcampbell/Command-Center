@@ -214,10 +214,10 @@ body {
 }
 
 .grid-finances {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
-    "ynab-accounts ynab-scheduled"
-    "ynab-unapproved ynab-unapproved";
+    "ynab-accounts ynab-scheduled ynab-financelog"
+    "ynab-unapproved ynab-unapproved ynab-unapproved";
 }
 
 .slot {
@@ -278,6 +278,9 @@ body {
 .slot-ynab-scheduled {
   grid-area: ynab-scheduled;
 }
+.slot-ynab-financelog {
+  grid-area: ynab-financelog;
+}
 
 @media (max-width: 860px) {
   .grid-home {
@@ -296,6 +299,7 @@ body {
     grid-template-areas:
       "ynab-accounts"
       "ynab-scheduled"
+      "ynab-financelog"
       "ynab-unapproved";
   }
 }
@@ -1194,7 +1198,8 @@ body {
 }
 
 .ynab-balance {
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--ink);
 }
 .ynab-balance.negative {
@@ -1254,21 +1259,34 @@ body {
 .ynab-col-payee {
   width: auto;
 }
+.ynab-col-name {
+  width: auto;
+}
+.ynab-col-hide {
+  width: 28px;
+}
+.ynab-col-frequency {
+  width: 90px;
+  color: var(--ink-dim);
+  text-transform: capitalize;
+}
 .ynab-col-category {
   width: 220px;
   overflow: visible;
 }
 .ynab-col-memo {
-  width: 160px;
-  color: var(--ink-dim);
-  font-style: italic;
+  width: 180px;
+  overflow: visible;
 }
 .ynab-col-amount {
-  width: 90px;
+  width: 100px;
   text-align: right;
   font-family: var(--mono);
 }
 
+.ynab-table-group-row {
+  cursor: pointer;
+}
 .ynab-table-group-row td {
   padding-top: 14px;
   padding-bottom: 3px;
@@ -1278,6 +1296,12 @@ body {
 .ynab-table-group-row:first-child td {
   padding-top: 0;
 }
+/* Note: no display override here — this class lives on a <td> with a
+   colSpan, and setting display:flex directly on a table cell drops its
+   table-cell box entirely, breaking colSpan width-summing (it measured out
+   at exactly the first column's width instead of spanning). Widgets that
+   need flex layout (the chevron+label+count in Unapproved Transactions)
+   wrap their content in .ynab-table-group-title-inner instead. */
 .ynab-table-group-title {
   font-family: var(--mono);
   font-size: 10px;
@@ -1285,6 +1309,115 @@ body {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
+  white-space: nowrap;
+}
+.ynab-table-group-title-inner {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ynab-group-chevron {
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.ynab-group-chevron.expanded {
+  transform: rotate(90deg);
+}
+.ynab-group-count {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+
+.ynab-memo-input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ink-dim);
+  font-style: italic;
+  font-size: 12px;
+  font-family: var(--sans);
+  padding: 3px 6px;
+  margin: 0 -6px;
+}
+.ynab-memo-input:hover {
+  border-color: var(--panel-edge);
+}
+.ynab-memo-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--ground);
+  font-style: normal;
+  color: var(--ink);
+}
+
+.ynab-hidden-section {
+  margin-top: 8px;
+}
+
+.ynab-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ynab-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 14px;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  margin-bottom: 10px;
+}
+.ynab-add-form .settings-input {
+  width: auto;
+  flex: 1 1 120px;
+  min-width: 90px;
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.ynab-add-form .ynab-category-picker {
+  flex: 1 1 160px;
+}
+.ynab-amount-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 140px;
+}
+.ynab-amount-group .settings-input {
+  flex: 1 1 auto;
+}
+.ynab-flow-toggle {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 14px;
+  cursor: pointer;
+}
+.ynab-flow-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+.ynab-add-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ynab-add-form-actions button[type="submit"] {
+  white-space: nowrap;
+}
+.ynab-add-form-error {
+  flex-basis: 100%;
+  color: var(--alert);
 }
 
 /* Category picker: text input + a body-portaled dropdown (so it isn't

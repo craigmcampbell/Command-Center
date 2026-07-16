@@ -17,12 +17,14 @@ import type {
   YnabUnapprovedResult,
   YnabScheduledResult,
   YnabCategoriesResult,
+  NoteContent,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import YnabScheduledWidget from "./components/YnabScheduledWidget";
+import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
@@ -114,6 +116,7 @@ export default function App() {
   const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
   const [ynabScheduled, setYnabScheduled] = useState<YnabScheduledResult | null>(null);
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
+  const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
   const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
 
   const loadDocker = useCallback(async () => {
@@ -136,6 +139,9 @@ export default function App() {
       window.api.ynab.categories().then(setYnabCategories),
     ]);
   }, [loadYnabUnapproved]);
+  const loadFinanceReviewLog = useCallback(async () => {
+    setFinanceReviewLog(await window.api.grimoire.financeReviewLog());
+  }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
   }, [dailyDate]);
@@ -182,6 +188,7 @@ export default function App() {
       loadGithub(),
       loadProcessStatuses(),
       loadYnab(),
+      loadFinanceReviewLog(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -196,6 +203,7 @@ export default function App() {
     loadGithub,
     loadProcessStatuses,
     loadYnab,
+    loadFinanceReviewLog,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -256,6 +264,7 @@ export default function App() {
         loadGithub(),
         loadProcessStatuses(),
         loadYnab(),
+        loadFinanceReviewLog(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -455,10 +464,14 @@ export default function App() {
           <div className="slot slot-ynab-scheduled">
             <YnabScheduledWidget data={ynabScheduled} />
           </div>
+          <div className="slot slot-ynab-financelog">
+            <FinanceReviewLogWidget data={financeReviewLog} />
+          </div>
           <div className="slot slot-ynab-unapproved">
             <YnabUnapprovedWidget
               data={ynabUnapproved}
               categories={ynabCategories}
+              accounts={ynabAccounts}
               onRefresh={loadYnabUnapproved}
             />
           </div>

@@ -6,6 +6,7 @@
 import type {
   YnabAccountsResult,
   YnabCategoriesResult,
+  YnabNewTransactionInput,
   YnabScalarConfig,
   YnabScheduledResult,
   YnabUnapprovedResult,
@@ -150,9 +151,12 @@ export async function getScheduledTransactionsThisMonth(
   return { ok: true, transactions };
 }
 
-export async function approveTransaction(
+// Shared by approve/category/memo — all three are a single-field partial
+// update against the same bulk PATCH endpoint.
+async function patchTransactionField(
   config: YnabScalarConfig,
-  transactionId: string
+  transactionId: string,
+  fields: Record<string, unknown>
 ): Promise<ActionResult> {
   const { token, planId } = config;
   if (!token || !planId) return { ok: false, reason: "No YNAB token configured" };
@@ -161,7 +165,7 @@ export async function approveTransaction(
   try {
     res = await ynabFetch(`${API_ROOT}/plans/${planId}/transactions`, token, {
       method: "PATCH",
-      body: JSON.stringify({ transactions: [{ id: transactionId, approved: true }] }),
+      body: JSON.stringify({ transactions: [{ id: transactionId, ...fields }] }),
     });
   } catch {
     return { ok: false, reason: "Couldn't reach YNAB" };
@@ -173,10 +177,32 @@ export async function approveTransaction(
   return { ok: true };
 }
 
-export async function setTransactionCategory(
+export function approveTransaction(
+  config: YnabScalarConfig,
+  transactionId: string
+): Promise<ActionResult> {
+  return patchTransactionField(config, transactionId, { approved: true });
+}
+
+export function setTransactionCategory(
   config: YnabScalarConfig,
   transactionId: string,
   categoryId: string
+): Promise<ActionResult> {
+  return patchTransactionField(config, transactionId, { category_id: categoryId });
+}
+
+export function setTransactionMemo(
+  config: YnabScalarConfig,
+  transactionId: string,
+  memo: string
+): Promise<ActionResult> {
+  return patchTransactionField(config, transactionId, { memo });
+}
+
+export async function createTransaction(
+  config: YnabScalarConfig,
+  input: YnabNewTransactionInput
 ): Promise<ActionResult> {
   const { token, planId } = config;
   if (!token || !planId) return { ok: false, reason: "No YNAB token configured" };
@@ -184,8 +210,17 @@ export async function setTransactionCategory(
   let res: Response;
   try {
     res = await ynabFetch(`${API_ROOT}/plans/${planId}/transactions`, token, {
-      method: "PATCH",
-      body: JSON.stringify({ transactions: [{ id: transactionId, category_id: categoryId }] }),
+      method: "POST",
+      body: JSON.stringify({
+        transaction: {
+          account_id: input.accountId,
+          date: input.date,
+          amount: Math.round(input.amount * 1000),
+          payee_name: input.payeeName || undefined,
+          category_id: input.categoryId || undefined,
+          memo: input.memo || undefined,
+        },
+      }),
     });
   } catch {
     return { ok: false, reason: "Couldn't reach YNAB" };

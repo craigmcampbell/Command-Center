@@ -381,6 +381,17 @@ export interface YnabCategoriesResult {
   categories: YnabCategory[];
 }
 
+// Input for manually adding a transaction — amount is dollars, signed
+// (negative = outflow), converted to milliunits server-side.
+export interface YnabNewTransactionInput {
+  accountId: string;
+  date: string;
+  amount: number;
+  payeeName?: string;
+  categoryId?: string;
+  memo?: string;
+}
+
 // A file or folder one level down from wherever browseVault() was pointed —
 // `path` is relative to the vault root, used as-is by subsequent browse/read/
 // save calls so the renderer never needs to know the vault's real disk path.
@@ -464,6 +475,7 @@ export interface CommandCenterApi {
     dailyNote: (date?: string) => Promise<DailyNoteResult>;
     saveDailyNote: (date: string, content: string) => Promise<ActionResult>;
     missions: () => Promise<MissionsResult>;
+    financeReviewLog: () => Promise<NoteContent>;
   };
   todoist: {
     tasks: () => Promise<TodoistResult>;
@@ -523,6 +535,8 @@ export interface CommandCenterApi {
     categories: () => Promise<YnabCategoriesResult>;
     approveTransaction: (transactionId: string) => Promise<ActionResult>;
     setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
+    setTransactionMemo: (transactionId: string, memo: string) => Promise<ActionResult>;
+    createTransaction: (input: YnabNewTransactionInput) => Promise<ActionResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
   };
   notes: {
