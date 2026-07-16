@@ -21,6 +21,7 @@ import type {
   GitHubRepoConfig,
   VaultConfig,
   ProcessConfig,
+  YnabScalarConfig,
 } from "../../shared/types";
 
 export function initSettings(): void {
@@ -139,6 +140,24 @@ export function getGithubScalarSettings(): GitHubScalarConfig {
 export function updateGithubScalarSettings(values: GitHubScalarConfig): GitHubScalarConfig {
   setRaw("github", values);
   return values;
+}
+
+export function getYnabSettings(): YnabScalarConfig {
+  return getRaw<YnabScalarConfig>("ynab") ?? { hiddenAccountIds: [] };
+}
+export function updateYnabSettings(values: YnabScalarConfig): YnabScalarConfig {
+  setRaw("ynab", values);
+  return values;
+}
+export function toggleYnabAccountHidden(accountId: string): YnabScalarConfig {
+  const current = getYnabSettings();
+  const hidden = new Set(current.hiddenAccountIds ?? []);
+  if (hidden.has(accountId)) {
+    hidden.delete(accountId);
+  } else {
+    hidden.add(accountId);
+  }
+  return updateYnabSettings({ ...current, hiddenAccountIds: [...hidden] });
 }
 
 // ---- vaults ----
@@ -362,6 +381,7 @@ export function getAllSettings(): AppConfig {
     github: { ...githubScalar, repos },
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
+    ynab: getYnabSettings(),
   };
 }
 
@@ -420,6 +440,8 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
     refreshSeconds: legacyGithub.refreshSeconds,
     reviewUser: legacyGithub.reviewUser,
   });
+
+  seedRawIfEmpty("ynab", pick("ynab") ?? { hiddenAccountIds: [] });
 
   seedVaultsIfEmpty(pick<{ label: string; path: string }[]>("vaults") ?? []);
   seedGithubReposIfEmpty(legacyGithub.repos ?? []);

@@ -99,6 +99,7 @@ export interface AppConfig {
   github?: GitHubConfig;
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
+  ynab?: YnabScalarConfig;
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -300,6 +301,86 @@ export interface GitHubStatusResult {
   reviewRequestedReason?: string;
 }
 
+// The non-array part of YNAB settings. `hiddenAccountIds` is toggled from the
+// Accounts widget itself (an eye icon per row), not from the Settings page —
+// it lives here as a plain JSON array rather than its own SQL table since
+// it's a flag layered onto externally-sourced YNAB account ids, not a
+// user-authored list with its own add/reorder UI.
+export interface YnabScalarConfig {
+  token?: string;
+  planId?: string;
+  refreshSeconds?: number;
+  hiddenAccountIds?: string[];
+}
+
+// Closed accounts are filtered out before this ever reaches the renderer —
+// `hidden` reflects hiddenAccountIds, computed server-side so the token never
+// needs to live in renderer state just to preserve it across a toggle.
+export interface YnabAccount {
+  id: string;
+  name: string;
+  type: string;
+  balance: number;
+  hidden: boolean;
+}
+
+export interface YnabAccountsResult {
+  ok: boolean;
+  reason?: string;
+  accounts: YnabAccount[];
+}
+
+export interface YnabTransaction {
+  id: string;
+  date: string;
+  amount: number;
+  payeeName: string | null;
+  accountId: string;
+  accountName: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  memo: string | null;
+}
+
+export interface YnabUnapprovedResult {
+  ok: boolean;
+  reason?: string;
+  transactions: YnabTransaction[];
+}
+
+export interface YnabScheduledTransaction {
+  id: string;
+  dateNext: string;
+  frequency: string;
+  amount: number;
+  payeeName: string | null;
+  accountId: string;
+  accountName: string;
+  memo: string | null;
+}
+
+export interface YnabScheduledResult {
+  ok: boolean;
+  reason?: string;
+  transactions: YnabScheduledTransaction[];
+}
+
+// A user-assignable budget category, flattened from YNAB's category_groups.
+// Internal/hidden/deleted groups and categories (e.g. "Uncategorized",
+// "Inflow: Ready to Assign") are filtered out server-side — every entry here
+// is something a transaction can actually be assigned to.
+export interface YnabCategory {
+  id: string;
+  name: string;
+  groupName: string;
+}
+
+export interface YnabCategoriesResult {
+  ok: boolean;
+  reason?: string;
+  categories: YnabCategory[];
+}
+
 // A file or folder one level down from wherever browseVault() was pointed —
 // `path` is relative to the vault root, used as-is by subsequent browse/read/
 // save calls so the renderer never needs to know the vault's real disk path.
@@ -435,6 +516,15 @@ export interface CommandCenterApi {
   github: {
     status: () => Promise<GitHubStatusResult>;
   };
+  ynab: {
+    accounts: () => Promise<YnabAccountsResult>;
+    unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
+    scheduledTransactions: () => Promise<YnabScheduledResult>;
+    categories: () => Promise<YnabCategoriesResult>;
+    approveTransaction: (transactionId: string) => Promise<ActionResult>;
+    setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
+    toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
+  };
   notes: {
     vaults: () => Promise<VaultConfig[]>;
     browse: (vaultLabel: string, subPath?: string) => Promise<NoteBrowseResult>;
@@ -486,6 +576,9 @@ export interface CommandCenterApi {
     };
     github: {
       update: (values: GitHubScalarConfig) => Promise<GitHubScalarConfig>;
+    };
+    ynab: {
+      update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;
     };
     vaults: {
       list: () => Promise<VaultConfig[]>;

@@ -45,6 +45,14 @@ import {
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
 import {
+  getAccounts as getYnabAccounts,
+  getUnapprovedTransactions as getYnabUnapprovedTransactions,
+  getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
+  getCategories as getYnabCategories,
+  approveTransaction as approveYnabTransaction,
+  setTransactionCategory as setYnabTransactionCategory,
+} from "./services/ynab";
+import {
   initNotes,
   browseVault,
   buildVaultIndex,
@@ -84,6 +92,9 @@ import {
   updateReaderSettings,
   getGithubScalarSettings,
   updateGithubScalarSettings,
+  getYnabSettings,
+  updateYnabSettings,
+  toggleYnabAccountHidden,
   listVaultSettings,
   addVault,
   updateVault,
@@ -107,6 +118,7 @@ import type {
   HabitFrequencyType,
   LinkListKind,
   ProcessConfig,
+  YnabScalarConfig,
 } from "../shared/types";
 
 initDatabase();
@@ -262,6 +274,29 @@ ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
 );
 
+// YNAB: account balances, unapproved transactions, and this month's
+// scheduled transactions for the configured plan.
+ipcMain.handle("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
+ipcMain.handle("ynab:unapprovedTransactions", () =>
+  getYnabUnapprovedTransactions(getYnabSettings())
+);
+ipcMain.handle("ynab:scheduledTransactions", () =>
+  getYnabScheduledTransactions(getYnabSettings())
+);
+ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
+ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
+  approveYnabTransaction(getYnabSettings(), transactionId)
+);
+ipcMain.handle(
+  "ynab:setTransactionCategory",
+  (_evt, transactionId: string, categoryId: string) =>
+    setYnabTransactionCategory(getYnabSettings(), transactionId, categoryId)
+);
+ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
+  toggleYnabAccountHidden(accountId);
+  return getYnabAccounts(getYnabSettings());
+});
+
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).
 ipcMain.handle("notes:vaults", () => listVaultSettings());
@@ -373,6 +408,9 @@ ipcMain.handle("settings:reader:update", (_evt, values: { apiToken: string }) =>
 );
 ipcMain.handle("settings:github:update", (_evt, values: GitHubScalarConfig) =>
   updateGithubScalarSettings(values)
+);
+ipcMain.handle("settings:ynab:update", (_evt, values: YnabScalarConfig) =>
+  updateYnabSettings(values)
 );
 
 ipcMain.handle("settings:vaults:list", () => listVaultSettings());

@@ -213,6 +213,13 @@ body {
   grid-template-areas: "notes";
 }
 
+.grid-finances {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "ynab-accounts ynab-scheduled"
+    "ynab-unapproved ynab-unapproved";
+}
+
 .slot {
   min-width: 0;
   display: flex;
@@ -262,6 +269,15 @@ body {
 .slot-notes {
   grid-area: notes;
 }
+.slot-ynab-accounts {
+  grid-area: ynab-accounts;
+}
+.slot-ynab-unapproved {
+  grid-area: ynab-unapproved;
+}
+.slot-ynab-scheduled {
+  grid-area: ynab-scheduled;
+}
 
 @media (max-width: 860px) {
   .grid-home {
@@ -274,6 +290,13 @@ body {
       "apps"
       "learning"
       "filelinks";
+  }
+  .grid-finances {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "ynab-accounts"
+      "ynab-scheduled"
+      "ynab-unapproved";
   }
 }
 
@@ -1170,6 +1193,168 @@ body {
   color: var(--ink-dim);
 }
 
+.ynab-balance {
+  font-size: 12px;
+  color: var(--ink);
+}
+.ynab-balance.negative {
+  color: var(--alert);
+}
+
+.ynab-show-hidden {
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.ynab-show-hidden:hover {
+  color: var(--accent);
+}
+
+/* Unapproved Transactions: tabular layout */
+.ynab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.ynab-table th,
+.ynab-table td {
+  padding: 6px 8px 6px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ynab-table th {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.ynab-table tbody tr:hover td {
+  background: rgba(92, 127, 209, 0.05);
+}
+.ynab-col-approve {
+  width: 28px;
+}
+.ynab-col-date {
+  width: 56px;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.ynab-col-payee {
+  width: auto;
+}
+.ynab-col-category {
+  width: 220px;
+  overflow: visible;
+}
+.ynab-col-memo {
+  width: 160px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.ynab-col-amount {
+  width: 90px;
+  text-align: right;
+  font-family: var(--mono);
+}
+
+.ynab-table-group-row td {
+  padding-top: 14px;
+  padding-bottom: 3px;
+  border-bottom: none;
+  background: transparent !important;
+}
+.ynab-table-group-row:first-child td {
+  padding-top: 0;
+}
+.ynab-table-group-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Category picker: text input + a body-portaled dropdown (so it isn't
+   clipped by the panel's own scroll container), grouped by budget category
+   group with a plain-text filter. */
+.ynab-category-picker {
+  width: 100%;
+}
+.ynab-category-input {
+  width: 100%;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 12px;
+  padding: 3px 7px;
+}
+.ynab-category-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ynab-category-dropdown {
+  position: fixed;
+  z-index: 200;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.6);
+  padding: 4px;
+}
+.ynab-category-group + .ynab-category-group {
+  margin-top: 4px;
+}
+.ynab-category-group-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 6px 8px 2px;
+}
+.ynab-category-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ynab-category-option:hover {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+.ynab-category-option.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+.ynab-category-empty {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
 .daily-nav {
   display: flex;
   align-items: center;
@@ -1346,7 +1531,7 @@ body {
 }
 
 /* Todoist: completion checkbox, description toggle/panel, add-task form */
-.row .check {
+.check {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1361,28 +1546,28 @@ body {
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.row .check:hover:not(:disabled) {
+.check:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-glow);
 }
-.row .check.alert {
+.check.alert {
   border-color: var(--alert);
   color: var(--alert);
 }
-.row .check.running {
+.check.running {
   border-color: var(--live);
   color: var(--live);
 }
-.row .check:disabled {
+.check:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.row .check .check-icon {
+.check .check-icon {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.row .check:hover .check-icon {
+.check:hover .check-icon {
   opacity: 1;
 }
 .todoist-item.completing .check {
@@ -1481,7 +1666,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--ink-dim);
+  color: var(--accent);
   padding-top: 10px;
   margin-bottom: 2px;
   border-top: 1px solid var(--panel-edge-soft);
