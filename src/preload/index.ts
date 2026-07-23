@@ -12,6 +12,8 @@ import type {
   HabitFrequencyType,
   LinkListKind,
   ProcessConfig,
+  YnabScalarConfig,
+  YnabNewTransactionInput,
 } from "../shared/types";
 
 const api: CommandCenterApi = {
@@ -26,6 +28,7 @@ const api: CommandCenterApi = {
     saveDailyNote: (date: string, content: string) =>
       ipcRenderer.invoke("grimoire:dailyNote:save", date, content),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
+    financeReviewLog: () => ipcRenderer.invoke("grimoire:financeReviewLog"),
   },
 
   todoist: {
@@ -96,6 +99,23 @@ const api: CommandCenterApi = {
     status: () => ipcRenderer.invoke("github:status"),
   },
 
+  ynab: {
+    accounts: () => ipcRenderer.invoke("ynab:accounts"),
+    unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
+    scheduledTransactions: () => ipcRenderer.invoke("ynab:scheduledTransactions"),
+    categories: () => ipcRenderer.invoke("ynab:categories"),
+    approveTransaction: (transactionId: string) =>
+      ipcRenderer.invoke("ynab:approveTransaction", transactionId),
+    setTransactionCategory: (transactionId: string, categoryId: string) =>
+      ipcRenderer.invoke("ynab:setTransactionCategory", transactionId, categoryId),
+    setTransactionMemo: (transactionId: string, memo: string) =>
+      ipcRenderer.invoke("ynab:setTransactionMemo", transactionId, memo),
+    createTransaction: (input: YnabNewTransactionInput) =>
+      ipcRenderer.invoke("ynab:createTransaction", input),
+    toggleAccountHidden: (accountId: string) =>
+      ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
+  },
+
   notes: {
     vaults: () => ipcRenderer.invoke("notes:vaults"),
     browse: (vaultLabel: string, subPath?: string) =>
@@ -153,6 +173,9 @@ const api: CommandCenterApi = {
     },
     github: {
       update: (values: GitHubScalarConfig) => ipcRenderer.invoke("settings:github:update", values),
+    },
+    ynab: {
+      update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),
     },
     vaults: {
       list: () => ipcRenderer.invoke("settings:vaults:list"),

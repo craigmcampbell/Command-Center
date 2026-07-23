@@ -8,7 +8,12 @@ import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
-import { readDailyNote, saveDailyNote, listMissions } from "./services/grimoire";
+import {
+  readDailyNote,
+  saveDailyNote,
+  listMissions,
+  readFinanceReviewLog,
+} from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
@@ -44,6 +49,16 @@ import {
   deleteDocument,
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
+import {
+  getAccounts as getYnabAccounts,
+  getUnapprovedTransactions as getYnabUnapprovedTransactions,
+  getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
+  getCategories as getYnabCategories,
+  approveTransaction as approveYnabTransaction,
+  setTransactionCategory as setYnabTransactionCategory,
+  setTransactionMemo as setYnabTransactionMemo,
+  createTransaction as createYnabTransaction,
+} from "./services/ynab";
 import {
   initNotes,
   browseVault,
@@ -84,6 +99,9 @@ import {
   updateReaderSettings,
   getGithubScalarSettings,
   updateGithubScalarSettings,
+  getYnabSettings,
+  updateYnabSettings,
+  toggleYnabAccountHidden,
   listVaultSettings,
   addVault,
   updateVault,
@@ -107,6 +125,8 @@ import type {
   HabitFrequencyType,
   LinkListKind,
   ProcessConfig,
+  YnabScalarConfig,
+  YnabNewTransactionInput,
 } from "../shared/types";
 
 initDatabase();
@@ -191,6 +211,9 @@ ipcMain.handle("grimoire:dailyNote:save", async (_evt, date: string, content: st
 ipcMain.handle("grimoire:missions", async () => {
   return listMissions(getGrimoireSettings());
 });
+ipcMain.handle("grimoire:financeReviewLog", async () => {
+  return readFinanceReviewLog(getGrimoireSettings());
+});
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
 ipcMain.handle("todoist:tasks", async () => {
@@ -261,6 +284,35 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
 );
+
+// YNAB: account balances, unapproved transactions, and this month's
+// scheduled transactions for the configured plan.
+ipcMain.handle("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
+ipcMain.handle("ynab:unapprovedTransactions", () =>
+  getYnabUnapprovedTransactions(getYnabSettings())
+);
+ipcMain.handle("ynab:scheduledTransactions", () =>
+  getYnabScheduledTransactions(getYnabSettings())
+);
+ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
+ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
+  approveYnabTransaction(getYnabSettings(), transactionId)
+);
+ipcMain.handle(
+  "ynab:setTransactionCategory",
+  (_evt, transactionId: string, categoryId: string) =>
+    setYnabTransactionCategory(getYnabSettings(), transactionId, categoryId)
+);
+ipcMain.handle("ynab:setTransactionMemo", (_evt, transactionId: string, memo: string) =>
+  setYnabTransactionMemo(getYnabSettings(), transactionId, memo)
+);
+ipcMain.handle("ynab:createTransaction", (_evt, input: YnabNewTransactionInput) =>
+  createYnabTransaction(getYnabSettings(), input)
+);
+ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
+  toggleYnabAccountHidden(accountId);
+  return getYnabAccounts(getYnabSettings());
+});
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).
@@ -373,6 +425,9 @@ ipcMain.handle("settings:reader:update", (_evt, values: { apiToken: string }) =>
 );
 ipcMain.handle("settings:github:update", (_evt, values: GitHubScalarConfig) =>
   updateGithubScalarSettings(values)
+);
+ipcMain.handle("settings:ynab:update", (_evt, values: YnabScalarConfig) =>
+  updateYnabSettings(values)
 );
 
 ipcMain.handle("settings:vaults:list", () => listVaultSettings());

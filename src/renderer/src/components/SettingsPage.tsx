@@ -22,7 +22,13 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { AppConfig, GitHubRepoConfig, ProcessConfig, VaultConfig } from "../../../shared/types";
+import type {
+  AppConfig,
+  GitHubRepoConfig,
+  ProcessConfig,
+  VaultConfig,
+  YnabScalarConfig,
+} from "../../../shared/types";
 import {
   useGithubRepoSettingsList,
   useProcessSettingsList,
@@ -57,6 +63,7 @@ interface SettingsPageProps {
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
+  onYnabRefreshSecondsChange: (seconds: number) => void;
 }
 
 function slugify(label: string): string {
@@ -463,6 +470,79 @@ function GithubScalarCard({
           value={reviewUser}
           onChange={(e) => setReviewUser(e.target.value)}
           placeholder="your-github-username"
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function YnabScalarCard({
+  value,
+  onSaved,
+}: {
+  value: YnabScalarConfig;
+  onSaved: (v: YnabScalarConfig) => void;
+}) {
+  const [token, setToken] = useState(value.token ?? "");
+  const [planId, setPlanId] = useState(value.planId ?? "");
+  const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 300));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setToken(value.token ?? "");
+    setPlanId(value.planId ?? "");
+    setRefreshSeconds(String(value.refreshSeconds ?? 300));
+  }, [value.token, value.planId, value.refreshSeconds]);
+  const dirty =
+    token !== (value.token ?? "") ||
+    planId !== (value.planId ?? "") ||
+    refreshSeconds !== String(value.refreshSeconds ?? 300);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.ynab.update({
+      ...value,
+      token: token || undefined,
+      planId: planId || undefined,
+      refreshSeconds: Number(refreshSeconds) || 300,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>YNAB</h3>
+      <p className="settings-card-hint">
+        Personal access token and plan id — powers the Finances tab's accounts, unapproved
+        transactions, and scheduled transactions.
+      </p>
+      <div className="settings-field-row">
+        <label>Token</label>
+        <SecretField value={token} onChange={setToken} placeholder="•••••••••••••••" />
+      </div>
+      <div className="settings-field-row">
+        <label>Plan id</label>
+        <input
+          className="settings-input"
+          value={planId}
+          onChange={(e) => setPlanId(e.target.value)}
+          placeholder="last-used, default, or a plan uuid"
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={refreshSeconds}
+          onChange={(e) => setRefreshSeconds(e.target.value)}
         />
       </div>
       <div className="settings-card-footer">
@@ -1071,6 +1151,7 @@ export default function SettingsPage({
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
   onGithubRefreshSecondsChange,
+  onYnabRefreshSecondsChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -1173,6 +1254,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, github: { ...prev.github, ...v } } : prev));
                       onGithubRefreshSecondsChange(v.refreshSeconds ?? 300);
+                    }}
+                  />
+                  <YnabScalarCard
+                    value={data.ynab ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, ynab: v } : prev));
+                      onYnabRefreshSecondsChange(v.refreshSeconds ?? 300);
                     }}
                   />
                 </>

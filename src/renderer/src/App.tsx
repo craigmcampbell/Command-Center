@@ -13,9 +13,18 @@ import type {
   ReaderResult,
   TodoistResult,
   CalendarResult,
+  YnabAccountsResult,
+  YnabUnapprovedResult,
+  YnabScheduledResult,
+  YnabCategoriesResult,
+  NoteContent,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
+import YnabAccountsWidget from "./components/YnabAccountsWidget";
+import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
+import YnabScheduledWidget from "./components/YnabScheduledWidget";
+import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
 import MissionsWidget from "./components/MissionsWidget";
@@ -33,7 +42,14 @@ import { IconGear, IconRefresh } from "./components/icons";
 import type { PaletteContext } from "./palette";
 import appLogo from "./assets/icon.png";
 
-type TabId = "home" | "development" | "reader" | "scratchpad" | "habits" | "notes";
+type TabId =
+  | "home"
+  | "development"
+  | "reader"
+  | "scratchpad"
+  | "habits"
+  | "notes"
+  | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "home", label: "Home" },
@@ -42,11 +58,13 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "scratchpad", label: "Scratchpad" },
   { id: "habits", label: "Habits" },
   { id: "notes", label: "Notes" },
+  { id: "finances", label: "Finances" },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
 const DEFAULT_DOCKER_REFRESH_SECONDS = 15;
 const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
+const DEFAULT_YNAB_REFRESH_SECONDS = 300;
 
 function tickClock(): string {
   return new Date()
@@ -94,6 +112,12 @@ export default function App() {
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
   const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
+  const [ynabAccounts, setYnabAccounts] = useState<YnabAccountsResult | null>(null);
+  const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
+  const [ynabScheduled, setYnabScheduled] = useState<YnabScheduledResult | null>(null);
+  const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
+  const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
+  const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -103,6 +127,20 @@ export default function App() {
   }, []);
   const loadProcessStatuses = useCallback(async () => {
     setProcessStatuses(await window.api.process.statusAll());
+  }, []);
+  const loadYnabUnapproved = useCallback(async () => {
+    setYnabUnapproved(await window.api.ynab.unapprovedTransactions());
+  }, []);
+  const loadYnab = useCallback(async () => {
+    await Promise.all([
+      window.api.ynab.accounts().then(setYnabAccounts),
+      loadYnabUnapproved(),
+      window.api.ynab.scheduledTransactions().then(setYnabScheduled),
+      window.api.ynab.categories().then(setYnabCategories),
+    ]);
+  }, [loadYnabUnapproved]);
+  const loadFinanceReviewLog = useCallback(async () => {
+    setFinanceReviewLog(await window.api.grimoire.financeReviewLog());
   }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
@@ -149,6 +187,8 @@ export default function App() {
       loadReader(readerPage, true),
       loadGithub(),
       loadProcessStatuses(),
+      loadYnab(),
+      loadFinanceReviewLog(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -162,6 +202,8 @@ export default function App() {
     readerPage,
     loadGithub,
     loadProcessStatuses,
+    loadYnab,
+    loadFinanceReviewLog,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -206,6 +248,7 @@ export default function App() {
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
+      setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
       setProcessConfigs(cfg.processes ?? []);
       await Promise.all([
         loadDocker(),
@@ -220,6 +263,8 @@ export default function App() {
         loadReader(0),
         loadGithub(),
         loadProcessStatuses(),
+        loadYnab(),
+        loadFinanceReviewLog(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -247,6 +292,12 @@ export default function App() {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadGithub, githubRefreshSeconds]);
+
+  // ---- YNAB refresh, reactive to Settings edits ----
+  useEffect(() => {
+    const id = setInterval(loadYnab, ynabRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadYnab, ynabRefreshSeconds]);
 
   // ---- clock / stardate ----
   useEffect(() => {
@@ -405,6 +456,28 @@ export default function App() {
         </main>
       )}
 
+      {activeTab === "finances" && (
+        <main className="grid grid-finances">
+          <div className="slot slot-ynab-accounts">
+            <YnabAccountsWidget data={ynabAccounts} onChange={setYnabAccounts} />
+          </div>
+          <div className="slot slot-ynab-scheduled">
+            <YnabScheduledWidget data={ynabScheduled} />
+          </div>
+          <div className="slot slot-ynab-financelog">
+            <FinanceReviewLogWidget data={financeReviewLog} />
+          </div>
+          <div className="slot slot-ynab-unapproved">
+            <YnabUnapprovedWidget
+              data={ynabUnapproved}
+              categories={ynabCategories}
+              accounts={ynabAccounts}
+              onRefresh={loadYnabUnapproved}
+            />
+          </div>
+        </main>
+      )}
+
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -418,6 +491,7 @@ export default function App() {
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
+        onYnabRefreshSecondsChange={setYnabRefreshSeconds}
       />
     </>
   );
