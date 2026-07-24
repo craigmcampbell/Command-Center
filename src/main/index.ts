@@ -17,6 +17,17 @@ import {
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
 import { getDueTasks, completeTask, createTask } from "./services/todoist";
+import {
+  initTimeTracking,
+  getActiveTimer,
+  getTaskSummaries,
+  startTimer,
+  stopActiveTimer,
+  addManualEntry,
+  listEntries,
+  deleteEntry,
+  getMonthlyReport,
+} from "./services/timeTracking";
 import { getEventsForDay, connectGoogleCalendar } from "./services/googleCalendar";
 import { initDatabase } from "./services/db";
 import {
@@ -135,6 +146,7 @@ initScratchpad();
 initHabits();
 initNotes();
 initSettings();
+initTimeTracking();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -225,6 +237,33 @@ ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
 ipcMain.handle("todoist:create", async (_evt, content: string) => {
   return createTask(getTodoistSettings(), content);
 });
+
+// Time tracking: cumulative per-task timers (only one running at a time) and
+// manual entries against Todoist tasks, plus the monthly billing report.
+ipcMain.handle("timeTracking:activeTimer", () => getActiveTimer());
+ipcMain.handle("timeTracking:summaries", (_evt, taskIds: string[]) => getTaskSummaries(taskIds));
+ipcMain.handle(
+  "timeTracking:start",
+  (_evt, taskId: string, taskContent: string, projectName: string) =>
+    startTimer(taskId, taskContent, projectName)
+);
+ipcMain.handle("timeTracking:stop", () => stopActiveTimer());
+ipcMain.handle(
+  "timeTracking:addManual",
+  (
+    _evt,
+    taskId: string,
+    taskContent: string,
+    projectName: string,
+    minutes: number,
+    date?: string
+  ) => addManualEntry(taskId, taskContent, projectName, minutes, date)
+);
+ipcMain.handle("timeTracking:entries", (_evt, taskId: string) => listEntries(taskId));
+ipcMain.handle("timeTracking:deleteEntry", (_evt, entryId: number, taskId: string) =>
+  deleteEntry(entryId, taskId)
+);
+ipcMain.handle("timeTracking:monthlyReport", (_evt, month: string) => getMonthlyReport(month));
 
 // Open a URL in the user's default browser (for SillyTavern, GitHub, etc.).
 ipcMain.handle("open:url", async (_evt, url: string) => {
@@ -414,8 +453,10 @@ ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number
 ipcMain.handle("settings:app:update", (_evt, values: { refreshMinutes?: number }) =>
   updateAppSettings(values)
 );
-ipcMain.handle("settings:todoist:update", (_evt, values: { apiToken: string }) =>
-  updateTodoistSettings(values)
+ipcMain.handle(
+  "settings:todoist:update",
+  (_evt, values: { apiToken: string; showTimeTracking?: boolean }) =>
+    updateTodoistSettings(values)
 );
 ipcMain.handle("settings:googleCalendar:update", (_evt, values: GoogleCalendarConfig) =>
   updateGoogleCalendarSettings(values)

@@ -118,6 +118,7 @@ export default function App() {
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
   const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
+  const [showTimeTracking, setShowTimeTracking] = useState(true);
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -249,6 +250,7 @@ export default function App() {
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
+      setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
       await Promise.all([
         loadDocker(),
@@ -360,7 +362,7 @@ export default function App() {
             <CalendarWidget data={calendar} onNavigate={navigateCalendar} onConnect={connectCalendar} />
           </div>
           <div className="slot slot-todoist">
-            <TodoistWidget data={todoist} onRefresh={loadTodoist} />
+            <TodoistWidget data={todoist} onRefresh={loadTodoist} showTimeTracking={showTimeTracking} />
           </div>
           <div className="slot slot-daily">
             <DailyNoteWidget data={daily} onNavigate={navigateDaily} onChange={setDaily} />
@@ -492,6 +494,7 @@ export default function App() {
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
         onYnabRefreshSecondsChange={setYnabRefreshSeconds}
+        onTodoistShowTimeTrackingChange={setShowTimeTracking}
       />
     </>
   );

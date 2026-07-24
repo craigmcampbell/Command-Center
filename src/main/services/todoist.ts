@@ -6,6 +6,17 @@
 
 import type { AppConfig, ActionResult, TodoistResult } from "../../shared/types";
 
+// `new Date().toISOString().slice(0, 10)` gives the UTC calendar date, which
+// is a day ahead of local for anyone west of UTC in the evening — a task due
+// "today" (local) then reads as overdue. Build the date from local
+// getters instead so "today" always matches the user's own calendar day.
+function todayLocalDateString(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 const API_ROOT = "https://api.todoist.com/api/v1";
 const TASKS_URL =
   `${API_ROOT}/tasks/filter?query=` + encodeURIComponent("overdue | today");
@@ -58,7 +69,7 @@ export async function getDueTasks(
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalDateString();
 
   const tasks = results
     .map((t: any) => ({
@@ -69,6 +80,7 @@ export async function getDueTasks(
       priority: t.priority, // 4 = highest (p1), 1 = lowest (p4)
       due: t.due?.date || null,
       overdue: !!t.due?.date && t.due.date < today,
+      deadline: t.deadline?.date || null,
       project: projectNames.get(t.project_id) || "Inbox",
       parentName: t.parent_id ? contentById.get(t.parent_id) || null : null,
       subtasks: (subtasksByParent.get(t.id) || []).map((s: any) => ({
