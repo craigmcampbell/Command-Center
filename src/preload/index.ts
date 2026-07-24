@@ -37,6 +37,25 @@ const api: CommandCenterApi = {
     create: (content: string) => ipcRenderer.invoke("todoist:create", content),
   },
 
+  timeTracking: {
+    activeTimer: () => ipcRenderer.invoke("timeTracking:activeTimer"),
+    summaries: (taskIds: string[]) => ipcRenderer.invoke("timeTracking:summaries", taskIds),
+    start: (taskId: string, taskContent: string, projectName: string) =>
+      ipcRenderer.invoke("timeTracking:start", taskId, taskContent, projectName),
+    stop: () => ipcRenderer.invoke("timeTracking:stop"),
+    addManual: (
+      taskId: string,
+      taskContent: string,
+      projectName: string,
+      minutes: number,
+      date?: string
+    ) => ipcRenderer.invoke("timeTracking:addManual", taskId, taskContent, projectName, minutes, date),
+    entries: (taskId: string) => ipcRenderer.invoke("timeTracking:entries", taskId),
+    deleteEntry: (entryId: number, taskId: string) =>
+      ipcRenderer.invoke("timeTracking:deleteEntry", entryId, taskId),
+    monthlyReport: (month: string) => ipcRenderer.invoke("timeTracking:monthlyReport", month),
+  },
+
   openUrl: (url: string) => ipcRenderer.invoke("open:url", url),
 
   claude: {
@@ -162,7 +181,8 @@ const api: CommandCenterApi = {
         ipcRenderer.invoke("settings:app:update", values),
     },
     todoist: {
-      update: (values: { apiToken: string }) => ipcRenderer.invoke("settings:todoist:update", values),
+      update: (values: { apiToken: string; showTimeTracking?: boolean }) =>
+        ipcRenderer.invoke("settings:todoist:update", values),
     },
     googleCalendar: {
       update: (values: GoogleCalendarConfig) =>

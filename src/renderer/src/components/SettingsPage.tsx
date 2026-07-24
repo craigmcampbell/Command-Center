@@ -64,6 +64,7 @@ interface SettingsPageProps {
   onDockerRefreshSecondsChange: (seconds: number) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
+  onTodoistShowTimeTrackingChange: (show: boolean) => void;
 }
 
 function slugify(label: string): string {
@@ -284,18 +285,23 @@ function TodoistCard({
   value,
   onSaved,
 }: {
-  value: { apiToken: string };
-  onSaved: (v: { apiToken: string }) => void;
+  value: { apiToken: string; showTimeTracking?: boolean };
+  onSaved: (v: { apiToken: string; showTimeTracking?: boolean }) => void;
 }) {
   const [apiToken, setApiToken] = useState(value.apiToken);
+  const [showTimeTracking, setShowTimeTracking] = useState(value.showTimeTracking !== false);
   const [saving, setSaving] = useState(false);
-  useEffect(() => setApiToken(value.apiToken), [value.apiToken]);
-  const dirty = apiToken !== value.apiToken;
+  useEffect(() => {
+    setApiToken(value.apiToken);
+    setShowTimeTracking(value.showTimeTracking !== false);
+  }, [value.apiToken, value.showTimeTracking]);
+  const dirty =
+    apiToken !== value.apiToken || showTimeTracking !== (value.showTimeTracking !== false);
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const result = await window.api.settings.todoist.update({ apiToken });
+    const result = await window.api.settings.todoist.update({ apiToken, showTimeTracking });
     setSaving(false);
     onSaved(result);
   }
@@ -310,6 +316,14 @@ function TodoistCard({
         <label>API token</label>
         <SecretField value={apiToken} onChange={setApiToken} placeholder="•••••••••••••••" />
       </div>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={showTimeTracking}
+          onChange={(e) => setShowTimeTracking(e.target.checked)}
+        />
+        Show time tracking controls on tasks
+      </label>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -1152,6 +1166,7 @@ export default function SettingsPage({
   onDockerRefreshSecondsChange,
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
+  onTodoistShowTimeTrackingChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -1239,7 +1254,10 @@ export default function SettingsPage({
                 <>
                   <TodoistCard
                     value={data.todoist}
-                    onSaved={(v) => setData((prev) => (prev ? { ...prev, todoist: v } : prev))}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, todoist: v } : prev));
+                      onTodoistShowTimeTrackingChange(v.showTimeTracking !== false);
+                    }}
                   />
                   <GoogleCalendarCard
                     value={data.googleCalendar}

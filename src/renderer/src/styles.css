@@ -1790,6 +1790,17 @@ body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--ink-dim);
 }
+.deadline-pill {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(209, 121, 95, 0.15);
+  color: var(--alert);
+  border: 1px solid rgba(209, 121, 95, 0.35);
+}
 .todoist-group + .todoist-group {
   margin-top: 4px;
 }
@@ -2919,4 +2930,287 @@ body {
 }
 .ci-history-pip.pending {
   background: var(--pending);
+}
+
+/* Todoist per-task time tracking: play/stop toggle + cumulative badge on
+   the row, plus the manual-add form and entry list in the expand panel. */
+.todoist-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.report-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.report-trigger:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.time-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.time-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.time-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.time-toggle.running {
+  border-color: var(--live);
+  color: var(--live);
+}
+.time-total {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.time-entries {
+  margin: 4px 6px 8px 29px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid var(--panel-edge);
+  border-radius: 0 6px 6px 0;
+}
+.time-entries-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.time-entries-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.time-add-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.time-add-toggle:hover {
+  opacity: 0.8;
+}
+.time-add-form {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.time-add-form input {
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.time-add-form input[type="number"] {
+  width: 80px;
+}
+.time-add-form button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  border-radius: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.time-add-form button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.time-add-form button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.time-entries-empty {
+  font-size: 12px;
+}
+.time-entries-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.time-entries-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.time-entry-date {
+  font-family: var(--mono);
+  width: 52px;
+  flex-shrink: 0;
+}
+.time-entry-duration {
+  font-family: var(--mono);
+  width: 56px;
+  flex-shrink: 0;
+  color: var(--ink);
+}
+.time-entry-source {
+  flex: 1;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+.time-entry-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 2px;
+}
+.time-entry-delete:hover {
+  opacity: 1;
+  color: var(--alert);
+}
+
+/* Monthly time report modal — same scrim as .settings-scrim, own panel. */
+.report-panel {
+  width: min(640px, calc(100vw - 64px));
+  max-height: min(680px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 var(--panel-edge-soft) inset,
+    0 24px 60px -20px rgba(0, 0, 0, 0.75),
+    0 1px 3px rgba(0, 0, 0, 0.4);
+  animation: fadeInUp 0.15s ease both;
+}
+.report-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+}
+.report-month-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.report-month-label {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 140px;
+  text-align: center;
+}
+.report-project + .report-project {
+  margin-top: 16px;
+}
+.report-project-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.report-project-head h3 {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.report-project-total {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.report-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.report-task-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+.report-task-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 12px;
+}
+.report-task-total {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  flex-shrink: 0;
+}
+.report-grand-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-edge);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
 }

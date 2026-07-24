@@ -110,10 +110,13 @@ export function updateAppSettings(values: {
   return values;
 }
 
-export function getTodoistSettings(): { apiToken: string } {
+export function getTodoistSettings(): { apiToken: string; showTimeTracking?: boolean } {
   return getRaw("todoist") ?? { apiToken: "" };
 }
-export function updateTodoistSettings(values: { apiToken: string }): { apiToken: string } {
+export function updateTodoistSettings(values: {
+  apiToken: string;
+  showTimeTracking?: boolean;
+}): { apiToken: string; showTimeTracking?: boolean } {
   setRaw("todoist", values);
   return values;
 }

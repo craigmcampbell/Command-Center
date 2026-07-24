@@ -93,7 +93,7 @@ export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
   app?: { refreshMinutes?: number };
-  todoist: { apiToken: string };
+  todoist: { apiToken: string; showTimeTracking?: boolean };
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
   github?: GitHubConfig;
@@ -157,6 +157,7 @@ export interface TodoistTask {
   priority: number;
   due: string | null;
   overdue: boolean;
+  deadline: string | null;
   project: string;
   labels: string[];
   subtasks: TodoistSubtask[];
@@ -167,6 +168,55 @@ export interface TodoistResult {
   ok: boolean;
   reason?: string;
   tasks: TodoistTask[];
+}
+
+// A completed span of tracked time against one Todoist task. task_content/
+// project_name are snapshotted at log time (see services/timeTracking.ts) so
+// a monthly billing report still reads correctly after the task is completed
+// or deleted in Todoist. `source` distinguishes a stopped live timer from a
+// manually-logged chunk; both count identically toward totals.
+export interface TimeEntry {
+  id: number;
+  taskId: string;
+  taskContent: string;
+  projectName: string;
+  startedAt: number; // epoch ms
+  durationSeconds: number;
+  source: "timer" | "manual";
+}
+
+// Cumulative time for one task, plus whether it's the task currently
+// running — `runningSince` lets the UI compute a live-ticking elapsed
+// display without polling every second.
+export interface TaskTimeSummary {
+  taskId: string;
+  totalSeconds: number;
+  runningSince: number | null;
+}
+
+export interface ActiveTimer {
+  taskId: string;
+  taskContent: string;
+  projectName: string;
+  startedAt: number;
+}
+
+export interface MonthlyReportTaskEntry {
+  taskId: string;
+  taskContent: string;
+  totalSeconds: number;
+}
+
+export interface MonthlyReportProjectGroup {
+  projectName: string;
+  totalSeconds: number;
+  tasks: MonthlyReportTaskEntry[];
+}
+
+export interface MonthlyReportResult {
+  month: string; // "YYYY-MM"
+  totalSeconds: number;
+  projects: MonthlyReportProjectGroup[];
 }
 
 export interface CalendarEvent {
@@ -482,6 +532,22 @@ export interface CommandCenterApi {
     complete: (taskId: string) => Promise<ActionResult>;
     create: (content: string) => Promise<ActionResult>;
   };
+  timeTracking: {
+    activeTimer: () => Promise<ActiveTimer | null>;
+    summaries: (taskIds: string[]) => Promise<Record<string, TaskTimeSummary>>;
+    start: (taskId: string, taskContent: string, projectName: string) => Promise<ActiveTimer>;
+    stop: () => Promise<void>;
+    addManual: (
+      taskId: string,
+      taskContent: string,
+      projectName: string,
+      minutes: number,
+      date?: string
+    ) => Promise<TaskTimeSummary>;
+    entries: (taskId: string) => Promise<TimeEntry[]>;
+    deleteEntry: (entryId: number, taskId: string) => Promise<TaskTimeSummary>;
+    monthlyReport: (month: string) => Promise<MonthlyReportResult>;
+  };
   openUrl: (url: string) => Promise<boolean>;
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
@@ -580,7 +646,10 @@ export interface CommandCenterApi {
       update: (values: { refreshMinutes?: number }) => Promise<{ refreshMinutes?: number }>;
     };
     todoist: {
-      update: (values: { apiToken: string }) => Promise<{ apiToken: string }>;
+      update: (values: {
+        apiToken: string;
+        showTimeTracking?: boolean;
+      }) => Promise<{ apiToken: string; showTimeTracking?: boolean }>;
     };
     googleCalendar: {
       update: (values: GoogleCalendarConfig) => Promise<GoogleCalendarConfig>;

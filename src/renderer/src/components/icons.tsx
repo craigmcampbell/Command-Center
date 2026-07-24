@@ -190,6 +190,15 @@ export function IconEye({ size = 13, className }: IconProps) {
   );
 }
 
+export function IconClock({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5.5l4 2.5" />
+    </svg>
+  );
+}
+
 export function IconEyeOff({ size = 13, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
