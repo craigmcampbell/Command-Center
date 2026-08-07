@@ -398,6 +398,15 @@ export interface YnabUnapprovedResult {
   transactions: YnabTransaction[];
 }
 
+// "Pending" here means YNAB's cleared:"uncleared" status (not yet cleared
+// against the bank/statement) — YNAB's public API doesn't expose true
+// bank-pending (not-yet-posted) transactions, only this.
+export interface YnabPendingResult {
+  ok: boolean;
+  reason?: string;
+  transactions: YnabTransaction[];
+}
+
 export interface YnabScheduledTransaction {
   id: string;
   dateNext: string;
@@ -429,6 +438,17 @@ export interface YnabCategoriesResult {
   ok: boolean;
   reason?: string;
   categories: YnabCategory[];
+}
+
+// A manually-tracked recurring bill — independent of YNAB's own scheduled
+// transactions, since not everything recurring is set up as a YNAB
+// schedule. dueDay is a plain day-of-month (1-31), not a real date: these
+// recur every month with no fixed start/end.
+export interface BillItem {
+  id: number;
+  label: string;
+  dueDay: number;
+  autopay: boolean;
 }
 
 // Input for manually adding a transaction — amount is dollars, signed
@@ -526,6 +546,7 @@ export interface CommandCenterApi {
     saveDailyNote: (date: string, content: string) => Promise<ActionResult>;
     missions: () => Promise<MissionsResult>;
     financeReviewLog: () => Promise<NoteContent>;
+    saveFinanceReviewLog: (content: string) => Promise<ActionResult>;
   };
   todoist: {
     tasks: () => Promise<TodoistResult>;
@@ -597,13 +618,21 @@ export interface CommandCenterApi {
   ynab: {
     accounts: () => Promise<YnabAccountsResult>;
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
+    pendingTransactions: () => Promise<YnabPendingResult>;
     scheduledTransactions: () => Promise<YnabScheduledResult>;
     categories: () => Promise<YnabCategoriesResult>;
     approveTransaction: (transactionId: string) => Promise<ActionResult>;
+    clearTransaction: (transactionId: string) => Promise<ActionResult>;
     setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
     setTransactionMemo: (transactionId: string, memo: string) => Promise<ActionResult>;
     createTransaction: (input: YnabNewTransactionInput) => Promise<ActionResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
+  };
+  bills: {
+    list: () => Promise<BillItem[]>;
+    add: (label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
+    update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
+    remove: (id: number) => Promise<BillItem[]>;
   };
   notes: {
     vaults: () => Promise<VaultConfig[]>;

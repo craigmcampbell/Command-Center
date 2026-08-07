@@ -216,8 +216,9 @@ body {
 .grid-finances {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
-    "ynab-accounts ynab-scheduled ynab-financelog"
-    "ynab-unapproved ynab-unapproved ynab-unapproved";
+    "ynab-accounts ynab-bills ynab-financelog"
+    "ynab-unapproved ynab-unapproved ynab-unapproved"
+    "ynab-pending ynab-pending ynab-pending";
 }
 
 .slot {
@@ -275,8 +276,11 @@ body {
 .slot-ynab-unapproved {
   grid-area: ynab-unapproved;
 }
-.slot-ynab-scheduled {
-  grid-area: ynab-scheduled;
+.slot-ynab-pending {
+  grid-area: ynab-pending;
+}
+.slot-ynab-bills {
+  grid-area: ynab-bills;
 }
 .slot-ynab-financelog {
   grid-area: ynab-financelog;
@@ -298,9 +302,10 @@ body {
     grid-template-columns: 1fr;
     grid-template-areas:
       "ynab-accounts"
-      "ynab-scheduled"
+      "ynab-bills"
       "ynab-financelog"
-      "ynab-unapproved";
+      "ynab-unapproved"
+      "ynab-pending";
   }
 }
 
@@ -2059,7 +2064,8 @@ body {
 .link-row:hover .row-actions,
 .reader-row:hover .row-actions,
 .launch-chip-wrap:hover .chip-actions,
-.notes-nav-item:hover .row-actions {
+.notes-nav-item:hover .row-actions,
+.settings-array-row:hover .row-actions {
   opacity: 1;
 }
 .row-action {

@@ -7,6 +7,7 @@ import type {
   YnabAccountsResult,
   YnabCategoriesResult,
   YnabNewTransactionInput,
+  YnabPendingResult,
   YnabScalarConfig,
   YnabScheduledResult,
   YnabUnapprovedResult,
@@ -110,6 +111,55 @@ export async function getUnapprovedTransactions(
   return { ok: true, transactions };
 }
 
+function daysAgoIso(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+// YNAB's `type` query param only filters to "uncategorized"/"unapproved" —
+// there's no server-side filter for cleared status, so this fetches recent
+// transactions (since_date bounds the payload) and filters to
+// cleared:"uncleared" here. This is YNAB's "not yet cleared against the
+// bank/statement" status; the API doesn't expose true bank-pending
+// (not-yet-posted) transactions at all.
+export async function getPendingTransactions(config: YnabScalarConfig): Promise<YnabPendingResult> {
+  const { token, planId } = config;
+  if (!token || !planId) {
+    return { ok: false, reason: "No YNAB token configured", transactions: [] };
+  }
+
+  let res: Response;
+  try {
+    res = await ynabFetch(
+      `${API_ROOT}/plans/${planId}/transactions?since_date=${daysAgoIso(30)}`,
+      token
+    );
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB", transactions: [] };
+  }
+  if (!res.ok) {
+    return { ok: false, reason: await ynabErrorReason(res), transactions: [] };
+  }
+
+  const data = await res.json();
+  const transactions = (data.data?.transactions ?? [])
+    .filter((t: any) => t.cleared === "uncleared")
+    .map((t: any) => ({
+      id: t.id,
+      date: t.date,
+      amount: milliunitsToDollars(t.amount),
+      payeeName: t.payee_name ?? null,
+      accountId: t.account_id,
+      accountName: t.account_name,
+      categoryId: t.category_id ?? null,
+      categoryName: t.category_name ?? null,
+      memo: t.memo ?? null,
+    }));
+
+  return { ok: true, transactions };
+}
+
 function isInCurrentMonth(dateStr: string): boolean {
   const d = new Date(dateStr);
   const now = new Date();
@@ -182,6 +232,13 @@ export function approveTransaction(
   transactionId: string
 ): Promise<ActionResult> {
   return patchTransactionField(config, transactionId, { approved: true });
+}
+
+export function clearTransaction(
+  config: YnabScalarConfig,
+  transactionId: string
+): Promise<ActionResult> {
+  return patchTransactionField(config, transactionId, { cleared: "cleared" });
 }
 
 export function setTransactionCategory(

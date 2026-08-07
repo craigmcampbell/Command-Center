@@ -29,6 +29,8 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("grimoire:dailyNote:save", date, content),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
     financeReviewLog: () => ipcRenderer.invoke("grimoire:financeReviewLog"),
+    saveFinanceReviewLog: (content: string) =>
+      ipcRenderer.invoke("grimoire:saveFinanceReviewLog", content),
   },
 
   todoist: {
@@ -121,10 +123,13 @@ const api: CommandCenterApi = {
   ynab: {
     accounts: () => ipcRenderer.invoke("ynab:accounts"),
     unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
+    pendingTransactions: () => ipcRenderer.invoke("ynab:pendingTransactions"),
     scheduledTransactions: () => ipcRenderer.invoke("ynab:scheduledTransactions"),
     categories: () => ipcRenderer.invoke("ynab:categories"),
     approveTransaction: (transactionId: string) =>
       ipcRenderer.invoke("ynab:approveTransaction", transactionId),
+    clearTransaction: (transactionId: string) =>
+      ipcRenderer.invoke("ynab:clearTransaction", transactionId),
     setTransactionCategory: (transactionId: string, categoryId: string) =>
       ipcRenderer.invoke("ynab:setTransactionCategory", transactionId, categoryId),
     setTransactionMemo: (transactionId: string, memo: string) =>
@@ -133,6 +138,15 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("ynab:createTransaction", input),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
+  },
+
+  bills: {
+    list: () => ipcRenderer.invoke("bills:list"),
+    add: (label: string, dueDay: number, autopay: boolean) =>
+      ipcRenderer.invoke("bills:add", label, dueDay, autopay),
+    update: (id: number, label: string, dueDay: number, autopay: boolean) =>
+      ipcRenderer.invoke("bills:update", id, label, dueDay, autopay),
+    remove: (id: number) => ipcRenderer.invoke("bills:remove", id),
   },
 
   notes: {

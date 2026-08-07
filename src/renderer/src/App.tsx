@@ -15,15 +15,18 @@ import type {
   CalendarResult,
   YnabAccountsResult,
   YnabUnapprovedResult,
+  YnabPendingResult,
   YnabScheduledResult,
   YnabCategoriesResult,
   NoteContent,
+  BillItem,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
-import YnabScheduledWidget from "./components/YnabScheduledWidget";
+import YnabPendingWidget from "./components/YnabPendingWidget";
+import BillsWidget from "./components/BillsWidget";
 import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
@@ -114,9 +117,11 @@ export default function App() {
   const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
   const [ynabAccounts, setYnabAccounts] = useState<YnabAccountsResult | null>(null);
   const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
+  const [ynabPending, setYnabPending] = useState<YnabPendingResult | null>(null);
   const [ynabScheduled, setYnabScheduled] = useState<YnabScheduledResult | null>(null);
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
+  const [bills, setBills] = useState<BillItem[]>([]);
   const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
   const [showTimeTracking, setShowTimeTracking] = useState(true);
 
@@ -132,16 +137,23 @@ export default function App() {
   const loadYnabUnapproved = useCallback(async () => {
     setYnabUnapproved(await window.api.ynab.unapprovedTransactions());
   }, []);
+  const loadYnabPending = useCallback(async () => {
+    setYnabPending(await window.api.ynab.pendingTransactions());
+  }, []);
   const loadYnab = useCallback(async () => {
     await Promise.all([
       window.api.ynab.accounts().then(setYnabAccounts),
       loadYnabUnapproved(),
+      loadYnabPending(),
       window.api.ynab.scheduledTransactions().then(setYnabScheduled),
       window.api.ynab.categories().then(setYnabCategories),
     ]);
-  }, [loadYnabUnapproved]);
+  }, [loadYnabUnapproved, loadYnabPending]);
   const loadFinanceReviewLog = useCallback(async () => {
     setFinanceReviewLog(await window.api.grimoire.financeReviewLog());
+  }, []);
+  const loadBills = useCallback(async () => {
+    setBills(await window.api.bills.list());
   }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
@@ -190,6 +202,7 @@ export default function App() {
       loadProcessStatuses(),
       loadYnab(),
       loadFinanceReviewLog(),
+      loadBills(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -205,6 +218,7 @@ export default function App() {
     loadProcessStatuses,
     loadYnab,
     loadFinanceReviewLog,
+    loadBills,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -267,6 +281,7 @@ export default function App() {
         loadProcessStatuses(),
         loadYnab(),
         loadFinanceReviewLog(),
+        loadBills(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -461,13 +476,17 @@ export default function App() {
       {activeTab === "finances" && (
         <main className="grid grid-finances">
           <div className="slot slot-ynab-accounts">
-            <YnabAccountsWidget data={ynabAccounts} onChange={setYnabAccounts} />
+            <YnabAccountsWidget
+              accountsData={ynabAccounts}
+              scheduledData={ynabScheduled}
+              onChange={setYnabAccounts}
+            />
           </div>
-          <div className="slot slot-ynab-scheduled">
-            <YnabScheduledWidget data={ynabScheduled} />
+          <div className="slot slot-ynab-bills">
+            <BillsWidget bills={bills} onChange={setBills} />
           </div>
           <div className="slot slot-ynab-financelog">
-            <FinanceReviewLogWidget data={financeReviewLog} />
+            <FinanceReviewLogWidget data={financeReviewLog} onChange={setFinanceReviewLog} />
           </div>
           <div className="slot slot-ynab-unapproved">
             <YnabUnapprovedWidget
@@ -476,6 +495,9 @@ export default function App() {
               accounts={ynabAccounts}
               onRefresh={loadYnabUnapproved}
             />
+          </div>
+          <div className="slot slot-ynab-pending">
+            <YnabPendingWidget data={ynabPending} onRefresh={loadYnabPending} />
           </div>
         </main>
       )}

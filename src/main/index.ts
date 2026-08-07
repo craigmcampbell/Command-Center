@@ -13,6 +13,7 @@ import {
   saveDailyNote,
   listMissions,
   readFinanceReviewLog,
+  saveFinanceReviewLog,
 } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
@@ -63,13 +64,16 @@ import { getGitHubStatus } from "./services/github";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
+  getPendingTransactions as getYnabPendingTransactions,
   getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
   getCategories as getYnabCategories,
   approveTransaction as approveYnabTransaction,
+  clearTransaction as clearYnabTransaction,
   setTransactionCategory as setYnabTransactionCategory,
   setTransactionMemo as setYnabTransactionMemo,
   createTransaction as createYnabTransaction,
 } from "./services/ynab";
+import { initBills, listBills, addBill, updateBill, removeBill } from "./services/bills";
 import {
   initNotes,
   browseVault,
@@ -147,6 +151,7 @@ initHabits();
 initNotes();
 initSettings();
 initTimeTracking();
+initBills();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -225,6 +230,9 @@ ipcMain.handle("grimoire:missions", async () => {
 });
 ipcMain.handle("grimoire:financeReviewLog", async () => {
   return readFinanceReviewLog(getGrimoireSettings());
+});
+ipcMain.handle("grimoire:saveFinanceReviewLog", async (_evt, content: string) => {
+  return saveFinanceReviewLog(getGrimoireSettings(), content);
 });
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
@@ -330,12 +338,18 @@ ipcMain.handle("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
 ipcMain.handle("ynab:unapprovedTransactions", () =>
   getYnabUnapprovedTransactions(getYnabSettings())
 );
+ipcMain.handle("ynab:pendingTransactions", () =>
+  getYnabPendingTransactions(getYnabSettings())
+);
 ipcMain.handle("ynab:scheduledTransactions", () =>
   getYnabScheduledTransactions(getYnabSettings())
 );
 ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
 ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
   approveYnabTransaction(getYnabSettings(), transactionId)
+);
+ipcMain.handle("ynab:clearTransaction", (_evt, transactionId: string) =>
+  clearYnabTransaction(getYnabSettings(), transactionId)
 );
 ipcMain.handle(
   "ynab:setTransactionCategory",
@@ -352,6 +366,19 @@ ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);
   return getYnabAccounts(getYnabSettings());
 });
+
+// Bills: manually-tracked recurring bills (day-of-month due + autopay flag),
+// separate from YNAB's own scheduled transactions.
+ipcMain.handle("bills:list", () => listBills());
+ipcMain.handle("bills:add", (_evt, label: string, dueDay: number, autopay: boolean) =>
+  addBill(label, dueDay, autopay)
+);
+ipcMain.handle(
+  "bills:update",
+  (_evt, id: number, label: string, dueDay: number, autopay: boolean) =>
+    updateBill(id, label, dueDay, autopay)
+);
+ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).

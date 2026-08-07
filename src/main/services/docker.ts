@@ -3,14 +3,31 @@
 // installed), we surface that as a friendly state rather than crashing.
 
 import { exec, execFile } from "node:child_process";
+import os from "node:os";
 import type { ActionResult, DockerResult } from "../../shared/types";
+
+// GUI-launched apps (opened from Finder/Dock, or Electron in general) inherit
+// launchd's bare PATH (/usr/bin:/bin:/usr/sbin:/sbin), not the user's shell
+// PATH — so the `docker` CLI, which Docker Desktop installs under
+// /usr/local/bin or /opt/homebrew/bin (both just symlinks into Docker.app),
+// isn't found even though Docker itself is running. Widen PATH for these
+// child processes to cover the common install locations.
+const DOCKER_PATH_ADDITIONS = [
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+  `${os.homedir()}/.docker/bin`,
+];
+const ENV_WITH_DOCKER_PATH = {
+  ...process.env,
+  PATH: [...DOCKER_PATH_ADDITIONS, process.env.PATH].join(":"),
+};
 
 export function getDockerContainers(): Promise<DockerResult> {
   return new Promise((resolve) => {
     // --format '{{json .}}' prints one JSON object per line, per container.
     exec(
       "docker ps -a --format '{{json .}}'",
-      { timeout: 5000 },
+      { timeout: 5000, env: ENV_WITH_DOCKER_PATH },
       (err, stdout) => {
         if (err) {
           resolve({
@@ -54,24 +71,34 @@ export function getDockerContainers(): Promise<DockerResult> {
 // never interpolated into a shell string.
 export function startContainer(name: string): Promise<ActionResult> {
   return new Promise((resolve) => {
-    execFile("docker", ["start", name], { timeout: 15000 }, (err, _stdout, stderr) => {
-      if (err) {
-        resolve({ ok: false, reason: stderr.trim() || "Couldn't start container" });
-        return;
+    execFile(
+      "docker",
+      ["start", name],
+      { timeout: 15000, env: ENV_WITH_DOCKER_PATH },
+      (err, _stdout, stderr) => {
+        if (err) {
+          resolve({ ok: false, reason: stderr.trim() || "Couldn't start container" });
+          return;
+        }
+        resolve({ ok: true });
       }
-      resolve({ ok: true });
-    });
+    );
   });
 }
 
 export function stopContainer(name: string): Promise<ActionResult> {
   return new Promise((resolve) => {
-    execFile("docker", ["stop", name], { timeout: 15000 }, (err, _stdout, stderr) => {
-      if (err) {
-        resolve({ ok: false, reason: stderr.trim() || "Couldn't stop container" });
-        return;
+    execFile(
+      "docker",
+      ["stop", name],
+      { timeout: 15000, env: ENV_WITH_DOCKER_PATH },
+      (err, _stdout, stderr) => {
+        if (err) {
+          resolve({ ok: false, reason: stderr.trim() || "Couldn't stop container" });
+          return;
+        }
+        resolve({ ok: true });
       }
-      resolve({ ok: true });
-    });
+    );
   });
 }
