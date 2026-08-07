@@ -9,8 +9,9 @@ import { parser as baseParser, GFM } from "@lezer/markdown";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { highlightFencedCode } from "./codeHighlight";
 import { wikilinkExtension } from "./wikilinkExtension";
+import { highlightExtension } from "./highlightExtension";
 
-const parser = baseParser.configure([GFM, wikilinkExtension]);
+const parser = baseParser.configure([GFM, wikilinkExtension, highlightExtension]);
 
 export interface ResolvedWikilink {
   filePath: string;
@@ -164,6 +165,8 @@ function renderInlineNode(node: SyntaxNode, md: string, options: RenderMarkdownO
       return `<em>${renderInlineChildren(node, md, options)}</em>`;
     case "Strikethrough":
       return `<del>${renderInlineChildren(node, md, options)}</del>`;
+    case "Highlight":
+      return `<mark>${renderInlineChildren(node, md, options)}</mark>`;
     case "InlineCode": {
       const marks = children(node).filter(isMark);
       const from = marks[0] ? marks[0].to : node.from + 1;

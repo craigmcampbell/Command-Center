@@ -449,6 +449,7 @@ export interface BillItem {
   label: string;
   dueDay: number;
   autopay: boolean;
+  note: string | null;
 }
 
 // Input for manually adding a transaction — amount is dollars, signed
@@ -633,6 +634,7 @@ export interface CommandCenterApi {
     add: (label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     remove: (id: number) => Promise<BillItem[]>;
+    setNote: (id: number, note: string) => Promise<BillItem[]>;
   };
   notes: {
     vaults: () => Promise<VaultConfig[]>;

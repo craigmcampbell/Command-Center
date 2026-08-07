@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { BillItem } from "../../../shared/types";
 import Panel from "./Panel";
-import { IconCheck, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
+import { IconCheck, IconNote, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
 
 interface BillsWidgetProps {
   bills: BillItem[];
@@ -37,7 +37,6 @@ function BillFields({
         value={label}
         onChange={(e) => onLabelChange(e.target.value)}
         placeholder="Bill / account"
-        autoFocus
       />
       <input
         className="settings-input settings-input-narrow"
@@ -107,16 +106,55 @@ function EditForm({
   );
 }
 
+// onBlur-save, same pattern as YnabUnapprovedWidget's MemoCell — no
+// debounce needed for a field that's only visible while its row is
+// expanded, and it avoids writing on every keystroke.
+function BillNoteEditor({
+  item,
+  onSave,
+}: {
+  item: BillItem;
+  onSave: (note: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState(item.note ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setValue(item.note ?? ""), [item.note]);
+
+  async function handleBlur() {
+    const current = item.note ?? "";
+    if (value === current) return;
+    setSaving(true);
+    await onSave(value);
+    setSaving(false);
+  }
+
+  return (
+    <textarea
+      className="bill-note-textarea"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={handleBlur}
+      placeholder="Add a note…"
+      disabled={saving}
+      rows={2}
+    />
+  );
+}
+
 function BillRow({
   item,
   onSave,
+  onSaveNote,
   onDelete,
 }: {
   item: BillItem;
   onSave: (label: string, dueDay: number, autopay: boolean) => void;
+  onSaveNote: (note: string) => Promise<void>;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
 
   if (editing) {
     return (
@@ -134,21 +172,35 @@ function BillRow({
   }
 
   return (
-    <div className="settings-array-row">
-      <div className="settings-array-row-main">
-        <span className="settings-array-row-label">{ordinal(item.dueDay)}</span>
-        <span className="settings-array-row-sub">{item.label}</span>
+    <div className="bill-item">
+      <div className="settings-array-row">
+        <div className="settings-array-row-main">
+          <span className="bill-row-label">{ordinal(item.dueDay)}</span>
+          <span className="bill-row-sub">{item.label}</span>
+        </div>
+        <span className={`pip ${item.autopay ? "live" : ""}`}></span>
+        <span className="tag">{item.autopay ? "Autopay" : "Manual"}</span>
+        <button
+          className={`desc-toggle ${item.note ? "has-note" : ""}`}
+          onClick={() => setNoteOpen((v) => !v)}
+          title={noteOpen ? "Hide note" : "Show note"}
+        >
+          <IconNote />
+        </button>
+        <span className="row-actions">
+          <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
+            <IconPencil />
+          </button>
+          <button className="row-action danger" onClick={onDelete} aria-label="Delete">
+            <IconTrash />
+          </button>
+        </span>
       </div>
-      <span className={`pip ${item.autopay ? "live" : ""}`}></span>
-      <span className="tag">{item.autopay ? "Autopay" : "Manual"}</span>
-      <span className="row-actions">
-        <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
-          <IconPencil />
-        </button>
-        <button className="row-action danger" onClick={onDelete} aria-label="Delete">
-          <IconTrash />
-        </button>
-      </span>
+      {noteOpen && (
+        <div className="bill-expand">
+          <BillNoteEditor item={item} onSave={onSaveNote} />
+        </div>
+      )}
     </div>
   );
 }
@@ -195,6 +247,9 @@ export default function BillsWidget({ bills, onChange }: BillsWidgetProps) {
   async function handleDelete(id: number) {
     onChange(await window.api.bills.remove(id));
   }
+  async function handleSaveNote(id: number, note: string) {
+    onChange(await window.api.bills.setNote(id, note));
+  }
 
   return (
     <Panel title="Bills">
@@ -206,6 +261,7 @@ export default function BillsWidget({ bills, onChange }: BillsWidgetProps) {
             key={item.id}
             item={item}
             onSave={(label, dueDay, autopay) => handleSave(item.id, label, dueDay, autopay)}
+            onSaveNote={(note) => handleSaveNote(item.id, note)}
             onDelete={() => handleDelete(item.id)}
           />
         ))

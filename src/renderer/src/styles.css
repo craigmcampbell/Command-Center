@@ -16,6 +16,7 @@
   --dead: #4d5568;
   --alert: #d1795f;
   --pending: #d1a05f;
+  --pending-glow: rgba(209, 160, 95, 0.22);
   --radius: 12px;
   --mono: "SF Mono", "JetBrains Mono", "Menlo", monospace;
   --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
@@ -2326,6 +2327,12 @@ body {
 .note a:hover {
   color: var(--live);
 }
+.note mark {
+  background: var(--pending-glow);
+  color: var(--ink);
+  padding: 0 2px;
+  border-radius: 3px;
+}
 .note .wikilink {
   color: var(--live);
   text-decoration: none;
@@ -2863,6 +2870,51 @@ body {
 }
 .settings-array-form-actions button {
   width: auto;
+}
+
+/* Bills widget — row text matches YnabAccountsWidget's account-name styling
+   (.ynab-table's plain td: 12px, --ink, sans) rather than the smaller/dimmer
+   .settings-array-row-label/-sub used on Settings' array rows. */
+.bill-row-label {
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--sans);
+  white-space: nowrap;
+}
+.bill-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--sans);
+}
+.desc-toggle.has-note {
+  opacity: 1;
+  color: var(--accent);
+}
+.bill-expand {
+  margin: 2px 0 8px;
+}
+.bill-note-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.bill-note-textarea::placeholder {
+  color: var(--ink-dim);
+}
+.bill-note-textarea:focus {
+  outline: none;
 }
 
 /* GitHub widget: review-requested rows reuse .row/.name.link/.tag as-is;

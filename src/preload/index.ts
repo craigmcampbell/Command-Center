@@ -147,6 +147,7 @@ const api: CommandCenterApi = {
     update: (id: number, label: string, dueDay: number, autopay: boolean) =>
       ipcRenderer.invoke("bills:update", id, label, dueDay, autopay),
     remove: (id: number) => ipcRenderer.invoke("bills:remove", id),
+    setNote: (id: number, note: string) => ipcRenderer.invoke("bills:setNote", id, note),
   },
 
   notes: {

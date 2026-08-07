@@ -73,7 +73,14 @@ import {
   setTransactionMemo as setYnabTransactionMemo,
   createTransaction as createYnabTransaction,
 } from "./services/ynab";
-import { initBills, listBills, addBill, updateBill, removeBill } from "./services/bills";
+import {
+  initBills,
+  listBills,
+  addBill,
+  updateBill,
+  removeBill,
+  setBillNote,
+} from "./services/bills";
 import {
   initNotes,
   browseVault,
@@ -379,6 +386,7 @@ ipcMain.handle(
     updateBill(id, label, dueDay, autopay)
 );
 ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
+ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(id, note));
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).

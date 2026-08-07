@@ -19,6 +19,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
 import { buildEditorCodeLanguageDescriptions } from "./codeLanguages";
 import { wikilinkExtension } from "./wikilinkExtension";
+import { highlightExtension, highlightTag } from "./highlightExtension";
+import { liveMarkdownPreview } from "./liveMarkdownPreview";
 
 // Bullets, ordered markers, and tasks — deliberately matches exactly what
 // lib/markdown.ts's preview renderer recognizes, so editor behavior and
@@ -147,10 +149,10 @@ const toggleItalic = (view: EditorView): boolean => wrapSelection(view, "_");
 const toggleStrikethrough = (view: EditorView): boolean => wrapSelection(view, "~~");
 
 const markdownHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, fontSize: "1.4em", fontWeight: "700", color: "var(--accent)" },
-  { tag: t.heading2, fontSize: "1.25em", fontWeight: "700", color: "var(--accent)" },
-  { tag: t.heading3, fontSize: "1.12em", fontWeight: "600", color: "var(--accent)" },
-  { tag: [t.heading4, t.heading5, t.heading6], fontWeight: "600", color: "var(--accent)" },
+  // Heading size/weight/color is handled per-line by liveMarkdownPreview's
+  // cm-heading-N classes instead (exact parity with lib/markdown.ts's .note
+  // h1-h6 preview sizes) — a tag-based rule here would stack with that
+  // line-level font-size rather than replace it.
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strikethrough, textDecoration: "line-through", color: "var(--ink-dim)" },
@@ -158,6 +160,12 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.monospace, fontFamily: "var(--mono)", color: "var(--live)" },
   { tag: t.quote, color: "var(--ink-dim)", fontStyle: "italic" },
   { tag: t.list, color: "var(--ink-dim)" },
+  {
+    tag: highlightTag,
+    backgroundColor: "var(--pending-glow)",
+    color: "var(--ink)",
+    borderRadius: "3px",
+  },
   { tag: t.processingInstruction, color: "var(--ink-dim)" },
   { tag: t.contentSeparator, color: "var(--ink-dim)" },
   // Generic code tokens — only exercised inside fenced code blocks, once
@@ -238,16 +246,22 @@ export function buildMarkdownEditorExtensions(
     // codeLanguages — the same curated set lib/codeHighlight.ts uses for the
     // static preview, so fenced code blocks get real syntax coloring live in
     // the editor too, not just in preview.
-    // extensions: wikilinkExtension — the same [[Target]]/![[Target]] grammar
-    // lib/markdown.ts's preview uses, so the editor highlights wikilinks too.
+    // extensions: wikilinkExtension/highlightExtension — the same
+    // [[Target]]/![[Target]] and ==highlight== grammars lib/markdown.ts's
+    // preview uses, so the editor recognizes (and, for ==, live-preview
+    // hides the marks of) exactly what the preview renders specially.
     markdown({
       addKeymap: false,
       base: markdownLanguage,
       codeLanguages: buildEditorCodeLanguageDescriptions(),
-      extensions: [wikilinkExtension],
+      extensions: [wikilinkExtension, highlightExtension],
     }),
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
+    // Obsidian/Typora-style live preview: hides **/_/==/# marks except on
+    // the line/range being edited, sizes headings, and turns task
+    // checkboxes into real clickable inputs. See liveMarkdownPreview.ts.
+    liveMarkdownPreview(),
     EditorView.lineWrapping,
     placeholder(placeholderText ?? ""),
     EditorView.updateListener.of((update) => {
