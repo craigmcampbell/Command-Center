@@ -145,6 +145,8 @@ import {
   updateProcess,
   removeProcess,
   reorderProcesses,
+  renameTab,
+  reorderTabs,
 } from "./services/settings";
 import type {
   GoogleCalendarConfig,
@@ -255,8 +257,8 @@ ipcMain.handle("todoist:tasks", async () => {
 ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
   return completeTask(getTodoistSettings(), taskId);
 });
-ipcMain.handle("todoist:create", async (_evt, content: string) => {
-  return createTask(getTodoistSettings(), content);
+ipcMain.handle("todoist:create", async (_evt, content: string, projectId?: string) => {
+  return createTask(getTodoistSettings(), content, projectId);
 });
 ipcMain.handle("todoist:setDueDate", async (_evt, taskId: string, date: string | null) => {
   return setTaskDueDate(getTodoistSettings(), taskId, date);
@@ -556,6 +558,9 @@ ipcMain.handle("settings:processes:remove", (_evt, id: string) => removeProcess(
 ipcMain.handle("settings:processes:reorder", (_evt, orderedIds: string[]) =>
   reorderProcesses(orderedIds)
 );
+
+ipcMain.handle("settings:tabs:rename", (_evt, id: string, label: string) => renameTab(id, label));
+ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderTabs(orderedIds));
 
 app.whenReady().then(() => {
   setDockIcon();

@@ -210,7 +210,8 @@ export async function completeTask(
 
 export async function createTask(
   { apiToken }: AppConfig["todoist"],
-  content: string
+  content: string,
+  projectId?: string
 ): Promise<ActionResult> {
   if (!apiToken) {
     return { ok: false, reason: "No Todoist API token configured" };
@@ -225,7 +226,12 @@ export async function createTask(
       },
       // Default new tasks to "today" so they actually show up in this
       // due/overdue widget instead of vanishing into the inbox with no date.
-      body: JSON.stringify({ content, due_string: "today" }),
+      // Omitting project_id leaves Todoist's own default (Inbox) in place.
+      body: JSON.stringify({
+        content,
+        due_string: "today",
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
     });
     if (!res.ok) {
       return {

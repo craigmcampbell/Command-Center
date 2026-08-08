@@ -89,6 +89,16 @@ export interface ProcessStatus {
   logs: string[];
 }
 
+// Display order + label for one of the app's fixed top-level tabs (Home,
+// Development, ...). `id` matches the renderer's TabId union — this table
+// only ever reorders/relabels the existing fixed set, it doesn't add or
+// remove tabs, so there's no add/remove CRUD to go with list/rename/reorder.
+export interface TabConfig {
+  id: string;
+  label: string;
+  sortOrder: number;
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
@@ -100,6 +110,7 @@ export interface AppConfig {
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
+  tabs?: TabConfig[];
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -559,7 +570,7 @@ export interface CommandCenterApi {
   todoist: {
     tasks: () => Promise<TodoistResult>;
     complete: (taskId: string) => Promise<ActionResult>;
-    create: (content: string) => Promise<ActionResult>;
+    create: (content: string, projectId?: string) => Promise<ActionResult>;
     // date is an ISO "YYYY-MM-DD" to set it, or null to clear it entirely.
     setDueDate: (taskId: string, date: string | null) => Promise<ActionResult>;
     move: (taskId: string, projectId: string) => Promise<ActionResult>;
@@ -730,6 +741,10 @@ export interface CommandCenterApi {
       update: (id: string, proc: Omit<ProcessConfig, "id" | "sortOrder">) => Promise<ProcessConfig[]>;
       remove: (id: string) => Promise<ProcessConfig[]>;
       reorder: (orderedIds: string[]) => Promise<ProcessConfig[]>;
+    };
+    tabs: {
+      rename: (id: string, label: string) => Promise<TabConfig[]>;
+      reorder: (orderedIds: string[]) => Promise<TabConfig[]>;
     };
   };
 }

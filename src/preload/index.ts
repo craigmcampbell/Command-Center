@@ -36,7 +36,8 @@ const api: CommandCenterApi = {
   todoist: {
     tasks: () => ipcRenderer.invoke("todoist:tasks"),
     complete: (taskId: string) => ipcRenderer.invoke("todoist:complete", taskId),
-    create: (content: string) => ipcRenderer.invoke("todoist:create", content),
+    create: (content: string, projectId?: string) =>
+      ipcRenderer.invoke("todoist:create", content, projectId),
     setDueDate: (taskId: string, date: string | null) =>
       ipcRenderer.invoke("todoist:setDueDate", taskId, date),
     move: (taskId: string, projectId: string) => ipcRenderer.invoke("todoist:move", taskId, projectId),
@@ -242,6 +243,10 @@ const api: CommandCenterApi = {
       remove: (id: string) => ipcRenderer.invoke("settings:processes:remove", id),
       reorder: (orderedIds: string[]) =>
         ipcRenderer.invoke("settings:processes:reorder", orderedIds),
+    },
+    tabs: {
+      rename: (id: string, label: string) => ipcRenderer.invoke("settings:tabs:rename", id, label),
+      reorder: (orderedIds: string[]) => ipcRenderer.invoke("settings:tabs:reorder", orderedIds),
     },
   },
 };

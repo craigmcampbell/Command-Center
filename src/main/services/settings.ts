@@ -22,7 +22,23 @@ import type {
   VaultConfig,
   ProcessConfig,
   YnabScalarConfig,
+  TabConfig,
 } from "../../shared/types";
+
+// The renderer's fixed TabId set + its original default labels/order — kept
+// here only as the one-time seed for the `tabs` table (see ensureTabDefaults
+// below). If a new tab is ever added to App.tsx's TabId union, add it here
+// too so it gets seeded a row (and therefore shows up in the tab bar) on the
+// next boot instead of silently missing from the DB-backed order.
+const DEFAULT_TABS: { id: string; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "development", label: "Development" },
+  { id: "reader", label: "Reader" },
+  { id: "scratchpad", label: "Scratchpad" },
+  { id: "habits", label: "Habits" },
+  { id: "notes", label: "Notes" },
+  { id: "finances", label: "Finances" },
+];
 
 export function initSettings(): void {
   const db = getDatabase();
@@ -55,6 +71,32 @@ export function initSettings(): void {
     open_delay_ms INTEGER,
     sort_order INTEGER NOT NULL
   )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS tabs (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    sort_order INTEGER NOT NULL
+  )`);
+  ensureTabDefaults();
+}
+
+// Inserts a row for any DEFAULT_TABS id not already in the table — runs
+// every boot (not just on an empty table) so a tab added to the codebase
+// later gets appended to existing users' saved order instead of vanishing.
+function ensureTabDefaults(): void {
+  const db = getDatabase();
+  const existingIds = new Set(
+    (db.prepare(`SELECT id FROM tabs`).all() as { id: string }[]).map((r) => r.id)
+  );
+  const missing = DEFAULT_TABS.filter((t) => !existingIds.has(t.id));
+  if (missing.length === 0) return;
+  const { maxOrder } = db.prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM tabs`).get() as {
+    maxOrder: number;
+  };
+  const insert = db.prepare(`INSERT INTO tabs (id, label, sort_order) VALUES (?, ?, ?)`);
+  const insertAll = db.transaction((rows: { id: string; label: string }[]) => {
+    rows.forEach((row, i) => insert.run(row.id, row.label, maxOrder + 1 + i));
+  });
+  insertAll(missing);
 }
 
 // ---- generic scalar helpers (settings table) ----
@@ -369,6 +411,33 @@ export function reorderProcesses(orderedIds: string[]): ProcessConfig[] {
   return processRowsToItems();
 }
 
+// ---- tabs ----
+
+function tabRowsToItems(): TabConfig[] {
+  return getDatabase()
+    .prepare(`SELECT id, label, sort_order as sortOrder FROM tabs ORDER BY sort_order ASC`)
+    .all() as TabConfig[];
+}
+
+export function listTabSettings(): TabConfig[] {
+  return tabRowsToItems();
+}
+
+export function renameTab(id: string, label: string): TabConfig[] {
+  getDatabase().prepare(`UPDATE tabs SET label = ? WHERE id = ?`).run(label, id);
+  return tabRowsToItems();
+}
+
+export function reorderTabs(orderedIds: string[]): TabConfig[] {
+  const db = getDatabase();
+  const update = db.prepare(`UPDATE tabs SET sort_order = ? WHERE id = ?`);
+  const updateAll = db.transaction((ids: string[]) => {
+    ids.forEach((id, i) => update.run(i, id));
+  });
+  updateAll(orderedIds);
+  return tabRowsToItems();
+}
+
 // ---- assembled view ----
 
 export function getAllSettings(): AppConfig {
@@ -385,6 +454,7 @@ export function getAllSettings(): AppConfig {
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
+    tabs: listTabSettings(),
   };
 }
 

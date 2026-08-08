@@ -44,10 +44,32 @@ function dueLabel(dateStr: string | null, overdue: boolean): string {
   return dateStr;
 }
 
-function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
+// Defaults to the Inbox project when one exists among the loaded projects;
+// falls back to the first project (still explicit, just not literally named
+// "Inbox") if a workspace has renamed or lacks one.
+function defaultProjectId(projects: TodoistProject[]): string {
+  const inbox = projects.find((p) => p.name.toLowerCase() === "inbox");
+  return inbox?.id ?? projects[0]?.id ?? "";
+}
+
+function AddTaskForm({
+  onRefresh,
+  projects,
+}: {
+  onRefresh: () => Promise<void>;
+  projects: TodoistProject[];
+}) {
   const [text, setText] = useState("");
+  const [projectId, setProjectId] = useState(() => defaultProjectId(projects));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(false);
+
+  // `projects` arrives async (widget mounts before the first Todoist fetch
+  // resolves), so the Inbox default above often has nothing to pick from yet
+  // — fill it in once the list shows up.
+  useEffect(() => {
+    if (!projectId && projects.length > 0) setProjectId(defaultProjectId(projects));
+  }, [projects, projectId]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -56,7 +78,7 @@ function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
 
     setSubmitting(true);
     setError(false);
-    const res = await window.api.todoist.create(content);
+    const res = await window.api.todoist.create(content, projectId || undefined);
     setSubmitting(false);
 
     if (res.ok) {
@@ -77,6 +99,21 @@ function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
         disabled={submitting}
         onChange={(e) => setText(e.target.value)}
       />
+      {projects.length > 0 && (
+        <select
+          className="todoist-add-project"
+          value={projectId}
+          disabled={submitting}
+          onChange={(e) => setProjectId(e.target.value)}
+          title="Project"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      )}
       <button type="submit" disabled={!text.trim() || submitting} aria-label="Add task">
         <IconPlus />
       </button>
@@ -582,7 +619,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
         </div>
       }
     >
-      <AddTaskForm onRefresh={onRefresh} />
+      <AddTaskForm onRefresh={onRefresh} projects={data?.ok ? data.projects : []} />
       {body}
       {reportOpen && <TimeReportModal onClose={() => setReportOpen(false)} />}
     </Panel>

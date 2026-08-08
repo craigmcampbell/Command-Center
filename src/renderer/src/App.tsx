@@ -20,6 +20,7 @@ import type {
   YnabCategoriesResult,
   NoteContent,
   BillItem,
+  TabConfig,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
@@ -39,6 +40,7 @@ import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
 import NotesWidget from "./components/NotesWidget";
+import TabBar from "./components/TabBar";
 import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./components/SettingsPage";
 import { IconGear, IconRefresh } from "./components/icons";
@@ -54,14 +56,17 @@ type TabId =
   | "notes"
   | "finances";
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: "home", label: "Home" },
-  { id: "development", label: "Development" },
-  { id: "reader", label: "Reader" },
-  { id: "scratchpad", label: "Scratchpad" },
-  { id: "habits", label: "Habits" },
-  { id: "notes", label: "Notes" },
-  { id: "finances", label: "Finances" },
+// Fallback order/labels for the very first render, before settings.getAll()
+// resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
+// the source of truth for what gets seeded — keep these in sync with it).
+const DEFAULT_TABS: TabConfig[] = [
+  { id: "home", label: "Home", sortOrder: 0 },
+  { id: "development", label: "Development", sortOrder: 1 },
+  { id: "reader", label: "Reader", sortOrder: 2 },
+  { id: "scratchpad", label: "Scratchpad", sortOrder: 3 },
+  { id: "habits", label: "Habits", sortOrder: 4 },
+  { id: "notes", label: "Notes", sortOrder: 5 },
+  { id: "finances", label: "Finances", sortOrder: 6 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -98,6 +103,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("home");
+  const [tabOrder, setTabOrder] = useState<TabConfig[]>(DEFAULT_TABS);
   const [dailyDate, setDailyDate] = useState<string | null>(null);
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [calendarDate, setCalendarDate] = useState<string | null>(null);
@@ -226,6 +232,14 @@ export default function App() {
     setActiveTab("scratchpad");
   }, []);
 
+  const renameTab = useCallback(async (id: string, label: string) => {
+    setTabOrder(await window.api.settings.tabs.rename(id, label));
+  }, []);
+
+  const reorderTabs = useCallback(async (orderedIds: string[]) => {
+    setTabOrder(await window.api.settings.tabs.reorder(orderedIds));
+  }, []);
+
   // ---- command palette: global ⌘K/Ctrl+K toggle, works from any tab ----
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -240,7 +254,7 @@ export default function App() {
   }, []);
 
   const paletteContext: PaletteContext = {
-    tabs: TABS,
+    tabs: tabOrder,
     onNavigateTab: (id) => setActiveTab(id as TabId),
     claudeProjects,
     localApps,
@@ -266,6 +280,7 @@ export default function App() {
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
+      if (cfg.tabs && cfg.tabs.length > 0) setTabOrder(cfg.tabs);
       await Promise.all([
         loadDocker(),
         loadDaily(),
@@ -359,17 +374,13 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            className={`tab ${activeTab === tab.id ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+      <TabBar
+        tabs={tabOrder}
+        activeId={activeTab}
+        onSelect={(id) => setActiveTab(id as TabId)}
+        onReorder={reorderTabs}
+        onRename={renameTab}
+      />
 
       {activeTab === "home" && (
         <main className="grid grid-home">
