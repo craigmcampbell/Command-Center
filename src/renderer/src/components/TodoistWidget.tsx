@@ -1,24 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { createPortal } from "react-dom";
 import type {
   ActiveTimer,
   TaskTimeSummary,
   TimeEntry,
+  TodoistProject,
   TodoistTask,
   TodoistResult,
 } from "../../../shared/types";
 import Panel from "./Panel";
 import TimeReportModal from "./TimeReportModal";
 import { formatDuration, todayLocalDateString } from "../lib/time";
+import { renderMarkdown } from "../lib/markdown";
+import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import {
   IconCheck,
   IconClock,
   IconExternal,
+  IconFolder,
   IconNote,
   IconPlay,
   IconPlus,
   IconStop,
   IconTrash,
+  IconX,
 } from "./icons";
 
 interface TodoistWidgetProps {
@@ -40,10 +46,32 @@ function dueLabel(dateStr: string | null, overdue: boolean): string {
   return dateStr;
 }
 
-function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
+// Defaults to the Inbox project when one exists among the loaded projects;
+// falls back to the first project (still explicit, just not literally named
+// "Inbox") if a workspace has renamed or lacks one.
+function defaultProjectId(projects: TodoistProject[]): string {
+  const inbox = projects.find((p) => p.name.toLowerCase() === "inbox");
+  return inbox?.id ?? projects[0]?.id ?? "";
+}
+
+function AddTaskForm({
+  onRefresh,
+  projects,
+}: {
+  onRefresh: () => Promise<void>;
+  projects: TodoistProject[];
+}) {
   const [text, setText] = useState("");
+  const [projectId, setProjectId] = useState(() => defaultProjectId(projects));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(false);
+
+  // `projects` arrives async (widget mounts before the first Todoist fetch
+  // resolves), so the Inbox default above often has nothing to pick from yet
+  // — fill it in once the list shows up.
+  useEffect(() => {
+    if (!projectId && projects.length > 0) setProjectId(defaultProjectId(projects));
+  }, [projects, projectId]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -52,7 +80,7 @@ function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
 
     setSubmitting(true);
     setError(false);
-    const res = await window.api.todoist.create(content);
+    const res = await window.api.todoist.create(content, projectId || undefined);
     setSubmitting(false);
 
     if (res.ok) {
@@ -73,6 +101,21 @@ function AddTaskForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
         disabled={submitting}
         onChange={(e) => setText(e.target.value)}
       />
+      {projects.length > 0 && (
+        <select
+          className="todoist-add-project"
+          value={projectId}
+          disabled={submitting}
+          onChange={(e) => setProjectId(e.target.value)}
+          title="Project"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      )}
       <button type="submit" disabled={!text.trim() || submitting} aria-label="Add task">
         <IconPlus />
       </button>
@@ -175,8 +218,178 @@ function TimeEntriesPanel({
   );
 }
 
+// The due-pill itself doubles as the trigger — click it to swap in a native
+// date input plus a clear button. Each change commits immediately (no
+// separate save step), same as YnabUnapprovedWidget's CategoryPicker.
+function DueDateControl({
+  task,
+  pillVariant,
+  onRefresh,
+}: {
+  task: TodoistTask;
+  pillVariant: string;
+  onRefresh: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function commit(date: string | null) {
+    setSaving(true);
+    setEditing(false);
+    const res = await window.api.todoist.setDueDate(task.id, date);
+    if (res.ok) await onRefresh();
+    else setSaving(false);
+  }
+
+  if (editing) {
+    return (
+      <span className="due-edit">
+        <input
+          type="date"
+          defaultValue={task.due ?? ""}
+          autoFocus
+          disabled={saving}
+          onChange={(e) => e.target.value && commit(e.target.value)}
+          onBlur={() => setEditing(false)}
+        />
+        <button
+          type="button"
+          className="due-edit-clear"
+          // Without this, the input's onBlur (which closes the editor) fires
+          // before this button's onClick — the button unmounts mid-click and
+          // the clear never happens. preventDefault on mousedown keeps focus
+          // on the input so blur doesn't fire first.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => commit(null)}
+          disabled={saving}
+          title="Clear due date"
+        >
+          <IconX size={10} />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`due-pill due-pill-button ${pillVariant}`}
+      onClick={() => setEditing(true)}
+      title="Change due date"
+    >
+      {dueLabel(task.due, task.overdue)}
+    </button>
+  );
+}
+
+// Portal dropdown for moving a task to a different Todoist project — same
+// click-outside/scroll-to-close mechanics as YnabUnapprovedWidget's
+// CategoryPicker, reusing its .ynab-category-* dropdown styling since the
+// shape (searchable flat list in a floating panel) is identical.
+function ProjectMoveControl({
+  task,
+  projects,
+  onRefresh,
+}: {
+  task: TodoistTask;
+  projects: TodoistProject[];
+  onRefresh: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  function openDropdown() {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setRect({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 200) });
+    setQuery("");
+    setOpen(true);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (btnRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    function handleScroll() {
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [open]);
+
+  async function handleSelect(projectId: string) {
+    setOpen(false);
+    if (projectId === task.projectId) return;
+    setSaving(true);
+    const res = await window.api.todoist.move(task.id, projectId);
+    if (res.ok) await onRefresh();
+    else setSaving(false);
+  }
+
+  const q = query.trim().toLowerCase();
+  const filtered = q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects;
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="desc-toggle"
+        onClick={openDropdown}
+        disabled={saving || projects.length === 0}
+        title="Move to project"
+      >
+        <IconFolder />
+      </button>
+      {open &&
+        rect &&
+        createPortal(
+          <div
+            className="ynab-category-dropdown"
+            ref={dropdownRef}
+            style={{ top: rect.top, left: rect.left, width: rect.width }}
+          >
+            <input
+              className="ynab-category-input"
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search projects…"
+            />
+            {filtered.length === 0 ? (
+              <div className="ynab-category-empty">No matches</div>
+            ) : (
+              filtered.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`ynab-category-option ${p.id === task.projectId ? "selected" : ""}`}
+                  onClick={() => handleSelect(p.id)}
+                >
+                  {p.name}
+                </button>
+              ))
+            )}
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
 function TodoistRow({
   task,
+  projects,
   onRefresh,
   showTimeTracking,
   summarySeconds,
@@ -186,6 +399,7 @@ function TodoistRow({
   onTimeChanged,
 }: {
   task: TodoistTask;
+  projects: TodoistProject[];
   onRefresh: () => Promise<void>;
   showTimeTracking: boolean;
   summarySeconds: number;
@@ -210,6 +424,7 @@ function TodoistRow({
   const today = todayLocalDateString();
   const pillVariant = task.overdue ? "alert" : task.due === today ? "today" : "future";
   const hasExpandable = task.description || task.subtasks.length > 0 || showTimeTracking;
+  const hasNoteContent = !!task.description || summarySeconds > 0;
   const totalSeconds = summarySeconds + (isRunning ? liveElapsedSeconds : 0);
   const deadlineLabel = task.deadline
     ? new Date(`${task.deadline}T00:00:00`).toLocaleDateString(undefined, {
@@ -253,13 +468,14 @@ function TodoistRow({
         )}
         {hasExpandable && (
           <button
-            className="desc-toggle"
+            className={`desc-toggle ${hasNoteContent ? "has-note" : ""}`}
             onClick={() => setExpanded((v) => !v)}
             title={expanded ? "Hide details" : "Show details"}
           >
             <IconNote />
           </button>
         )}
+        <ProjectMoveControl task={task} projects={projects} onRefresh={onRefresh} />
         <span className="due-meta">
           {task.labels.length > 0 && (
             <span className="tag-chips-inline">
@@ -275,12 +491,18 @@ function TodoistRow({
               Deadline {deadlineLabel}
             </span>
           )}
-          <span className={`due-pill ${pillVariant}`}>{dueLabel(task.due, task.overdue)}</span>
+          <DueDateControl task={task} pillVariant={pillVariant} onRefresh={onRefresh} />
         </span>
       </div>
       {expanded && (
         <div className="todoist-expand">
-          {task.description && <div className="expand-note">{task.description}</div>}
+          {task.description && (
+            <div
+              className="expand-note note"
+              onClick={(e) => handleMarkdownPreviewClick(e, {})}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(task.description) }}
+            />
+          )}
           {task.subtasks.length > 0 && (
             <ul className="todoist-subtasks">
               {task.subtasks.map((s) => (
@@ -372,6 +594,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
           <TodoistRow
             key={t.id}
             task={t}
+            projects={data.projects}
             onRefresh={onRefresh}
             showTimeTracking={showTimeTracking}
             summarySeconds={summaries[t.id]?.totalSeconds ?? 0}
@@ -404,7 +627,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
         </div>
       }
     >
-      <AddTaskForm onRefresh={onRefresh} />
+      <AddTaskForm onRefresh={onRefresh} projects={data?.ok ? data.projects : []} />
       {body}
       {reportOpen && <TimeReportModal onClose={() => setReportOpen(false)} />}
     </Panel>

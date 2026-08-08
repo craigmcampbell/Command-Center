@@ -29,12 +29,18 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("grimoire:dailyNote:save", date, content),
     missions: () => ipcRenderer.invoke("grimoire:missions"),
     financeReviewLog: () => ipcRenderer.invoke("grimoire:financeReviewLog"),
+    saveFinanceReviewLog: (content: string) =>
+      ipcRenderer.invoke("grimoire:saveFinanceReviewLog", content),
   },
 
   todoist: {
     tasks: () => ipcRenderer.invoke("todoist:tasks"),
     complete: (taskId: string) => ipcRenderer.invoke("todoist:complete", taskId),
-    create: (content: string) => ipcRenderer.invoke("todoist:create", content),
+    create: (content: string, projectId?: string) =>
+      ipcRenderer.invoke("todoist:create", content, projectId),
+    setDueDate: (taskId: string, date: string | null) =>
+      ipcRenderer.invoke("todoist:setDueDate", taskId, date),
+    move: (taskId: string, projectId: string) => ipcRenderer.invoke("todoist:move", taskId, projectId),
   },
 
   timeTracking: {
@@ -125,6 +131,8 @@ const api: CommandCenterApi = {
     categories: () => ipcRenderer.invoke("ynab:categories"),
     approveTransaction: (transactionId: string) =>
       ipcRenderer.invoke("ynab:approveTransaction", transactionId),
+    clearTransaction: (transactionId: string) =>
+      ipcRenderer.invoke("ynab:clearTransaction", transactionId),
     setTransactionCategory: (transactionId: string, categoryId: string) =>
       ipcRenderer.invoke("ynab:setTransactionCategory", transactionId, categoryId),
     setTransactionMemo: (transactionId: string, memo: string) =>
@@ -133,6 +141,16 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("ynab:createTransaction", input),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
+  },
+
+  bills: {
+    list: () => ipcRenderer.invoke("bills:list"),
+    add: (label: string, dueDay: number, autopay: boolean) =>
+      ipcRenderer.invoke("bills:add", label, dueDay, autopay),
+    update: (id: number, label: string, dueDay: number, autopay: boolean) =>
+      ipcRenderer.invoke("bills:update", id, label, dueDay, autopay),
+    remove: (id: number) => ipcRenderer.invoke("bills:remove", id),
+    setNote: (id: number, note: string) => ipcRenderer.invoke("bills:setNote", id, note),
   },
 
   notes: {
@@ -224,6 +242,10 @@ const api: CommandCenterApi = {
       remove: (id: string) => ipcRenderer.invoke("settings:processes:remove", id),
       reorder: (orderedIds: string[]) =>
         ipcRenderer.invoke("settings:processes:reorder", orderedIds),
+    },
+    tabs: {
+      rename: (id: string, label: string) => ipcRenderer.invoke("settings:tabs:rename", id, label),
+      reorder: (orderedIds: string[]) => ipcRenderer.invoke("settings:tabs:reorder", orderedIds),
     },
   },
 };

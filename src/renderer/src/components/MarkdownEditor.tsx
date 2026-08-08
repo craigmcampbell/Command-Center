@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { buildMarkdownEditorExtensions } from "../lib/markdownEditor";
+import { foldFrontmatterByDefault } from "../lib/frontmatterFold";
 
 interface MarkdownEditorProps {
   value: string;
@@ -24,11 +25,12 @@ export default function MarkdownEditor({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const initialState = EditorState.create({
+      doc: value,
+      extensions: buildMarkdownEditorExtensions((text) => onChangeRef.current(text), placeholder),
+    });
     const view = new EditorView({
-      state: EditorState.create({
-        doc: value,
-        extensions: buildMarkdownEditorExtensions((text) => onChangeRef.current(text), placeholder),
-      }),
+      state: foldFrontmatterByDefault(initialState),
       parent: containerRef.current,
     });
     viewRef.current = view;

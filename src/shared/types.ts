@@ -89,6 +89,16 @@ export interface ProcessStatus {
   logs: string[];
 }
 
+// Display order + label for one of the app's fixed top-level tabs (Home,
+// Development, ...). `id` matches the renderer's TabId union — this table
+// only ever reorders/relabels the existing fixed set, it doesn't add or
+// remove tabs, so there's no add/remove CRUD to go with list/rename/reorder.
+export interface TabConfig {
+  id: string;
+  label: string;
+  sortOrder: number;
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: { refreshSeconds: number };
@@ -100,6 +110,7 @@ export interface AppConfig {
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
+  tabs?: TabConfig[];
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -159,15 +170,22 @@ export interface TodoistTask {
   overdue: boolean;
   deadline: string | null;
   project: string;
+  projectId: string;
   labels: string[];
   subtasks: TodoistSubtask[];
   parentName: string | null;
+}
+
+export interface TodoistProject {
+  id: string;
+  name: string;
 }
 
 export interface TodoistResult {
   ok: boolean;
   reason?: string;
   tasks: TodoistTask[];
+  projects: TodoistProject[];
 }
 
 // A completed span of tracked time against one Todoist task. task_content/
@@ -431,6 +449,18 @@ export interface YnabCategoriesResult {
   categories: YnabCategory[];
 }
 
+// A manually-tracked recurring bill — independent of YNAB's own scheduled
+// transactions, since not everything recurring is set up as a YNAB
+// schedule. dueDay is a plain day-of-month (1-31), not a real date: these
+// recur every month with no fixed start/end.
+export interface BillItem {
+  id: number;
+  label: string;
+  dueDay: number;
+  autopay: boolean;
+  note: string | null;
+}
+
 // Input for manually adding a transaction — amount is dollars, signed
 // (negative = outflow), converted to milliunits server-side.
 export interface YnabNewTransactionInput {
@@ -526,11 +556,15 @@ export interface CommandCenterApi {
     saveDailyNote: (date: string, content: string) => Promise<ActionResult>;
     missions: () => Promise<MissionsResult>;
     financeReviewLog: () => Promise<NoteContent>;
+    saveFinanceReviewLog: (content: string) => Promise<ActionResult>;
   };
   todoist: {
     tasks: () => Promise<TodoistResult>;
     complete: (taskId: string) => Promise<ActionResult>;
-    create: (content: string) => Promise<ActionResult>;
+    create: (content: string, projectId?: string) => Promise<ActionResult>;
+    // date is an ISO "YYYY-MM-DD" to set it, or null to clear it entirely.
+    setDueDate: (taskId: string, date: string | null) => Promise<ActionResult>;
+    move: (taskId: string, projectId: string) => Promise<ActionResult>;
   };
   timeTracking: {
     activeTimer: () => Promise<ActiveTimer | null>;
@@ -600,10 +634,18 @@ export interface CommandCenterApi {
     scheduledTransactions: () => Promise<YnabScheduledResult>;
     categories: () => Promise<YnabCategoriesResult>;
     approveTransaction: (transactionId: string) => Promise<ActionResult>;
+    clearTransaction: (transactionId: string) => Promise<ActionResult>;
     setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
     setTransactionMemo: (transactionId: string, memo: string) => Promise<ActionResult>;
     createTransaction: (input: YnabNewTransactionInput) => Promise<ActionResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
+  };
+  bills: {
+    list: () => Promise<BillItem[]>;
+    add: (label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
+    update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
+    remove: (id: number) => Promise<BillItem[]>;
+    setNote: (id: number, note: string) => Promise<BillItem[]>;
   };
   notes: {
     vaults: () => Promise<VaultConfig[]>;
@@ -689,6 +731,10 @@ export interface CommandCenterApi {
       update: (id: string, proc: Omit<ProcessConfig, "id" | "sortOrder">) => Promise<ProcessConfig[]>;
       remove: (id: string) => Promise<ProcessConfig[]>;
       reorder: (orderedIds: string[]) => Promise<ProcessConfig[]>;
+    };
+    tabs: {
+      rename: (id: string, label: string) => Promise<TabConfig[]>;
+      reorder: (orderedIds: string[]) => Promise<TabConfig[]>;
     };
   };
 }

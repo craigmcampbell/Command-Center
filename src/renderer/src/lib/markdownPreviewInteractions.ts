@@ -24,11 +24,23 @@ export function handleMarkdownPreviewClick(
     return;
   }
 
-  const link = target.closest<HTMLElement>("a[data-wikilink-path]");
+  const wikilink = target.closest<HTMLElement>("a[data-wikilink-path]");
+  if (wikilink) {
+    e.preventDefault();
+    const path = wikilink.dataset.wikilinkPath;
+    const label = wikilink.dataset.wikilinkLabel;
+    if (path && label) handlers.onOpenWikilink?.(path, label);
+    return;
+  }
+
+  // Any other rendered link — a plain [text](url), autolink, or bare URL —
+  // opens in the system browser instead of navigating this Electron window
+  // itself, which has no address bar or back button and would just strand
+  // the app on whatever external page got clicked.
+  const link = target.closest<HTMLAnchorElement>("a[href]");
   if (link) {
     e.preventDefault();
-    const path = link.dataset.wikilinkPath;
-    const label = link.dataset.wikilinkLabel;
-    if (path && label) handlers.onOpenWikilink?.(path, label);
+    const href = link.getAttribute("href");
+    if (href) void window.api.openUrl(href);
   }
 }

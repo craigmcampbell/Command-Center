@@ -150,6 +150,26 @@ export function readFinanceReviewLog({ vaultPath }: GrimoireConfig): NoteContent
   }
 }
 
+// Mirrors saveDailyNote's shape, but this note has YAML frontmatter that
+// readFinanceReviewLog strips before handing content to the editor — reread
+// the file's current frontmatter and re-prepend it here rather than round-
+// tripping it through the renderer, so it survives edits made in Obsidian
+// between load and save too.
+export function saveFinanceReviewLog(
+  { vaultPath }: GrimoireConfig,
+  content: string
+): ActionResult {
+  const file = path.join(vaultPath, FINANCE_REVIEW_LOG_PATH);
+  try {
+    const existing = fs.readFileSync(file, "utf8");
+    const frontmatter = existing.slice(0, existing.length - stripFrontmatter(existing).length);
+    fs.writeFileSync(file, frontmatter + content, "utf8");
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't save the Finance Review Log" };
+  }
+}
+
 export function listMissions({ vaultPath, missionsDir }: GrimoireConfig): MissionsResult {
   const dir = path.join(vaultPath, missionsDir);
   try {

@@ -16,6 +16,7 @@
   --dead: #4d5568;
   --alert: #d1795f;
   --pending: #d1a05f;
+  --pending-glow: rgba(209, 160, 95, 0.22);
   --radius: 12px;
   --mono: "SF Mono", "JetBrains Mono", "Menlo", monospace;
   --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
@@ -144,18 +145,17 @@ body {
 
 .tabs {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 0 28px 18px;
 }
 .tab {
+  display: flex;
+  align-items: center;
   background: transparent;
   border: 1px solid var(--panel-edge);
   color: var(--ink-dim);
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 6px 16px;
   border-radius: 999px;
-  cursor: pointer;
   transition: all 0.15s ease;
 }
 .tab:hover {
@@ -164,6 +164,73 @@ body {
 }
 .tab.active {
   background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tab.dragging {
+  opacity: 0.5;
+}
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 16px;
+  cursor: pointer;
+}
+.tabs-editing .tab-label {
+  cursor: text;
+}
+.tab-edit-icon {
+  opacity: 0.5;
+}
+.tab-drag-handle {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 6px 0 6px 12px;
+  cursor: grab;
+}
+.tab-drag-handle:active {
+  cursor: grabbing;
+}
+.tab-renaming {
+  padding: 2px;
+}
+.tab-rename-input {
+  background: var(--ground);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 14px;
+  width: 120px;
+}
+.tab-rename-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.tabs-edit-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-left: auto;
+}
+.tabs-edit-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -185,12 +252,11 @@ body {
 }
 
 .grid-dev {
-  grid-template-columns: 1fr;
+  grid-template-columns: 2fr 1fr;
   grid-template-areas:
-    "services"
-    "claude"
-    "processes"
-    "github";
+    "github github"
+    "services claude"
+    "processes processes";
 }
 
 .grid-reader {
@@ -216,7 +282,7 @@ body {
 .grid-finances {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
-    "ynab-accounts ynab-scheduled ynab-financelog"
+    "ynab-accounts ynab-bills ynab-financelog"
     "ynab-unapproved ynab-unapproved ynab-unapproved";
 }
 
@@ -275,8 +341,8 @@ body {
 .slot-ynab-unapproved {
   grid-area: ynab-unapproved;
 }
-.slot-ynab-scheduled {
-  grid-area: ynab-scheduled;
+.slot-ynab-bills {
+  grid-area: ynab-bills;
 }
 .slot-ynab-financelog {
   grid-area: ynab-financelog;
@@ -298,9 +364,17 @@ body {
     grid-template-columns: 1fr;
     grid-template-areas:
       "ynab-accounts"
-      "ynab-scheduled"
+      "ynab-bills"
       "ynab-financelog"
       "ynab-unapproved";
+  }
+  .grid-dev {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "github"
+      "services"
+      "claude"
+      "processes";
   }
 }
 
@@ -1522,6 +1596,31 @@ body {
   cursor: default;
 }
 
+.daily-note-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* Today's Log is a compact home-tab widget, not a full-bleed tab like
+   Scratchpad/Notes, so its editor gets a fixed working height instead of
+   stretching to 100% of an already-capped .panel-body. Preview-only mode
+   drops back to auto height so it flows exactly like the old read-only
+   render, scrolling within .panel-body's own max-height. */
+.daily-note-editor {
+  height: 320px;
+  flex: none;
+}
+.daily-note-editor.preview {
+  height: auto;
+}
+.daily-note-editor.preview .scratchpad-preview {
+  padding: 0;
+  border-left: none;
+}
+
 /* container rows */
 .row {
   display: flex;
@@ -1738,7 +1837,16 @@ body {
   font-size: 12px;
   line-height: 1.5;
   color: var(--ink-dim);
-  white-space: pre-wrap;
+}
+/* Rendered as markdown (see lib/markdown.ts) rather than raw pre-wrapped
+   text, so it can pick up links/emphasis/lists — reuses .note's block
+   styling, just trimmed to this compact panel's own top/bottom padding
+   instead of the block spacing .note normally leaves around itself. */
+.expand-note.note > :first-child {
+  margin-top: 0;
+}
+.expand-note.note > :last-child {
+  margin-bottom: 0;
 }
 
 /* Managed processes: tailed stdout/stderr panel, collapsible per row */
@@ -1789,6 +1897,47 @@ body {
 .due-pill.future {
   background: rgba(255, 255, 255, 0.05);
   color: var(--ink-dim);
+}
+.due-pill-button {
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.due-pill-button:hover {
+  opacity: 0.8;
+}
+.due-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.due-edit input[type="date"] {
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 5px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  color-scheme: dark;
+}
+.due-edit input[type="date"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.due-edit-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 2px;
+}
+.due-edit-clear:hover {
+  color: var(--alert);
 }
 .deadline-pill {
   flex-shrink: 0;
@@ -1886,6 +2035,23 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+.todoist-add-project {
+  flex-shrink: 0;
+  max-width: 130px;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.todoist-add-project:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
 .todoist-add button {
   display: flex;
   align-items: center;
@@ -1960,25 +2126,37 @@ body {
   color: var(--accent);
 }
 
-/* launcher chips (horizontal, full-width panels) */
-.chip-row {
+/* Claude Code launcher — vertical list, one project per line, same row
+   shape as .launch (Local Apps/Learning/File Links) so it reads as part of
+   the same family despite the richer opening/opened/failed status it needs. */
+.launch-chip-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
 }
 .launch-chip {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: 1px solid var(--panel-edge);
   color: var(--ink);
   font-family: var(--sans);
   font-size: 13px;
-  padding: 9px 16px;
-  border-radius: 999px;
+  padding: 10px 12px;
+  border-radius: 8px;
   cursor: pointer;
+  text-align: left;
   transition: all 0.15s ease;
+}
+.launch-chip > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .launch-chip:hover {
   border-color: var(--accent);
@@ -1990,6 +2168,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex-shrink: 0;
   color: var(--ink-dim);
   font-family: var(--mono);
   font-size: 11px;
@@ -2059,7 +2238,8 @@ body {
 .link-row:hover .row-actions,
 .reader-row:hover .row-actions,
 .launch-chip-wrap:hover .chip-actions,
-.notes-nav-item:hover .row-actions {
+.notes-nav-item:hover .row-actions,
+.settings-array-row:hover .row-actions {
   opacity: 1;
 }
 .row-action {
@@ -2159,7 +2339,7 @@ body {
 .launch-chip-wrap {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
 }
 .launch-chip-wrap.dragging {
   opacity: 0.5;
@@ -2311,6 +2491,22 @@ body {
   margin: 6px 0;
   display: block;
 }
+.note details.frontmatter {
+  margin: 0 0 10px;
+}
+.note details.frontmatter summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  list-style: revert;
+}
+.note details.frontmatter summary:hover {
+  color: var(--accent);
+}
+.note details.frontmatter pre {
+  margin-top: 6px;
+}
 .note a {
   color: var(--accent);
   text-decoration: underline;
@@ -2319,6 +2515,12 @@ body {
 }
 .note a:hover {
   color: var(--live);
+}
+.note mark {
+  background: var(--pending-glow);
+  color: var(--ink);
+  padding: 0 2px;
+  border-radius: 3px;
 }
 .note .wikilink {
   color: var(--live);
@@ -2857,6 +3059,51 @@ body {
 }
 .settings-array-form-actions button {
   width: auto;
+}
+
+/* Bills widget — row text matches YnabAccountsWidget's account-name styling
+   (.ynab-table's plain td: 12px, --ink, sans) rather than the smaller/dimmer
+   .settings-array-row-label/-sub used on Settings' array rows. */
+.bill-row-label {
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--sans);
+  white-space: nowrap;
+}
+.bill-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--sans);
+}
+.desc-toggle.has-note {
+  opacity: 1;
+  color: var(--accent);
+}
+.bill-expand {
+  margin: 2px 0 8px;
+}
+.bill-note-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.bill-note-textarea::placeholder {
+  color: var(--ink-dim);
+}
+.bill-note-textarea:focus {
+  outline: none;
 }
 
 /* GitHub widget: review-requested rows reuse .row/.name.link/.tag as-is;

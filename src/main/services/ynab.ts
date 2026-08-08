@@ -184,6 +184,13 @@ export function approveTransaction(
   return patchTransactionField(config, transactionId, { approved: true });
 }
 
+export function clearTransaction(
+  config: YnabScalarConfig,
+  transactionId: string
+): Promise<ActionResult> {
+  return patchTransactionField(config, transactionId, { cleared: "cleared" });
+}
+
 export function setTransactionCategory(
   config: YnabScalarConfig,
   transactionId: string,

@@ -13,10 +13,17 @@ import {
   saveDailyNote,
   listMissions,
   readFinanceReviewLog,
+  saveFinanceReviewLog,
 } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
-import { getDueTasks, completeTask, createTask } from "./services/todoist";
+import {
+  getDueTasks,
+  completeTask,
+  createTask,
+  setTaskDueDate,
+  moveTask,
+} from "./services/todoist";
 import {
   initTimeTracking,
   getActiveTimer,
@@ -66,10 +73,19 @@ import {
   getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
   getCategories as getYnabCategories,
   approveTransaction as approveYnabTransaction,
+  clearTransaction as clearYnabTransaction,
   setTransactionCategory as setYnabTransactionCategory,
   setTransactionMemo as setYnabTransactionMemo,
   createTransaction as createYnabTransaction,
 } from "./services/ynab";
+import {
+  initBills,
+  listBills,
+  addBill,
+  updateBill,
+  removeBill,
+  setBillNote,
+} from "./services/bills";
 import {
   initNotes,
   browseVault,
@@ -128,6 +144,8 @@ import {
   updateProcess,
   removeProcess,
   reorderProcesses,
+  renameTab,
+  reorderTabs,
 } from "./services/settings";
 import type {
   GoogleCalendarConfig,
@@ -147,6 +165,7 @@ initHabits();
 initNotes();
 initSettings();
 initTimeTracking();
+initBills();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -226,6 +245,9 @@ ipcMain.handle("grimoire:missions", async () => {
 ipcMain.handle("grimoire:financeReviewLog", async () => {
   return readFinanceReviewLog(getGrimoireSettings());
 });
+ipcMain.handle("grimoire:saveFinanceReviewLog", async (_evt, content: string) => {
+  return saveFinanceReviewLog(getGrimoireSettings(), content);
+});
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
 ipcMain.handle("todoist:tasks", async () => {
@@ -234,8 +256,14 @@ ipcMain.handle("todoist:tasks", async () => {
 ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
   return completeTask(getTodoistSettings(), taskId);
 });
-ipcMain.handle("todoist:create", async (_evt, content: string) => {
-  return createTask(getTodoistSettings(), content);
+ipcMain.handle("todoist:create", async (_evt, content: string, projectId?: string) => {
+  return createTask(getTodoistSettings(), content, projectId);
+});
+ipcMain.handle("todoist:setDueDate", async (_evt, taskId: string, date: string | null) => {
+  return setTaskDueDate(getTodoistSettings(), taskId, date);
+});
+ipcMain.handle("todoist:move", async (_evt, taskId: string, projectId: string) => {
+  return moveTask(getTodoistSettings(), taskId, projectId);
 });
 
 // Time tracking: cumulative per-task timers (only one running at a time) and
@@ -337,6 +365,9 @@ ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
 ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
   approveYnabTransaction(getYnabSettings(), transactionId)
 );
+ipcMain.handle("ynab:clearTransaction", (_evt, transactionId: string) =>
+  clearYnabTransaction(getYnabSettings(), transactionId)
+);
 ipcMain.handle(
   "ynab:setTransactionCategory",
   (_evt, transactionId: string, categoryId: string) =>
@@ -352,6 +383,20 @@ ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);
   return getYnabAccounts(getYnabSettings());
 });
+
+// Bills: manually-tracked recurring bills (day-of-month due + autopay flag),
+// separate from YNAB's own scheduled transactions.
+ipcMain.handle("bills:list", () => listBills());
+ipcMain.handle("bills:add", (_evt, label: string, dueDay: number, autopay: boolean) =>
+  addBill(label, dueDay, autopay)
+);
+ipcMain.handle(
+  "bills:update",
+  (_evt, id: number, label: string, dueDay: number, autopay: boolean) =>
+    updateBill(id, label, dueDay, autopay)
+);
+ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
+ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(id, note));
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).
@@ -509,6 +554,9 @@ ipcMain.handle("settings:processes:remove", (_evt, id: string) => removeProcess(
 ipcMain.handle("settings:processes:reorder", (_evt, orderedIds: string[]) =>
   reorderProcesses(orderedIds)
 );
+
+ipcMain.handle("settings:tabs:rename", (_evt, id: string, label: string) => renameTab(id, label));
+ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderTabs(orderedIds));
 
 app.whenReady().then(() => {
   setDockIcon();
