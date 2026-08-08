@@ -108,6 +108,24 @@ function hideEmphasisMarks(
   }
 }
 
+// Links/images collapse to just their label text when not being edited —
+// same "reveal raw syntax only while your cursor is in it" treatment as
+// bold/italic/highlight above. Without this, a link with a long URL (a
+// local file:// path, a deep API URL) dominates the line with syntax that's
+// only useful while actually editing the link, not while reading it.
+function hideLinkSyntax(state: EditorState, node: SyntaxNode, hide: Range<Decoration>[]): void {
+  if (selectionOverlaps(state, node.from, node.to)) return;
+  const marks = node.getChildren("LinkMark");
+  // "[text](url \"title\")" always has exactly 4 LinkMark delimiters — the
+  // brackets and parens. Anything else means the parser emitted a Link node
+  // for something malformed/unclosed; leave it fully visible rather than
+  // guess which marks to hide.
+  if (marks.length !== 4) return;
+  const [openBracket, closeBracket, , closeParen] = marks;
+  hide.push(Decoration.replace({}).range(openBracket.from, openBracket.to));
+  hide.push(Decoration.replace({}).range(closeBracket.from, closeParen.to));
+}
+
 function headingLevel(name: string): 1 | 2 | 3 | 4 | 5 | 6 | null {
   const m = name.match(/^(?:ATX|Setext)Heading([1-6])$/);
   return m ? (Number(m[1]) as 1 | 2 | 3 | 4 | 5 | 6) : null;
@@ -163,6 +181,10 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
             break;
           case "Highlight":
             hideEmphasisMarks(state, nodeRef.node, "HighlightMark", hide);
+            break;
+          case "Link":
+          case "Image":
+            hideLinkSyntax(state, nodeRef.node, hide);
             break;
           case "Blockquote": {
             const startLine = state.doc.lineAt(nodeRef.from).number;

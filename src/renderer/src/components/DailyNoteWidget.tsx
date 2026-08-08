@@ -14,7 +14,7 @@ interface DailyNoteWidgetProps {
   onChange: (result: DailyNoteResult) => void;
 }
 
-type ViewMode = "edit" | "split" | "preview";
+type ViewMode = "edit" | "preview";
 
 const AUTOSAVE_MS = 500;
 
@@ -25,7 +25,7 @@ function todayDateString(): string {
 }
 
 export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNoteWidgetProps) {
-  const [mode, setMode] = useState<ViewMode>("preview");
+  const [mode, setMode] = useState<ViewMode>("edit");
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -63,21 +63,21 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
   } else if (!data.ok) {
     body = <p className="muted">{data.reason}. It'll appear once you create today's note.</p>;
   } else {
-    const showEditor = mode === "edit" || mode === "split";
-    const showPreview = mode === "preview" || mode === "split";
+    const showEditor = mode === "edit";
+    const showPreview = mode === "preview";
     const fm = splitFrontmatter(data.content);
     body = (
       <>
         <div className="daily-note-toolbar">
           <div className="scratchpad-modes">
-            {(["edit", "split", "preview"] as const).map((m) => (
+            {(["edit", "preview"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 className={`scratchpad-mode ${mode === m ? "active" : ""}`}
                 onClick={() => setMode(m)}
               >
-                {m === "edit" ? "Write" : m === "split" ? "Split" : "Preview"}
+                {m === "edit" ? "Write" : "Preview"}
               </button>
             ))}
           </div>

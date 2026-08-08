@@ -895,17 +895,6 @@ body {
   border-left: none;
 }
 
-@media (max-width: 860px) {
-  .scratchpad.split {
-    flex-direction: column;
-  }
-  .scratchpad.split .scratchpad-preview {
-    border-left: none;
-    border-top: 1px solid var(--panel-edge);
-    max-height: 40vh;
-  }
-}
-
 /* Notes tab: left nav (grouped by vault) + tab strip + editor. The editor
    pane itself reuses .scratchpad/.scratchpad-editor/.scratchpad-preview and
    the write/split/preview toggle as-is. */

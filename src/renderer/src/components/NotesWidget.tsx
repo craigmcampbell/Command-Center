@@ -10,7 +10,7 @@ import MarkdownEditor from "./MarkdownEditor";
 import NoteBrowserModal from "./NoteBrowserModal";
 import { IconPlus, IconTrash, IconX } from "./icons";
 
-type ViewMode = "edit" | "split" | "preview";
+type ViewMode = "edit" | "preview";
 
 const AUTOSAVE_MS = 500;
 
@@ -32,7 +32,7 @@ export default function NotesWidget() {
   const [contents, setContents] = useState<Record<number, string>>({});
   const [noteErrors, setNoteErrors] = useState<Record<number, string>>({});
   const [loaded, setLoaded] = useState(false);
-  const [mode, setMode] = useState<ViewMode>("split");
+  const [mode, setMode] = useState<ViewMode>("edit");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [browserVault, setBrowserVault] = useState<string | null>(null);
   const [vaultIndexes, setVaultIndexes] = useState<Record<string, VaultNoteIndexEntry[]>>({});
@@ -196,8 +196,8 @@ export default function NotesWidget() {
   const groups = groupByVault(vaults, navNotes);
   const activeItem = navNotes.find((n) => n.id === activeId) ?? null;
   const activeError = activeItem ? noteErrors[activeItem.id] : undefined;
-  const showEditor = mode === "edit" || mode === "split";
-  const showPreview = mode === "preview" || mode === "split";
+  const showEditor = mode === "edit";
+  const showPreview = mode === "preview";
   const fm = activeItem ? splitFrontmatter(contents[activeItem.id] ?? "") : null;
 
   return (
@@ -285,14 +285,14 @@ export default function NotesWidget() {
 
               <div className="notes-toolbar">
                 <div className="scratchpad-modes">
-                  {(["edit", "split", "preview"] as const).map((m) => (
+                  {(["edit", "preview"] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
                       className={`scratchpad-mode ${mode === m ? "active" : ""}`}
                       onClick={() => setMode(m)}
                     >
-                      {m === "edit" ? "Write" : m === "split" ? "Split" : "Preview"}
+                      {m === "edit" ? "Write" : "Preview"}
                     </button>
                   ))}
                 </div>
@@ -313,6 +313,10 @@ export default function NotesWidget() {
                       className="scratchpad-editor"
                       value={contents[activeItem.id] ?? ""}
                       onChange={(text) => handleContentChange(activeItem, text)}
+                      onOpenWikilink={(target) => {
+                        const resolved = resolveWikilink(activeItem.vaultLabel, target);
+                        if (resolved) void openByPath(activeItem.vaultLabel, resolved.filePath, resolved.label);
+                      }}
                     />
                   )}
                   {showPreview && (

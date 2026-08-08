@@ -22,6 +22,7 @@ import { wikilinkExtension } from "./wikilinkExtension";
 import { highlightExtension, highlightTag } from "./highlightExtension";
 import { liveMarkdownPreview } from "./liveMarkdownPreview";
 import { frontmatterFold } from "./frontmatterFold";
+import { clickableLinks } from "./clickableLinks";
 
 // Bullets, ordered markers, and tasks — deliberately matches exactly what
 // lib/markdown.ts's preview renderer recognizes, so editor behavior and
@@ -158,6 +159,13 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strikethrough, textDecoration: "line-through", color: "var(--ink-dim)" },
   { tag: t.link, color: "var(--accent)", textDecoration: "underline" },
+  // @lezer/markdown tags a link's URL segment as t.url specifically (not
+  // t.link) — and @lezer/highlight defines t.url as a sub-tag of t.literal,
+  // so without an explicit rule here it falls through to the generic
+  // number/literal color below instead of matching the link rule above,
+  // making "[text](url)" render as two different colors. Same style as
+  // t.link so the whole link — label and URL both — reads as one link.
+  { tag: t.url, color: "var(--accent)", textDecoration: "underline" },
   { tag: t.monospace, fontFamily: "var(--mono)", color: "var(--live)" },
   { tag: t.quote, color: "var(--ink-dim)", fontStyle: "italic" },
   { tag: t.list, color: "var(--ink-dim)" },
@@ -221,7 +229,8 @@ const markdownTheme = EditorView.theme(
 
 export function buildMarkdownEditorExtensions(
   onDocChanged: (text: string) => void,
-  placeholderText?: string
+  placeholderText?: string,
+  onOpenWikilink?: (target: string) => void
 ): Extension[] {
   return [
     history(),
@@ -264,6 +273,7 @@ export function buildMarkdownEditorExtensions(
     // checkboxes into real clickable inputs. See liveMarkdownPreview.ts.
     liveMarkdownPreview(),
     frontmatterFold(),
+    clickableLinks({ onOpenWikilink }),
     EditorView.lineWrapping,
     placeholder(placeholderText ?? ""),
     EditorView.updateListener.of((update) => {

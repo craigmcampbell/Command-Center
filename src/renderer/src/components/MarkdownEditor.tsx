@@ -9,6 +9,10 @@ interface MarkdownEditorProps {
   onChange: (text: string) => void;
   placeholder?: string;
   className?: string;
+  // Mod+click on a [[wikilink]] — see lib/clickableLinks.ts. Omitted where
+  // there's no vault to resolve against (Scratchpad, Daily Note), same as
+  // resolveWikilink being omitted from those widgets' renderMarkdown calls.
+  onOpenWikilink?: (target: string) => void;
 }
 
 export default function MarkdownEditor({
@@ -16,18 +20,25 @@ export default function MarkdownEditor({
   onChange,
   placeholder,
   className,
+  onOpenWikilink,
 }: MarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onOpenWikilinkRef = useRef(onOpenWikilink);
+  onOpenWikilinkRef.current = onOpenWikilink;
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     const initialState = EditorState.create({
       doc: value,
-      extensions: buildMarkdownEditorExtensions((text) => onChangeRef.current(text), placeholder),
+      extensions: buildMarkdownEditorExtensions(
+        (text) => onChangeRef.current(text),
+        placeholder,
+        (target) => onOpenWikilinkRef.current?.(target)
+      ),
     });
     const view = new EditorView({
       state: foldFrontmatterByDefault(initialState),

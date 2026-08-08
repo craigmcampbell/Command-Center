@@ -204,7 +204,7 @@ self-contained pattern as `ScratchpadWidget`/`HabitsWidget`, nothing lifted to
 `App.tsx`. `components/NoteBrowserModal.tsx` is the "+" file-tree browser
 (always opens at the vault root, lazy per-folder fetches via `notes:browse`,
 no recursive walk). The editor pane reuses `MarkdownEditor` +
-`lib/markdown.ts`'s `renderMarkdown` and the write/split/preview toggle
+`lib/markdown.ts`'s `renderMarkdown` and the write/preview toggle
 verbatim from Scratchpad's CSS (`.scratchpad`/`.scratchpad-editor`/
 `.scratchpad-preview`/`.scratchpad-mode`/`.scratchpad-status`) — the Notes-
 specific CSS only covers the nav/tab-strip/browser-modal chrome around it.
