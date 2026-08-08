@@ -127,7 +127,6 @@ const api: CommandCenterApi = {
   ynab: {
     accounts: () => ipcRenderer.invoke("ynab:accounts"),
     unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
-    pendingTransactions: () => ipcRenderer.invoke("ynab:pendingTransactions"),
     scheduledTransactions: () => ipcRenderer.invoke("ynab:scheduledTransactions"),
     categories: () => ipcRenderer.invoke("ynab:categories"),
     approveTransaction: (transactionId: string) =>

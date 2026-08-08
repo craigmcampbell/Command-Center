@@ -416,15 +416,6 @@ export interface YnabUnapprovedResult {
   transactions: YnabTransaction[];
 }
 
-// "Pending" here means YNAB's cleared:"uncleared" status (not yet cleared
-// against the bank/statement) — YNAB's public API doesn't expose true
-// bank-pending (not-yet-posted) transactions, only this.
-export interface YnabPendingResult {
-  ok: boolean;
-  reason?: string;
-  transactions: YnabTransaction[];
-}
-
 export interface YnabScheduledTransaction {
   id: string;
   dateNext: string;
@@ -640,7 +631,6 @@ export interface CommandCenterApi {
   ynab: {
     accounts: () => Promise<YnabAccountsResult>;
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
-    pendingTransactions: () => Promise<YnabPendingResult>;
     scheduledTransactions: () => Promise<YnabScheduledResult>;
     categories: () => Promise<YnabCategoriesResult>;
     approveTransaction: (transactionId: string) => Promise<ActionResult>;

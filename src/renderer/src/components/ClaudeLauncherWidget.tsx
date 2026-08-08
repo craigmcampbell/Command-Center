@@ -11,7 +11,7 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
-  horizontalListSortingStrategy,
+  verticalListSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -212,11 +212,8 @@ export default function ClaudeLauncherWidget({ kind, projects, onChange }: Claud
         <p className="muted">No projects configured.</p>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext
-            items={projects.map((p) => p.id)}
-            strategy={horizontalListSortingStrategy}
-          >
-            <div className="chip-row">
+          <SortableContext items={projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+            <div className="launch-chip-list">
               {projects.map((item) => (
                 <SortableChip
                   key={item.id}

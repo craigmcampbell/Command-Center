@@ -70,7 +70,6 @@ import { getGitHubStatus } from "./services/github";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
-  getPendingTransactions as getYnabPendingTransactions,
   getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
   getCategories as getYnabCategories,
   approveTransaction as approveYnabTransaction,
@@ -358,9 +357,6 @@ ipcMain.handle("github:status", () =>
 ipcMain.handle("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
 ipcMain.handle("ynab:unapprovedTransactions", () =>
   getYnabUnapprovedTransactions(getYnabSettings())
-);
-ipcMain.handle("ynab:pendingTransactions", () =>
-  getYnabPendingTransactions(getYnabSettings())
 );
 ipcMain.handle("ynab:scheduledTransactions", () =>
   getYnabScheduledTransactions(getYnabSettings())

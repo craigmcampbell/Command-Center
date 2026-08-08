@@ -15,7 +15,6 @@ import type {
   CalendarResult,
   YnabAccountsResult,
   YnabUnapprovedResult,
-  YnabPendingResult,
   YnabScheduledResult,
   YnabCategoriesResult,
   NoteContent,
@@ -26,7 +25,6 @@ import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
-import YnabPendingWidget from "./components/YnabPendingWidget";
 import BillsWidget from "./components/BillsWidget";
 import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
@@ -123,7 +121,6 @@ export default function App() {
   const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
   const [ynabAccounts, setYnabAccounts] = useState<YnabAccountsResult | null>(null);
   const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
-  const [ynabPending, setYnabPending] = useState<YnabPendingResult | null>(null);
   const [ynabScheduled, setYnabScheduled] = useState<YnabScheduledResult | null>(null);
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
@@ -143,18 +140,14 @@ export default function App() {
   const loadYnabUnapproved = useCallback(async () => {
     setYnabUnapproved(await window.api.ynab.unapprovedTransactions());
   }, []);
-  const loadYnabPending = useCallback(async () => {
-    setYnabPending(await window.api.ynab.pendingTransactions());
-  }, []);
   const loadYnab = useCallback(async () => {
     await Promise.all([
       window.api.ynab.accounts().then(setYnabAccounts),
       loadYnabUnapproved(),
-      loadYnabPending(),
       window.api.ynab.scheduledTransactions().then(setYnabScheduled),
       window.api.ynab.categories().then(setYnabCategories),
     ]);
-  }, [loadYnabUnapproved, loadYnabPending]);
+  }, [loadYnabUnapproved]);
   const loadFinanceReviewLog = useCallback(async () => {
     setFinanceReviewLog(await window.api.grimoire.financeReviewLog());
   }, []);
@@ -429,6 +422,9 @@ export default function App() {
 
       {activeTab === "development" && (
         <main className="grid grid-dev">
+          <div className="slot slot-github">
+            <GitHubWidget data={github} />
+          </div>
           <div className="slot slot-services">
             <DockerWidget data={docker} onRefresh={loadDocker} />
           </div>
@@ -438,9 +434,6 @@ export default function App() {
               projects={claudeProjects}
               onChange={setClaudeProjects}
             />
-          </div>
-          <div className="slot slot-github">
-            <GitHubWidget data={github} />
           </div>
           <div className="slot slot-processes">
             <ManagedProcessesWidget
@@ -506,9 +499,6 @@ export default function App() {
               accounts={ynabAccounts}
               onRefresh={loadYnabUnapproved}
             />
-          </div>
-          <div className="slot slot-ynab-pending">
-            <YnabPendingWidget data={ynabPending} onRefresh={loadYnabPending} />
           </div>
         </main>
       )}
