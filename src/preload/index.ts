@@ -37,6 +37,9 @@ const api: CommandCenterApi = {
     tasks: () => ipcRenderer.invoke("todoist:tasks"),
     complete: (taskId: string) => ipcRenderer.invoke("todoist:complete", taskId),
     create: (content: string) => ipcRenderer.invoke("todoist:create", content),
+    setDueDate: (taskId: string, date: string | null) =>
+      ipcRenderer.invoke("todoist:setDueDate", taskId, date),
+    move: (taskId: string, projectId: string) => ipcRenderer.invoke("todoist:move", taskId, projectId),
   },
 
   timeTracking: {

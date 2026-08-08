@@ -159,15 +159,22 @@ export interface TodoistTask {
   overdue: boolean;
   deadline: string | null;
   project: string;
+  projectId: string;
   labels: string[];
   subtasks: TodoistSubtask[];
   parentName: string | null;
+}
+
+export interface TodoistProject {
+  id: string;
+  name: string;
 }
 
 export interface TodoistResult {
   ok: boolean;
   reason?: string;
   tasks: TodoistTask[];
+  projects: TodoistProject[];
 }
 
 // A completed span of tracked time against one Todoist task. task_content/
@@ -553,6 +560,9 @@ export interface CommandCenterApi {
     tasks: () => Promise<TodoistResult>;
     complete: (taskId: string) => Promise<ActionResult>;
     create: (content: string) => Promise<ActionResult>;
+    // date is an ISO "YYYY-MM-DD" to set it, or null to clear it entirely.
+    setDueDate: (taskId: string, date: string | null) => Promise<ActionResult>;
+    move: (taskId: string, projectId: string) => Promise<ActionResult>;
   };
   timeTracking: {
     activeTimer: () => Promise<ActiveTimer | null>;

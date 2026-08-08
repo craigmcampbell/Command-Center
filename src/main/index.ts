@@ -17,7 +17,13 @@ import {
 } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
-import { getDueTasks, completeTask, createTask } from "./services/todoist";
+import {
+  getDueTasks,
+  completeTask,
+  createTask,
+  setTaskDueDate,
+  moveTask,
+} from "./services/todoist";
 import {
   initTimeTracking,
   getActiveTimer,
@@ -251,6 +257,12 @@ ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
 });
 ipcMain.handle("todoist:create", async (_evt, content: string) => {
   return createTask(getTodoistSettings(), content);
+});
+ipcMain.handle("todoist:setDueDate", async (_evt, taskId: string, date: string | null) => {
+  return setTaskDueDate(getTodoistSettings(), taskId, date);
+});
+ipcMain.handle("todoist:move", async (_evt, taskId: string, projectId: string) => {
+  return moveTask(getTodoistSettings(), taskId, projectId);
 });
 
 // Time tracking: cumulative per-task timers (only one running at a time) and
