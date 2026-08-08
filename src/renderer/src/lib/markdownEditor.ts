@@ -21,6 +21,7 @@ import { buildEditorCodeLanguageDescriptions } from "./codeLanguages";
 import { wikilinkExtension } from "./wikilinkExtension";
 import { highlightExtension, highlightTag } from "./highlightExtension";
 import { liveMarkdownPreview } from "./liveMarkdownPreview";
+import { frontmatterFold } from "./frontmatterFold";
 
 // Bullets, ordered markers, and tasks — deliberately matches exactly what
 // lib/markdown.ts's preview renderer recognizes, so editor behavior and
@@ -262,6 +263,7 @@ export function buildMarkdownEditorExtensions(
     // the line/range being edited, sizes headings, and turns task
     // checkboxes into real clickable inputs. See liveMarkdownPreview.ts.
     liveMarkdownPreview(),
+    frontmatterFold(),
     EditorView.lineWrapping,
     placeholder(placeholderText ?? ""),
     EditorView.updateListener.of((update) => {

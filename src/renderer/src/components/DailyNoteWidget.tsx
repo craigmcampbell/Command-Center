@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DailyNoteResult } from "../../../shared/types";
 import { renderMarkdown } from "../lib/markdown";
+import { splitFrontmatter } from "../lib/frontmatter";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
+import FrontmatterBlock from "./FrontmatterBlock";
 import MarkdownEditor from "./MarkdownEditor";
 import Panel from "./Panel";
 import { IconChevronLeft, IconChevronRight, IconExternal } from "./icons";
@@ -63,6 +65,7 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
   } else {
     const showEditor = mode === "edit" || mode === "split";
     const showPreview = mode === "preview" || mode === "split";
+    const fm = splitFrontmatter(data.content);
     body = (
       <>
         <div className="daily-note-toolbar">
@@ -83,19 +86,26 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
         <div className={`scratchpad daily-note-editor ${mode}`}>
           {showEditor && (
             <MarkdownEditor
+              // Remounts per date, same as NotesWidget keying its editor by
+              // note id — otherwise prev/next reuses one CodeMirror instance
+              // across completely different notes, and frontmatter's
+              // collapsed-by-default only applies at mount, not per note.
+              key={data.date}
               className="scratchpad-editor"
               value={data.content}
               onChange={handleContentChange}
             />
           )}
           {showPreview && (
-            <div
-              className="scratchpad-preview note"
-              onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
-              dangerouslySetInnerHTML={{
-                __html: renderMarkdown(data.content, { interactiveTasks: true }),
-              }}
-            />
+            <div className="scratchpad-preview note">
+              {fm && <FrontmatterBlock key={data.date} yaml={fm.yaml} />}
+              <div
+                onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
+                dangerouslySetInnerHTML={{
+                  __html: renderMarkdown(data.content, { interactiveTasks: true, includeFrontmatter: false }),
+                }}
+              />
+            </div>
           )}
         </div>
       </>

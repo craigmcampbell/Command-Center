@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "../lib/markdown";
+import { splitFrontmatter } from "../lib/frontmatter";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
+import FrontmatterBlock from "./FrontmatterBlock";
 import Panel from "./Panel";
 import MarkdownEditor from "./MarkdownEditor";
 import { IconTrash } from "./icons";
@@ -65,6 +67,7 @@ export default function ScratchpadWidget() {
 
   const showEditor = mode === "edit" || mode === "split";
   const showPreview = mode === "preview" || mode === "split";
+  const fm = splitFrontmatter(content);
 
   return (
     <Panel
@@ -107,13 +110,15 @@ export default function ScratchpadWidget() {
           />
         )}
         {showPreview && (
-          <div
-            className="scratchpad-preview note"
-            onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
-            dangerouslySetInnerHTML={{
-              __html: renderMarkdown(content, { interactiveTasks: true }),
-            }}
-          />
+          <div className="scratchpad-preview note">
+            {fm && <FrontmatterBlock yaml={fm.yaml} />}
+            <div
+              onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(content, { interactiveTasks: true, includeFrontmatter: false }),
+              }}
+            />
+          </div>
         )}
       </div>
     </Panel>

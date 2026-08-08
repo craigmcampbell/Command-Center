@@ -1835,7 +1835,16 @@ body {
   font-size: 12px;
   line-height: 1.5;
   color: var(--ink-dim);
-  white-space: pre-wrap;
+}
+/* Rendered as markdown (see lib/markdown.ts) rather than raw pre-wrapped
+   text, so it can pick up links/emphasis/lists — reuses .note's block
+   styling, just trimmed to this compact panel's own top/bottom padding
+   instead of the block spacing .note normally leaves around itself. */
+.expand-note.note > :first-child {
+  margin-top: 0;
+}
+.expand-note.note > :last-child {
+  margin-bottom: 0;
 }
 
 /* Managed processes: tailed stdout/stderr panel, collapsible per row */
@@ -2466,6 +2475,22 @@ body {
   border-radius: 6px;
   margin: 6px 0;
   display: block;
+}
+.note details.frontmatter {
+  margin: 0 0 10px;
+}
+.note details.frontmatter summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  list-style: revert;
+}
+.note details.frontmatter summary:hover {
+  color: var(--accent);
+}
+.note details.frontmatter pre {
+  margin-top: 6px;
 }
 .note a {
   color: var(--accent);

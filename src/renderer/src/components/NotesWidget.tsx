@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { NoteNavItem, VaultConfig, VaultNoteIndexEntry } from "../../../shared/types";
 import type { ResolvedWikilink } from "../lib/markdown";
 import { renderMarkdown } from "../lib/markdown";
+import { splitFrontmatter } from "../lib/frontmatter";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
+import FrontmatterBlock from "./FrontmatterBlock";
 import Panel from "./Panel";
 import MarkdownEditor from "./MarkdownEditor";
 import NoteBrowserModal from "./NoteBrowserModal";
@@ -196,6 +198,7 @@ export default function NotesWidget() {
   const activeError = activeItem ? noteErrors[activeItem.id] : undefined;
   const showEditor = mode === "edit" || mode === "split";
   const showPreview = mode === "preview" || mode === "split";
+  const fm = activeItem ? splitFrontmatter(contents[activeItem.id] ?? "") : null;
 
   return (
     <Panel title="Notes">
@@ -313,23 +316,26 @@ export default function NotesWidget() {
                     />
                   )}
                   {showPreview && (
-                    <div
-                      className="scratchpad-preview note"
-                      onClick={(e) =>
-                        handleMarkdownPreviewClick(e, {
-                          onToggleTask: (from, to, checked) =>
-                            handleToggleTask(activeItem, from, to, checked),
-                          onOpenWikilink: (filePath, label) =>
-                            openByPath(activeItem.vaultLabel, filePath, label),
-                        })
-                      }
-                      dangerouslySetInnerHTML={{
-                        __html: renderMarkdown(contents[activeItem.id] ?? "", {
-                          interactiveTasks: true,
-                          resolveWikilink: (target) => resolveWikilink(activeItem.vaultLabel, target),
-                        }),
-                      }}
-                    />
+                    <div className="scratchpad-preview note">
+                      {fm && <FrontmatterBlock key={activeItem.id} yaml={fm.yaml} />}
+                      <div
+                        onClick={(e) =>
+                          handleMarkdownPreviewClick(e, {
+                            onToggleTask: (from, to, checked) =>
+                              handleToggleTask(activeItem, from, to, checked),
+                            onOpenWikilink: (filePath, label) =>
+                              openByPath(activeItem.vaultLabel, filePath, label),
+                          })
+                        }
+                        dangerouslySetInnerHTML={{
+                          __html: renderMarkdown(contents[activeItem.id] ?? "", {
+                            interactiveTasks: true,
+                            resolveWikilink: (target) => resolveWikilink(activeItem.vaultLabel, target),
+                            includeFrontmatter: false,
+                          }),
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               )}

@@ -10,6 +10,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import { highlightFencedCode } from "./codeHighlight";
 import { wikilinkExtension } from "./wikilinkExtension";
 import { highlightExtension } from "./highlightExtension";
+import { countFrontmatterProperties, splitFrontmatter } from "./frontmatter";
 
 const parser = baseParser.configure([GFM, wikilinkExtension, highlightExtension]);
 
@@ -24,6 +25,15 @@ export interface RenderMarkdownOptions {
   // render inert. Provided but returns null (target doesn't match any file
   // in the vault) → renders as a visually distinct "broken" link.
   resolveWikilink?: (target: string) => ResolvedWikilink | null;
+  // false → the frontmatter block (if any) is left out of the returned HTML
+  // entirely, rather than embedded as a static <details>. For callers that
+  // render their own <FrontmatterBlock> (see components/FrontmatterBlock.tsx)
+  // instead — real React state for the collapse toggle, immune to having its
+  // manually-collapsed state silently reset by an unrelated re-render
+  // elsewhere in the app, which a plain dangerouslySetInnerHTML <details>
+  // isn't. Defaults to true (single self-contained HTML string) for callers
+  // — like the Todoist description panel — that don't need that.
+  includeFrontmatter?: boolean;
 }
 
 export function escapeHtml(s: string): string {
@@ -346,10 +356,36 @@ function renderBlockNode(node: SyntaxNode, md: string, options: RenderMarkdownOp
   }
 }
 
+// Rendered as a native <details> — collapsible for free, no click-handler
+// wiring needed in the static preview (unlike the editor's fold, which does
+// need one; see frontmatterFold.ts). Reuses the same markup shape as a
+// fenced code block (<pre data-lang=""><code>) purely to pick up its
+// existing .note styling without adding a dedicated CSS rule for the box.
+function renderFrontmatterHtml(yaml: string): string {
+  const count = countFrontmatterProperties(yaml);
+  const label = count > 0 ? `${count} propert${count === 1 ? "y" : "ies"}` : "Frontmatter";
+  return `<details class="frontmatter" open><summary>${escapeHtml(label)}</summary><pre data-lang=""><code>${escapeHtml(yaml)}</code></pre></details>`;
+}
+
 export function renderMarkdown(md: string, options: RenderMarkdownOptions = {}): string {
+  // Parsing the *whole* string (rather than slicing the frontmatter off
+  // first) keeps every other node's .from/.to absolute-correct against the
+  // original source — task checkboxes embed those offsets as data-task-from/
+  // to for in-place toggling, and a shifted parse would silently corrupt
+  // them for any note with frontmatter. The CommonMark parser doesn't know
+  // "---" delimiters are special, so it still emits (wrong) nodes for that
+  // span — a HorizontalRule for the opening line, then usually a
+  // SetextHeading for whatever follows up to the closing line. Skipping
+  // every top-level node that starts before the frontmatter's end discards
+  // exactly those misparsed nodes, whatever shape they turned out to be, by
+  // position rather than by guessing their node type.
+  const fm = splitFrontmatter(md);
   const tree: Tree = parser.parse(md);
   const html = children(tree.topNode)
+    .filter((c) => !fm || c.from >= fm.to)
     .map((c) => renderBlockNode(c, md, options))
     .join("");
-  return html || '<p class="muted">Note is empty.</p>';
+  const body = html || '<p class="muted">Note is empty.</p>';
+  const includeFrontmatter = options.includeFrontmatter ?? true;
+  return fm && includeFrontmatter ? renderFrontmatterHtml(fm.yaml) + body : body;
 }

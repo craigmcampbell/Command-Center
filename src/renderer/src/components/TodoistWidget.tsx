@@ -12,6 +12,8 @@ import type {
 import Panel from "./Panel";
 import TimeReportModal from "./TimeReportModal";
 import { formatDuration, todayLocalDateString } from "../lib/time";
+import { renderMarkdown } from "../lib/markdown";
+import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import {
   IconCheck,
   IconClock,
@@ -494,7 +496,13 @@ function TodoistRow({
       </div>
       {expanded && (
         <div className="todoist-expand">
-          {task.description && <div className="expand-note">{task.description}</div>}
+          {task.description && (
+            <div
+              className="expand-note note"
+              onClick={(e) => handleMarkdownPreviewClick(e, {})}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(task.description) }}
+            />
+          )}
           {task.subtasks.length > 0 && (
             <ul className="todoist-subtasks">
               {task.subtasks.map((s) => (
