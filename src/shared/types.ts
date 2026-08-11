@@ -461,6 +461,16 @@ export interface BillItem {
   note: string | null;
 }
 
+// A manually-tracked credit card — shown in the Finances tab's Cards
+// sub-tab alongside Bills. creditLimit and apr are plain numbers (dollars,
+// percent), not YNAB-sourced.
+export interface CardItem {
+  id: number;
+  name: string;
+  creditLimit: number;
+  apr: number;
+}
+
 // Input for manually adding a transaction — amount is dollars, signed
 // (negative = outflow), converted to milliunits server-side.
 export interface YnabNewTransactionInput {
@@ -646,6 +656,12 @@ export interface CommandCenterApi {
     update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     remove: (id: number) => Promise<BillItem[]>;
     setNote: (id: number, note: string) => Promise<BillItem[]>;
+  };
+  cards: {
+    list: () => Promise<CardItem[]>;
+    add: (name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
+    update: (id: number, name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
+    remove: (id: number) => Promise<CardItem[]>;
   };
   notes: {
     vaults: () => Promise<VaultConfig[]>;

@@ -19,6 +19,7 @@ import type {
   YnabCategoriesResult,
   NoteContent,
   BillItem,
+  CardItem,
   TabConfig,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
@@ -125,6 +126,7 @@ export default function App() {
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
   const [bills, setBills] = useState<BillItem[]>([]);
+  const [cards, setCards] = useState<CardItem[]>([]);
   const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
   const [showTimeTracking, setShowTimeTracking] = useState(true);
 
@@ -153,6 +155,9 @@ export default function App() {
   }, []);
   const loadBills = useCallback(async () => {
     setBills(await window.api.bills.list());
+  }, []);
+  const loadCards = useCallback(async () => {
+    setCards(await window.api.cards.list());
   }, []);
   const loadDaily = useCallback(async () => {
     setDaily(await window.api.grimoire.dailyNote(dailyDate ?? undefined));
@@ -202,6 +207,7 @@ export default function App() {
       loadYnab(),
       loadFinanceReviewLog(),
       loadBills(),
+      loadCards(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -218,6 +224,7 @@ export default function App() {
     loadYnab,
     loadFinanceReviewLog,
     loadBills,
+    loadCards,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -290,6 +297,7 @@ export default function App() {
         loadYnab(),
         loadFinanceReviewLog(),
         loadBills(),
+        loadCards(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -487,7 +495,7 @@ export default function App() {
             />
           </div>
           <div className="slot slot-ynab-bills">
-            <BillsWidget bills={bills} onChange={setBills} />
+            <BillsWidget bills={bills} onChange={setBills} cards={cards} onCardsChange={setCards} />
           </div>
           <div className="slot slot-ynab-financelog">
             <FinanceReviewLogWidget data={financeReviewLog} onChange={setFinanceReviewLog} />

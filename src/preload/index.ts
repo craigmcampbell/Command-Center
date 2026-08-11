@@ -153,6 +153,15 @@ const api: CommandCenterApi = {
     setNote: (id: number, note: string) => ipcRenderer.invoke("bills:setNote", id, note),
   },
 
+  cards: {
+    list: () => ipcRenderer.invoke("cards:list"),
+    add: (name: string, creditLimit: number, apr: number) =>
+      ipcRenderer.invoke("cards:add", name, creditLimit, apr),
+    update: (id: number, name: string, creditLimit: number, apr: number) =>
+      ipcRenderer.invoke("cards:update", id, name, creditLimit, apr),
+    remove: (id: number) => ipcRenderer.invoke("cards:remove", id),
+  },
+
   notes: {
     vaults: () => ipcRenderer.invoke("notes:vaults"),
     browse: (vaultLabel: string, subPath?: string) =>

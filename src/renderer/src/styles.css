@@ -3095,6 +3095,55 @@ body {
   outline: none;
 }
 
+/* Cards sub-tab (Bills widget) — reuses .ynab-table's base look for visual
+   consistency with the rest of the Finances tab. */
+.cards-table tbody tr:hover .row-actions {
+  opacity: 1;
+}
+.card-col-name {
+  width: auto;
+}
+.card-col-limit {
+  width: 100px;
+  text-align: right;
+  font-family: var(--mono);
+}
+.card-col-apr {
+  width: 80px;
+  text-align: right;
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.card-col-apr.apr-high {
+  color: var(--alert);
+}
+.card-col-apr.apr-low {
+  color: var(--live);
+}
+.card-col-actions {
+  width: 56px;
+  text-align: right;
+  overflow: visible;
+}
+.card-row-editing td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.card-table-input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.card-table-input[type="number"] {
+  text-align: right;
+}
+/* Add-row's Add button and an editing row's Save/Cancel stay visible even
+   without a hover — there's no saved data yet for the mouse-out state to
+   fall back to showing. */
+.row-actions.always-visible {
+  opacity: 1;
+}
+
 /* GitHub widget: review-requested rows reuse .row/.name.link/.tag as-is;
    the per-repo rows need their own label/info/badge layout. */
 .github-repo-row {
