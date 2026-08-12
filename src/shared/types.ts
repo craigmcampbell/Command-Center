@@ -408,6 +408,10 @@ export interface YnabTransaction {
   categoryId: string | null;
   categoryName: string | null;
   memo: string | null;
+  // Deep link to the transaction's account register in the YNAB web app —
+  // YNAB's API doesn't expose a documented per-transaction URL, so this
+  // lands on the account rather than scrolled/highlighted to the row.
+  ynabUrl: string;
 }
 
 export interface YnabUnapprovedResult {

@@ -1322,6 +1322,25 @@ body {
 .ynab-col-payee {
   width: auto;
 }
+.ynab-payee-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.ynab-payee-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.ynab-payee-link .external-icon {
+  opacity: 0;
+  color: var(--ink-dim);
+  transition: opacity 0.15s ease;
+}
+.ynab-payee-link:hover .external-icon {
+  opacity: 1;
+  color: var(--accent);
+}
 .ynab-col-name {
   width: auto;
 }

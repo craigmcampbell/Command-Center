@@ -105,6 +105,7 @@ export async function getUnapprovedTransactions(
     categoryId: t.category_id ?? null,
     categoryName: t.category_name ?? null,
     memo: t.memo ?? null,
+    ynabUrl: `https://app.ynab.com/${planId}/accounts/${t.account_id}`,
   }));
 
   return { ok: true, transactions };
