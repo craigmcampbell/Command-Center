@@ -10,7 +10,7 @@ import type {
   YnabUnapprovedResult,
 } from "../../../shared/types";
 import Panel from "./Panel";
-import { IconCheck, IconChevronRight, IconPlus, IconX } from "./icons";
+import { IconCheck, IconChevronRight, IconExternal, IconPlus, IconX } from "./icons";
 
 interface YnabUnapprovedWidgetProps {
   data: YnabUnapprovedResult | null;
@@ -257,7 +257,16 @@ function TransactionRow({
         </button>
       </td>
       <td className="ynab-col-date">{formatDate(transaction.date)}</td>
-      <td className="ynab-col-payee">{transaction.payeeName ?? "(no payee)"}</td>
+      <td className="ynab-col-payee">
+        <span
+          className="ynab-payee-link"
+          onClick={() => window.api.openUrl(transaction.ynabUrl)}
+          title="Open account in YNAB"
+        >
+          {transaction.payeeName ?? "(no payee)"}
+          <IconExternal className="external-icon" />
+        </span>
+      </td>
       <td className="ynab-col-category">
         {groupedCategories.length > 0 ? (
           <CategoryPicker

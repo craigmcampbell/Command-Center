@@ -408,6 +408,10 @@ export interface YnabTransaction {
   categoryId: string | null;
   categoryName: string | null;
   memo: string | null;
+  // Deep link to the transaction's account register in the YNAB web app —
+  // YNAB's API doesn't expose a documented per-transaction URL, so this
+  // lands on the account rather than scrolled/highlighted to the row.
+  ynabUrl: string;
 }
 
 export interface YnabUnapprovedResult {
@@ -459,6 +463,16 @@ export interface BillItem {
   dueDay: number;
   autopay: boolean;
   note: string | null;
+}
+
+// A manually-tracked credit card — shown in the Finances tab's Cards
+// sub-tab alongside Bills. creditLimit and apr are plain numbers (dollars,
+// percent), not YNAB-sourced.
+export interface CardItem {
+  id: number;
+  name: string;
+  creditLimit: number;
+  apr: number;
 }
 
 // Input for manually adding a transaction — amount is dollars, signed
@@ -646,6 +660,12 @@ export interface CommandCenterApi {
     update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     remove: (id: number) => Promise<BillItem[]>;
     setNote: (id: number, note: string) => Promise<BillItem[]>;
+  };
+  cards: {
+    list: () => Promise<CardItem[]>;
+    add: (name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
+    update: (id: number, name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
+    remove: (id: number) => Promise<CardItem[]>;
   };
   notes: {
     vaults: () => Promise<VaultConfig[]>;

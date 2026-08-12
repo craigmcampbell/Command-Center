@@ -86,6 +86,7 @@ import {
   removeBill,
   setBillNote,
 } from "./services/bills";
+import { initCards, listCards, addCard, updateCard, removeCard } from "./services/cards";
 import {
   initNotes,
   browseVault,
@@ -166,6 +167,7 @@ initNotes();
 initSettings();
 initTimeTracking();
 initBills();
+initCards();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -397,6 +399,19 @@ ipcMain.handle(
 );
 ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
 ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(id, note));
+
+// Cards: manually-tracked credit cards (name, credit limit, APR), shown
+// alongside Bills in the Finances tab.
+ipcMain.handle("cards:list", () => listCards());
+ipcMain.handle("cards:add", (_evt, name: string, creditLimit: number, apr: number) =>
+  addCard(name, creditLimit, apr)
+);
+ipcMain.handle(
+  "cards:update",
+  (_evt, id: number, name: string, creditLimit: number, apr: number) =>
+    updateCard(id, name, creditLimit, apr)
+);
+ipcMain.handle("cards:remove", (_evt, id: number) => removeCard(id));
 
 // Notes: browsing/reading/writing files in configured Obsidian vaults, plus
 // the left-nav pin list and open-tabs session (both SQLite).

@@ -1,12 +1,24 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
-import type { BillItem } from "../../../shared/types";
+import type { FormEvent, KeyboardEvent } from "react";
+import type { BillItem, CardItem } from "../../../shared/types";
 import Panel from "./Panel";
 import { IconCheck, IconNote, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
 
 interface BillsWidgetProps {
   bills: BillItem[];
   onChange: (bills: BillItem[]) => void;
+  cards: CardItem[];
+  onCardsChange: (cards: CardItem[]) => void;
+}
+
+type Tab = "bills" | "cards";
+
+function formatCurrency(n: number): string {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function formatApr(n: number): string {
+  return `${n}%`;
 }
 
 function ordinal(n: number): string {
@@ -237,7 +249,7 @@ function AddForm({ onAdd }: { onAdd: (label: string, dueDay: number, autopay: bo
   );
 }
 
-export default function BillsWidget({ bills, onChange }: BillsWidgetProps) {
+function BillsBody({ bills, onChange }: Pick<BillsWidgetProps, "bills" | "onChange">) {
   async function handleAdd(label: string, dueDay: number, autopay: boolean) {
     onChange(await window.api.bills.add(label, dueDay, autopay));
   }
@@ -252,7 +264,7 @@ export default function BillsWidget({ bills, onChange }: BillsWidgetProps) {
   }
 
   return (
-    <Panel title="Bills">
+    <>
       {bills.length === 0 ? (
         <p className="muted">No bills added yet.</p>
       ) : (
@@ -267,6 +279,298 @@ export default function BillsWidget({ bills, onChange }: BillsWidgetProps) {
         ))
       )}
       <AddForm onAdd={handleAdd} />
+    </>
+  );
+}
+
+function isValidPositiveNumber(text: string): boolean {
+  const n = Number(text);
+  return text.trim() !== "" && Number.isFinite(n) && n >= 0;
+}
+
+// APR above this is colored red (--alert), at or below is green (--live) —
+// a plain "is this card expensive to carry a balance on" signal, not tied
+// to any particular issuer's rate tiers.
+const HIGH_APR_THRESHOLD = 7;
+
+function CardFields({
+  name,
+  creditLimit,
+  apr,
+  onNameChange,
+  onCreditLimitChange,
+  onAprChange,
+  onKeyDown,
+}: {
+  name: string;
+  creditLimit: string;
+  apr: string;
+  onNameChange: (v: string) => void;
+  onCreditLimitChange: (v: string) => void;
+  onAprChange: (v: string) => void;
+  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <>
+      <td className="card-col-name">
+        <input
+          className="settings-input card-table-input"
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Card name"
+          autoFocus
+        />
+      </td>
+      <td className="card-col-limit">
+        <input
+          className="settings-input card-table-input"
+          type="number"
+          min={0}
+          step="1"
+          value={creditLimit}
+          onChange={(e) => onCreditLimitChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Credit limit"
+        />
+      </td>
+      <td className="card-col-apr">
+        <input
+          className="settings-input card-table-input"
+          type="number"
+          min={0}
+          step="0.01"
+          value={apr}
+          onChange={(e) => onAprChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="APR %"
+        />
+      </td>
+    </>
+  );
+}
+
+function CardEditRow({
+  item,
+  onSave,
+  onCancel,
+}: {
+  item: CardItem;
+  onSave: (name: string, creditLimit: number, apr: number) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(item.name);
+  const [creditLimit, setCreditLimit] = useState(String(item.creditLimit));
+  const [apr, setApr] = useState(String(item.apr));
+
+  const valid = name.trim() !== "" && isValidPositiveNumber(creditLimit) && isValidPositiveNumber(apr);
+
+  function handleSave() {
+    if (!valid) return;
+    onSave(name.trim(), Number(creditLimit), Number(apr));
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === "Escape") {
+      onCancel();
+    }
+  }
+
+  return (
+    <tr className="card-row-editing">
+      <CardFields
+        name={name}
+        creditLimit={creditLimit}
+        apr={apr}
+        onNameChange={setName}
+        onCreditLimitChange={setCreditLimit}
+        onAprChange={setApr}
+        onKeyDown={handleKeyDown}
+      />
+      <td className="card-col-actions">
+        <span className="row-actions always-visible">
+          <button className="row-action" onClick={handleSave} disabled={!valid} aria-label="Save">
+            <IconCheck />
+          </button>
+          <button className="row-action" onClick={onCancel} aria-label="Cancel">
+            <IconX />
+          </button>
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+function CardRow({
+  item,
+  onSave,
+  onDelete,
+}: {
+  item: CardItem;
+  onSave: (name: string, creditLimit: number, apr: number) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return (
+      <CardEditRow
+        item={item}
+        onSave={(name, creditLimit, apr) => {
+          onSave(name, creditLimit, apr);
+          setEditing(false);
+        }}
+        onCancel={() => setEditing(false)}
+      />
+    );
+  }
+
+  return (
+    <tr>
+      <td className="card-col-name">{item.name}</td>
+      <td className="card-col-limit">{formatCurrency(item.creditLimit)}</td>
+      <td className={`card-col-apr ${item.apr > HIGH_APR_THRESHOLD ? "apr-high" : "apr-low"}`}>
+        {formatApr(item.apr)}
+      </td>
+      <td className="card-col-actions">
+        <span className="row-actions">
+          <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
+            <IconPencil />
+          </button>
+          <button className="row-action danger" onClick={onDelete} aria-label="Delete">
+            <IconTrash />
+          </button>
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+function CardAddRow({ onAdd }: { onAdd: (name: string, creditLimit: number, apr: number) => void }) {
+  const [name, setName] = useState("");
+  const [creditLimit, setCreditLimit] = useState("");
+  const [apr, setApr] = useState("");
+
+  const valid = name.trim() !== "" && isValidPositiveNumber(creditLimit) && isValidPositiveNumber(apr);
+
+  function handleAdd() {
+    if (!valid) return;
+    onAdd(name.trim(), Number(creditLimit), Number(apr));
+    setName("");
+    setCreditLimit("");
+    setApr("");
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAdd();
+    }
+  }
+
+  return (
+    <tr className="card-row-editing">
+      <CardFields
+        name={name}
+        creditLimit={creditLimit}
+        apr={apr}
+        onNameChange={setName}
+        onCreditLimitChange={setCreditLimit}
+        onAprChange={setApr}
+        onKeyDown={handleKeyDown}
+      />
+      <td className="card-col-actions">
+        <button className="row-action always-visible" onClick={handleAdd} disabled={!valid} aria-label="Add">
+          <IconPlus />
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function CardsBody({
+  cards,
+  onCardsChange,
+}: {
+  cards: CardItem[];
+  onCardsChange: (cards: CardItem[]) => void;
+}) {
+  async function handleAdd(name: string, creditLimit: number, apr: number) {
+    onCardsChange(await window.api.cards.add(name, creditLimit, apr));
+  }
+  async function handleSave(id: number, name: string, creditLimit: number, apr: number) {
+    onCardsChange(await window.api.cards.update(id, name, creditLimit, apr));
+  }
+  async function handleDelete(id: number) {
+    onCardsChange(await window.api.cards.remove(id));
+  }
+
+  return (
+    <table className="ynab-table cards-table">
+      <thead>
+        <tr>
+          <th className="card-col-name">Name</th>
+          <th className="card-col-limit">Credit Limit</th>
+          <th className="card-col-apr">APR</th>
+          <th className="card-col-actions" aria-label="Actions" />
+        </tr>
+      </thead>
+      <tbody>
+        {cards.length === 0 && (
+          <tr>
+            <td colSpan={4} className="muted">
+              No cards added yet.
+            </td>
+          </tr>
+        )}
+        {cards.map((item) => (
+          <CardRow
+            key={item.id}
+            item={item}
+            onSave={(name, creditLimit, apr) => handleSave(item.id, name, creditLimit, apr)}
+            onDelete={() => handleDelete(item.id)}
+          />
+        ))}
+        <CardAddRow onAdd={handleAdd} />
+      </tbody>
+    </table>
+  );
+}
+
+export default function BillsWidget({ bills, onChange, cards, onCardsChange }: BillsWidgetProps) {
+  const [tab, setTab] = useState<Tab>("bills");
+
+  const headerRight = (
+    <div className="scratchpad-toolbar">
+      <div className="scratchpad-modes">
+        <button
+          type="button"
+          className={`scratchpad-mode ${tab === "bills" ? "active" : ""}`}
+          onClick={() => setTab("bills")}
+        >
+          Bills
+        </button>
+        <button
+          type="button"
+          className={`scratchpad-mode ${tab === "cards" ? "active" : ""}`}
+          onClick={() => setTab("cards")}
+        >
+          Cards
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <Panel title={tab === "bills" ? "Bills" : "Cards"} headerRight={headerRight}>
+      {tab === "bills" ? (
+        <BillsBody bills={bills} onChange={onChange} />
+      ) : (
+        <CardsBody cards={cards} onCardsChange={onCardsChange} />
+      )}
     </Panel>
   );
 }
