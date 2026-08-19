@@ -44,6 +44,15 @@ function escapeAttr(s: string): string {
   return escapeHtml(s).replace(/"/g, "&quot;");
 }
 
+// Same path data as components/icons.tsx's IconCopy/IconCheck — duplicated
+// as a raw string because this HTML is injected via dangerouslySetInnerHTML,
+// not rendered through React, so the components themselves aren't usable
+// here. lib/codeCopyButton.ts (the live editor's version of this button)
+// keeps its own copy in sync by hand too.
+const COPY_BUTTON_ICONS =
+  '<svg class="copy-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>' +
+  '<svg class="check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6"></path></svg>';
+
 // CommonMark soft breaks (a single newline inside a paragraph, not two
 // trailing spaces or a backslash — those already get their own HardBreak
 // node) are just part of the source text. Left as literal "\n", the browser's
@@ -329,7 +338,13 @@ function renderBlockNode(node: SyntaxNode, md: string, options: RenderMarkdownOp
       const text = children(node).find((c) => c.type.name === "CodeText");
       const lang = info ? md.slice(info.from, info.to).trim() : "";
       const code = text ? md.slice(text.from, text.to) : "";
-      return `<pre data-lang="${escapeAttr(lang)}"><code>${highlightFencedCode(code, lang)}</code></pre>`;
+      // The raw, unhighlighted code lives in data-copy-code (not read from
+      // .textContent) so copying isn't at the mercy of whatever markup
+      // highlightFencedCode happened to wrap each token in. Two icons ship
+      // inline and CSS toggles between them on click (see .code-copy-btn.copied
+      // in styles.css) rather than swapping innerHTML, so there's no risk of
+      // the click handler's copy landing on already-mutated icon markup.
+      return `<pre data-lang="${escapeAttr(lang)}"><button type="button" class="code-copy-btn" data-copy-code="${escapeAttr(code)}" title="Copy code" aria-label="Copy code">${COPY_BUTTON_ICONS}</button><code>${highlightFencedCode(code, lang)}</code></pre>`;
     }
     case "CodeBlock": {
       const code = md.slice(node.from, node.to);

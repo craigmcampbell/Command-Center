@@ -75,6 +75,22 @@ class TaskCheckboxWidget extends WidgetType {
   }
 }
 
+// "---"/"***"/"___" thematic breaks render as an actual rule (matching
+// lib/markdown.ts's <hr>) except on the line being edited, same reveal-on-
+// cursor treatment as headings — otherwise the raw dashes would permanently
+// look like a rule you can't get back into to edit/delete.
+class HorizontalRuleWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-hr";
+    return span;
+  }
+}
+
 // Bullet markers are always re-styled (not reveal-on-cursor like emphasis/
 // heading marks) — same reasoning as the task checkbox: it's a rendering
 // choice, not raw syntax you'd ever want to see and edit directly, and
@@ -149,6 +165,23 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
     line.push(Decoration.line({ class: cls }).range(ln.from));
   }
 
+  // Wrapped continuation text should align under the first line's text, not
+  // fall back to the left margin — the classic CSS "hanging indent" pair
+  // (padding-left pushes every row in, negative text-indent pulls the first
+  // row back out). `chars` is how wide the bullet/checkbox prefix reads on
+  // screen, in monospace character units: the item's own leading indent plus
+  // ~2 for the marker itself (bullet-dot-or-checkbox + the space after it) —
+  // approximate for checkboxes (a native <input>, not a fixed-width glyph),
+  // but close enough to read as aligned.
+  function addHangingIndent(pos: number, chars: number): void {
+    const ln = state.doc.lineAt(pos);
+    line.push(
+      Decoration.line({
+        attributes: { style: `padding-left: ${chars}ch; text-indent: -${chars}ch;` },
+      }).range(ln.from)
+    );
+  }
+
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
       from,
@@ -182,6 +215,16 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
           case "Highlight":
             hideEmphasisMarks(state, nodeRef.node, "HighlightMark", hide);
             break;
+          case "HorizontalRule": {
+            if (cursorOnLine(state, nodeRef.from)) break;
+            const range = Decoration.replace({ widget: new HorizontalRuleWidget() }).range(
+              nodeRef.from,
+              nodeRef.to
+            );
+            hide.push(range);
+            atomic.push(range);
+            break;
+          }
           case "Link":
           case "Image":
             hideLinkSyntax(state, nodeRef.node, hide);
@@ -229,6 +272,7 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
             for (const item of nodeRef.node.getChildren("ListItem")) {
               const mark = item.getChild("ListMark");
               if (!mark) continue;
+              addHangingIndent(mark.from, mark.from - state.doc.lineAt(mark.from).from + 2);
               if (item.getChild("Task")) {
                 let end = mark.to;
                 if (state.doc.sliceString(end, end + 1) === " ") end += 1;
@@ -313,6 +357,11 @@ const livePreviewTheme = EditorView.theme({
   },
   ".cm-list-bullet": {
     color: "var(--ink-dim)",
+  },
+  ".cm-hr": {
+    display: "block",
+    borderTop: "1px solid var(--panel-edge)",
+    margin: "8px 0",
   },
 });
 

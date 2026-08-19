@@ -24,6 +24,19 @@ export function handleMarkdownPreviewClick(
     return;
   }
 
+  const copyBtn = target.closest<HTMLButtonElement>("button[data-copy-code]");
+  if (copyBtn) {
+    // dataset decodes the HTML entities lib/markdown.ts's escapeAttr encoded
+    // (&amp;/&lt;/&gt;/&quot;) back to the original source text, so this is
+    // the raw fence contents, not whatever highlightFencedCode wrapped it in.
+    const code = copyBtn.dataset.copyCode ?? "";
+    void navigator.clipboard.writeText(code).then(() => {
+      copyBtn.classList.add("copied");
+      window.setTimeout(() => copyBtn.classList.remove("copied"), 1200);
+    });
+    return;
+  }
+
   const wikilink = target.closest<HTMLElement>("a[data-wikilink-path]");
   if (wikilink) {
     e.preventDefault();

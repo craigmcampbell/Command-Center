@@ -21,6 +21,7 @@ import { buildEditorCodeLanguageDescriptions } from "./codeLanguages";
 import { wikilinkExtension } from "./wikilinkExtension";
 import { highlightExtension, highlightTag } from "./highlightExtension";
 import { liveMarkdownPreview } from "./liveMarkdownPreview";
+import { codeFenceCopyButton } from "./codeCopyButton";
 import { frontmatterFold } from "./frontmatterFold";
 import { clickableLinks } from "./clickableLinks";
 
@@ -168,7 +169,12 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.url, color: "var(--accent)", textDecoration: "underline" },
   { tag: t.monospace, fontFamily: "var(--mono)", color: "var(--live)" },
   { tag: t.quote, color: "var(--ink-dim)", fontStyle: "italic" },
-  { tag: t.list, color: "var(--ink-dim)" },
+  // No t.list rule: @lezer/markdown tags every descendant of a list (marker
+  // *and* item text) as tags.list, and list item text has no other, more
+  // specific tag to fall back on — so a color rule here would dim ordinary
+  // list content, not just markers. Markers are dimmed separately: ListMark
+  // also carries tags.processingInstruction (see that rule below), which is
+  // what actually colors bullets/ordered-list numbers.
   {
     tag: highlightTag,
     backgroundColor: "var(--pending-glow)",
@@ -272,6 +278,7 @@ export function buildMarkdownEditorExtensions(
     // the line/range being edited, sizes headings, and turns task
     // checkboxes into real clickable inputs. See liveMarkdownPreview.ts.
     liveMarkdownPreview(),
+    codeFenceCopyButton(),
     frontmatterFold(),
     clickableLinks({ onOpenWikilink }),
     EditorView.lineWrapping,
