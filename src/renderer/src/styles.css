@@ -2469,6 +2469,7 @@ body {
   font-size: 0.9em;
 }
 .note pre {
+  position: relative;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-edge);
   border-radius: 6px;
@@ -2492,6 +2493,45 @@ body {
   letter-spacing: 0.05em;
   color: var(--ink-dim);
   margin-bottom: 6px;
+}
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.note pre:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
+  opacity: 1;
+}
+.code-copy-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.code-copy-btn .check-icon {
+  display: none;
+}
+.code-copy-btn.copied {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.code-copy-btn.copied .copy-icon {
+  display: none;
+}
+.code-copy-btn.copied .check-icon {
+  display: block;
 }
 .note img {
   max-width: 100%;

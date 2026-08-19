@@ -208,3 +208,16 @@ export function IconEyeOff({ size = 13, className }: IconProps) {
     </svg>
   );
 }
+
+// Matches the raw SVG string lib/codeCopyButton.ts embeds for the live
+// editor's copy button (that surface renders into dangerouslySetInnerHTML-
+// adjacent widget DOM, not React, so it can't import this component) — same
+// path data, kept in sync by hand so the two surfaces look identical.
+export function IconCopy({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </svg>
+  );
+}
