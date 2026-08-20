@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { NoteNavItem, VaultConfig, VaultNoteIndexEntry } from "../../../shared/types";
 import type { ResolvedWikilink } from "../lib/markdown";
-import { renderMarkdown } from "../lib/markdown";
-import { splitFrontmatter } from "../lib/frontmatter";
-import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
-import FrontmatterBlock from "./FrontmatterBlock";
+import { useAutosave } from "../hooks/useAutosave";
 import Panel from "./Panel";
-import MarkdownEditor from "./MarkdownEditor";
+import MarkdownPane, { MarkdownPaneToolbar } from "./MarkdownPane";
+import type { ViewMode } from "./MarkdownPane";
 import NoteBrowserModal from "./NoteBrowserModal";
 import { IconPlus, IconTrash, IconX } from "./icons";
 
-type ViewMode = "edit" | "preview";
-
-const AUTOSAVE_MS = 500;
+// How long a vault index stays usable before a refresh is worth doing. Only
+// ever checked when the window regains focus, so this is "was it fetched
+// recently enough that re-walking the vault would be wasted work", not a
+// polling interval.
+const INDEX_TTL_MS = 60_000;
 
 function groupByVault(
   vaults: VaultConfig[],
@@ -24,36 +24,93 @@ function groupByVault(
   }));
 }
 
-export default function NotesWidget() {
+interface NotesWidgetProps {
+  // Pushed up to App.tsx so the command palette can list pinned notes
+  // without lifting this widget's whole state — same pattern SettingsPage
+  // uses for processConfigs.
+  onNavChange?: (notes: NoteNavItem[]) => void;
+  // A note the palette asked to open. Cleared via onPendingOpenHandled once
+  // acted on, so asking twice for the same note still works.
+  pendingOpen?: NoteNavItem | null;
+  onPendingOpenHandled?: () => void;
+}
+
+export default function NotesWidget({
+  onNavChange,
+  pendingOpen,
+  onPendingOpenHandled,
+}: NotesWidgetProps = {}) {
   const [vaults, setVaults] = useState<VaultConfig[]>([]);
-  const [navNotes, setNavNotes] = useState<NoteNavItem[]>([]);
+  const [navNotes, setNavNotesState] = useState<NoteNavItem[]>([]);
   const [openIds, setOpenIds] = useState<number[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [contents, setContents] = useState<Record<number, string>>({});
   const [noteErrors, setNoteErrors] = useState<Record<number, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [mode, setMode] = useState<ViewMode>("edit");
-  const [savingId, setSavingId] = useState<number | null>(null);
   const [browserVault, setBrowserVault] = useState<string | null>(null);
   const [vaultIndexes, setVaultIndexes] = useState<Record<string, VaultNoteIndexEntry[]>>({});
-  const saveTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
-  const requestedIndexes = useRef<Set<string>>(new Set());
+  // Last-modified time each open note was last read or written at, keyed by
+  // nav id. This is the baseline saveNoteFile compares against, which is what
+  // stops an autosave silently overwriting an edit made in Obsidian.
+  const mtimes = useRef<Record<number, number | undefined>>({});
+  const [conflicts, setConflicts] = useState<Record<number, string>>({});
+  // vaultLabel → when its index was last fetched, so it can go stale and be
+  // refreshed rather than being cached for the whole session.
+  const indexFetchedAt = useRef<Map<string, number>>(new Map());
+
+  // Every nav mutation goes through here so App.tsx (and therefore the
+  // command palette) never sees a stale list.
+  const onNavChangeRef = useRef(onNavChange);
+  onNavChangeRef.current = onNavChange;
+  const setNavNotes = useCallback((notes: NoteNavItem[]) => {
+    setNavNotesState(notes);
+    onNavChangeRef.current?.(notes);
+  }, []);
+
+  // Keyed by nav id, so each open note debounces independently. The lookup
+  // reads `navNotes` fresh on every save (useAutosave keeps this callback in
+  // a ref) — a note removed from the nav mid-debounce just no-ops rather than
+  // writing through a stale vault/path pair.
+  const autosave = useAutosave<number>(async (id, text) => {
+    const item = navNotes.find((n) => n.id === id);
+    if (!item) return;
+    const result = await window.api.notes.save(
+      item.vaultLabel,
+      item.filePath,
+      text,
+      mtimes.current[id]
+    );
+    if (result.ok) {
+      mtimes.current[id] = result.mtimeMs;
+      setConflicts((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    } else if (result.conflict) {
+      // Nothing was written. The buffer keeps the user's text; the banner
+      // lets them reload or force the write.
+      setConflicts((prev) => ({ ...prev, [id]: result.reason || "That note changed on disk" }));
+    }
+  });
 
   const loadNoteContent = useCallback(async (item: NoteNavItem) => {
     const result = await window.api.notes.read(item.vaultLabel, item.filePath);
     if (result.ok) {
+      mtimes.current[item.id] = result.mtimeMs;
       setContents((prev) => ({ ...prev, [item.id]: result.content }));
     } else {
       setNoteErrors((prev) => ({ ...prev, [item.id]: result.reason || "Couldn't read note" }));
     }
   }, []);
 
-  // Fetched once per vault, the first time a note from it is opened, then
-  // cached for the rest of the session — no invalidation/refresh if the
-  // vault changes on disk externally while the app is open.
-  const ensureVaultIndex = useCallback((vaultLabel: string) => {
-    if (requestedIndexes.current.has(vaultLabel)) return;
-    requestedIndexes.current.add(vaultLabel);
+  const ensureVaultIndex = useCallback((vaultLabel: string, force = false) => {
+    const last = indexFetchedAt.current.get(vaultLabel);
+    if (!force && last !== undefined) return;
+    if (force && last !== undefined && Date.now() - last < INDEX_TTL_MS) return;
+    indexFetchedAt.current.set(vaultLabel, Date.now());
     window.api.notes.index(vaultLabel).then((result) => {
       setVaultIndexes((prev) => ({ ...prev, [vaultLabel]: result.ok ? result.entries : [] }));
     });
@@ -104,16 +161,105 @@ export default function NotesWidget() {
 
       setLoaded(true);
     })();
-  }, [loadNoteContent, ensureVaultIndex]);
+  }, [loadNoteContent, ensureVaultIndex, setNavNotes]);
 
-  // Pending debounced saves are cancelled on unmount (same tradeoff as
-  // ScratchpadWidget) — switching tabs within the debounce window drops
-  // that last edit rather than saving it.
+  // The command palette asks to open a note by handing one down rather than
+  // reaching into this widget's state, which stays deliberately unlifted.
+  // Only runs once the widget has loaded, so a palette action taken before
+  // then still lands rather than being dropped.
   useEffect(() => {
+    if (!pendingOpen || !loaded) return;
+    void openNote(pendingOpen);
+    onPendingOpenHandled?.();
+    // openNote is redefined each render but always closes over current
+    // state; keying on the request itself is what matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpen, loaded]);
+
+  // These files are edited in real Obsidian too, so the app has to notice
+  // when that happens. Checking on window focus rather than watching the
+  // filesystem: the realistic sequence is that you tab away to Obsidian and
+  // come back, so refocus is the right granularity — and fs.watch on macOS
+  // is FSEvents-backed and directory-granular, so Obsidian's atomic
+  // write-temp-then-rename saves leave the watched inode stale and need
+  // re-arming on every event. The mtime guard in saveNoteFile is what
+  // actually prevents data loss; this only controls how soon you find out.
+  // Depend on the individual callback rather than the whole handle: the hook
+  // returns a fresh object each render, so `autosave` as a dep would tear
+  // down and re-add these listeners on every keystroke. isPending is
+  // useCallback-stable.
+  const { isPending } = autosave;
+  useEffect(() => {
+    async function checkForExternalChanges() {
+      const open = openIds
+        .map((id) => navNotes.find((n) => n.id === id))
+        .filter((n): n is NoteNavItem => !!n);
+      if (open.length === 0) return;
+
+      open.forEach((item) => ensureVaultIndex(item.vaultLabel, true));
+
+      const result = await window.api.notes.statMany(
+        open.map(({ vaultLabel, filePath }) => ({ vaultLabel, filePath }))
+      );
+      if (!result.ok) return;
+
+      for (const entry of result.entries) {
+        const item = open.find(
+          (n) => n.vaultLabel === entry.vaultLabel && n.filePath === entry.filePath
+        );
+        if (!item || entry.mtimeMs === null) continue;
+        const known = mtimes.current[item.id];
+        if (known === undefined || entry.mtimeMs <= known) continue;
+
+        if (isPending(item.id)) {
+          // Local edits not yet written — reloading would throw them away,
+          // so surface the choice instead of picking one.
+          setConflicts((prev) => ({ ...prev, [item.id]: "That note changed on disk" }));
+        } else {
+          // Buffer is clean, so there's nothing to lose: just take the newer
+          // version. MarkdownEditor's externalSync annotation keeps this from
+          // echoing straight back out as a save.
+          void loadNoteContent(item);
+        }
+      }
+    }
+
+    const onFocus = () => void checkForExternalChanges();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     return () => {
-      Object.values(saveTimers.current).forEach(clearTimeout);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
-  }, []);
+  }, [openIds, navNotes, ensureVaultIndex, loadNoteContent, isPending]);
+
+  // "Reload from disk" — drop the local buffer and take the file's version.
+  async function resolveConflictByReload(item: NoteNavItem) {
+    autosave.cancel(item.id);
+    setConflicts((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
+    await loadNoteContent(item);
+  }
+
+  // "Keep mine" — write the buffer over whatever's on disk. Saves without a
+  // baseline, which is what makes saveNoteFile skip the mtime check.
+  async function resolveConflictByOverwrite(item: NoteNavItem) {
+    autosave.cancel(item.id);
+    const result = await window.api.notes.save(
+      item.vaultLabel,
+      item.filePath,
+      contents[item.id] ?? ""
+    );
+    if (result.ok) mtimes.current[item.id] = result.mtimeMs;
+    setConflicts((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
+  }
 
   async function openNote(item: NoteNavItem) {
     const nextOpenIds = openIds.includes(item.id) ? openIds : [...openIds, item.id];
@@ -127,6 +273,9 @@ export default function NotesWidget() {
   }
 
   async function closeTab(id: number) {
+    // Write any queued edit before the tab goes away, so closing a tab
+    // straight after typing can't lose the last keystrokes.
+    await autosave.flush(id);
     const remaining = openIds.filter((n) => n !== id);
     const nextActive = activeId === id ? (remaining[remaining.length - 1] ?? null) : activeId;
     setOpenIds(remaining);
@@ -135,6 +284,9 @@ export default function NotesWidget() {
   }
 
   async function removeFromNav(id: number) {
+    // Same as closeTab — the file stays on disk, so a queued edit still
+    // belongs in it. Flush before the nav row (and its vault/path) is gone.
+    await autosave.flush(id);
     const updatedNav = await window.api.notes.nav.remove(id);
     setNavNotes(updatedNav);
 
@@ -172,17 +324,7 @@ export default function NotesWidget() {
 
   function handleContentChange(item: NoteNavItem, text: string) {
     setContents((prev) => ({ ...prev, [item.id]: text }));
-    if (saveTimers.current[item.id]) clearTimeout(saveTimers.current[item.id]);
-    saveTimers.current[item.id] = setTimeout(async () => {
-      setSavingId(item.id);
-      await window.api.notes.save(item.vaultLabel, item.filePath, text);
-      setSavingId((cur) => (cur === item.id ? null : cur));
-    }, AUTOSAVE_MS);
-  }
-
-  function handleToggleTask(item: NoteNavItem, from: number, to: number, checked: boolean) {
-    const current = contents[item.id] ?? "";
-    handleContentChange(item, current.slice(0, from) + (checked ? "[x]" : "[ ]") + current.slice(to));
+    autosave.schedule(item.id, text);
   }
 
   if (!loaded) {
@@ -196,9 +338,6 @@ export default function NotesWidget() {
   const groups = groupByVault(vaults, navNotes);
   const activeItem = navNotes.find((n) => n.id === activeId) ?? null;
   const activeError = activeItem ? noteErrors[activeItem.id] : undefined;
-  const showEditor = mode === "edit";
-  const showPreview = mode === "preview";
-  const fm = activeItem ? splitFrontmatter(contents[activeItem.id] ?? "") : null;
 
   return (
     <Panel title="Notes">
@@ -283,65 +422,38 @@ export default function NotesWidget() {
                 })}
               </div>
 
-              <div className="notes-toolbar">
-                <div className="scratchpad-modes">
-                  {(["edit", "preview"] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      className={`scratchpad-mode ${mode === m ? "active" : ""}`}
-                      onClick={() => setMode(m)}
-                    >
-                      {m === "edit" ? "Write" : "Preview"}
-                    </button>
-                  ))}
-                </div>
-                {!activeError && (
-                  <span className="scratchpad-status">
-                    {savingId === activeItem.id ? "Saving…" : "Saved"}
-                  </span>
-                )}
-              </div>
+              <MarkdownPaneToolbar
+                mode={mode}
+                onModeChange={setMode}
+                saving={autosave.savingKey === activeItem.id}
+                value={contents[activeItem.id] ?? ""}
+                showStatus={!activeError}
+                className="notes-toolbar"
+              />
 
               {activeError ? (
                 <p className="muted notes-empty">{activeError}</p>
               ) : (
-                <div className={`scratchpad ${mode}`}>
-                  {showEditor && (
-                    <MarkdownEditor
-                      key={activeItem.id}
-                      className="scratchpad-editor"
-                      value={contents[activeItem.id] ?? ""}
-                      onChange={(text) => handleContentChange(activeItem, text)}
-                      onOpenWikilink={(target) => {
-                        const resolved = resolveWikilink(activeItem.vaultLabel, target);
-                        if (resolved) void openByPath(activeItem.vaultLabel, resolved.filePath, resolved.label);
-                      }}
-                    />
-                  )}
-                  {showPreview && (
-                    <div className="scratchpad-preview note">
-                      {fm && <FrontmatterBlock key={activeItem.id} yaml={fm.yaml} />}
-                      <div
-                        onClick={(e) =>
-                          handleMarkdownPreviewClick(e, {
-                            onToggleTask: (from, to, checked) =>
-                              handleToggleTask(activeItem, from, to, checked),
-                            onOpenWikilink: (filePath, label) =>
-                              openByPath(activeItem.vaultLabel, filePath, label),
-                          })
+                <MarkdownPane
+                  mode={mode}
+                  value={contents[activeItem.id] ?? ""}
+                  onChange={(text) => handleContentChange(activeItem, text)}
+                  docKey={activeItem.id}
+                  vaultIndex={vaultIndexes[activeItem.vaultLabel]}
+                  conflict={
+                    conflicts[activeItem.id]
+                      ? {
+                          message: conflicts[activeItem.id],
+                          onReload: () => void resolveConflictByReload(activeItem),
+                          onOverwrite: () => void resolveConflictByOverwrite(activeItem),
                         }
-                        dangerouslySetInnerHTML={{
-                          __html: renderMarkdown(contents[activeItem.id] ?? "", {
-                            interactiveTasks: true,
-                            resolveWikilink: (target) => resolveWikilink(activeItem.vaultLabel, target),
-                            includeFrontmatter: false,
-                          }),
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
+                      : null
+                  }
+                  resolveWikilink={(target) => resolveWikilink(activeItem.vaultLabel, target)}
+                  onOpenWikilink={(filePath, label) =>
+                    openByPath(activeItem.vaultLabel, filePath, label)
+                  }
+                />
               )}
             </>
           )}

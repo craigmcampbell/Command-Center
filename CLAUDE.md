@@ -11,6 +11,9 @@ Electron app, React + TypeScript, built with electron-vite.
 - **Node 22 (LTS)** — pinned. See gotcha below.
 - **electron-builder** — packages the app into a real macOS `.app` (`npm run package`),
   so it can run without a terminal attached at all.
+- **CodeMirror 6** — the markdown editor behind Scratchpad/Notes/Daily Note/
+  Finance Review Log, plus `@lezer/markdown` as the parser shared by both the
+  editor and the static preview renderer. See "Markdown editor" below.
 - **better-sqlite3** — persists everything: the Local Apps / Learning / Claude Code
   lists (display order + CRUD), the Notes tab's nav list + open-tabs session, Habits,
   the Scratchpad, and — as of the Settings page — all app configuration (API tokens,
@@ -53,7 +56,13 @@ Three walled-off parts — this separation is the security model, keep it intact
     "Settings" below for the full migration story.
   - `services/docker.ts` — shells out to `docker ps`, parses JSON-lines output.
   - `services/grimoire.ts` — reads Obsidian vault markdown directly from disk, given
-    the current `grimoire` settings section.
+    the current `grimoire` settings section. `readDailyNote` distinguishes "no
+    note for this day yet" (`missing: true`, by statting the daily-log folder)
+    from a real failure like a bad vault path, so the widget can offer an empty
+    editable note in the first case — `saveDailyNote` writes unconditionally
+    and creates the file, so nothing else is needed to start today's log from
+    the dashboard. Deliberately never mkdir's the folder itself; inventing
+    vault structure out from under Obsidian isn't this app's business.
   - `services/todoist.ts` — calls the Todoist REST API for due/overdue tasks, given
     the current `todoist` settings section.
   - `services/launcher.ts` — opens a terminal at a dir and runs a command (macOS:
@@ -83,7 +92,8 @@ Three walled-off parts — this separation is the security model, keep it intact
     escape the vault. The left-nav pin list and open-tabs session live in SQLite
     (`notes` / `notes_session` tables) — they only ever reference a file by
     `(vaultLabel, filePath)`, never copy its content, so the file on disk stays the
-    single source of truth.
+    single source of truth. Writes are mtime-guarded and `statNotes` batches
+    freshness checks — see "Notes tab" below for the conflict model.
   - `services/processes.ts` — starts/stops/tails arbitrary long-running local
     processes configured in Settings' Processes section (dev servers, watchers,
     tools like `opencode`). In-memory only (no writes back to the `processes`
@@ -161,8 +171,9 @@ Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
 
 ## Current widgets
 
-Docker status (auto-refresh) · today's Grimoire daily note (prev/next navigation
-between existing notes, deep link to open in Obsidian) · Google Calendar schedule
+Docker status (auto-refresh) · today's Grimoire daily note (editable, created
+on first keystroke if it doesn't exist yet; prev/next navigation between
+existing notes, deep link to open in Obsidian) · Google Calendar schedule
 (prev/next day pagination, join-meeting link, expandable notes) · active missions ·
 Todoist due/overdue tasks (grouped by project, with tags/subtasks) · Local Apps
 launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses/docs
@@ -194,24 +205,100 @@ Browses into one or more configured Obsidian vaults (Settings' Vaults section �
 separate from Grimoire's vault path in Settings, which only backs the Home tab's
 daily note/missions), pins specific notes into a left nav grouped by vault,
 opens several at once as tabs, and edits them with the same autosave pattern
-as Scratchpad — no explicit save, no on-disk conflict detection, so an edit
-made in real Obsidian while a note's open here can get overwritten on the
-next autosave. Deleting a nav entry only removes that row, never the file.
+as Scratchpad — no explicit save. Deleting a nav entry only removes that row,
+never the file.
+
+**Conflict safety.** Writes are mtime-guarded: `readNoteFile` returns the
+file's `mtimeMs`, the renderer keeps it as a per-note baseline, and
+`saveNoteFile` refuses to write (returning `{ conflict: true }`) if the file
+changed underneath it — so editing a note in real Obsidian while it's open
+here can no longer be silently overwritten. On window focus the widget
+`notes:statMany`s every open note: a clean buffer silently reloads, a dirty
+one gets a non-blocking Reload / Keep-mine bar. Passing no `expectedMtimeMs`
+writes unconditionally, which is the first-save and "Keep mine" path. Same
+trigger re-fetches vault indexes older than 60s, so a note created in
+Obsidian resolves as a wikilink without a restart.
 
 `components/NotesWidget.tsx` owns all the state itself (nav list, which notes
-are open, per-note content cache, per-note debounced autosave) — same
-self-contained pattern as `ScratchpadWidget`/`HabitsWidget`, nothing lifted to
-`App.tsx`. `components/NoteBrowserModal.tsx` is the "+" file-tree browser
-(always opens at the vault root, lazy per-folder fetches via `notes:browse`,
-no recursive walk). The editor pane reuses `MarkdownEditor` +
-`lib/markdown.ts`'s `renderMarkdown` and the write/preview toggle
-verbatim from Scratchpad's CSS (`.scratchpad`/`.scratchpad-editor`/
-`.scratchpad-preview`/`.scratchpad-mode`/`.scratchpad-status`) — the Notes-
-specific CSS only covers the nav/tab-strip/browser-modal chrome around it.
+are open, per-note content cache, per-note debounced autosave, mtimes) — same
+self-contained pattern as `ScratchpadWidget`/`HabitsWidget`. The one exception
+is the nav list, mirrored up to `App.tsx` via `onNavChange` so the command
+palette can offer pinned notes, with palette-initiated opens coming back down
+as `pendingOpen` (same push-up/hand-down shape `SettingsPage` uses for
+`processConfigs`). `components/NoteBrowserModal.tsx` is the "+" file-tree
+browser (always opens at the vault root, lazy per-folder fetches via
+`notes:browse`, no recursive walk). The editor pane is `MarkdownPane` (see
+"Markdown editor" below); the Notes-specific CSS only covers the
+nav/tab-strip/browser-modal chrome around it.
 
 Open tabs + the active tab persist across restarts in a `notes_session`
 singleton row (same shape as `services/scratchpad.ts`'s single-row table), so
 relaunching the app restores where you left off.
+
+## Markdown editor
+
+CodeMirror 6 with Obsidian-style live preview, shared by four consumers:
+Scratchpad, Notes, Daily Note (Home), and Finance Review Log. **Anything that
+would otherwise be copied into all four belongs in one of the shared pieces
+below** — they were byte-identical copies once and had already drifted in
+three places before being extracted.
+
+- `components/MarkdownPane.tsx` — the editing surface. Two exports, because
+  consumers disagree about where the toolbar goes: `MarkdownPaneToolbar`
+  (Write/Preview pills + word count + Saving…/Saved + a `children` slot) is
+  placed by the consumer (Panel `headerRight` for Scratchpad/Finance, an
+  in-body toolbar for Notes/Daily Note), while the default export renders the
+  formatting toolbar, the editor, and the rendered-preview pane. It owns the
+  task-toggle splice, the `includeFrontmatter: false` + `<FrontmatterBlock>`
+  pairing, and the bridging between the editor's `[[target]]` wikilink
+  callback and the preview's resolved `(filePath, label)` one. `docKey` is
+  **required**: it's the editor's React key, and frontmatter-collapsed-by-
+  default only applies at `EditorState` creation, so reusing one instance
+  across two documents would carry fold state over.
+- `hooks/useAutosave.ts` — keyed debounced save. **Unmount flushes rather than
+  cancelling**; the previous per-widget copies all `clearTimeout`'d on unmount,
+  so switching tabs inside the 500ms window silently dropped the last edit.
+  Also flushes on `beforeunload`. `isPending(key)` backs the conflict check
+  above; `cancel(key)` is for callers about to write something else themselves
+  (Scratchpad's Clear).
+- `lib/markdownEditor.ts` — extension assembly plus every editing command
+  (`toggleBold`, `setHeadingLevel(n)`, `toggleBulletList`, `insertTable`, …),
+  exported so `components/MarkdownToolbar.tsx` can dispatch them. Line-prefix
+  commands go through `editSelectedLines`, **not** `state.changeByRange` — a
+  multi-line selection needs one change per *line*, not per range. List
+  toggles reuse `matchListLine`, the single definition of what counts as a
+  list, shared with `continueList` and kept in step with the preview renderer.
+- `lib/markdownCompletions.ts` — `[[` vault-note picker and `/` block
+  snippets. The wikilink source is vault-dependent, so `NotesWidget` supplies
+  it and the other three get slash commands only. `completionKeymap` is
+  registered at `Prec.highest`, which is safe because `acceptCompletion`
+  returns false with no popup open and falls through to `continueList`.
+- `lib/clickableLinks.ts` + `lib/linkDestination.ts` — Mod+click to follow a
+  link, with a Mod-held hover underline so the gesture is discoverable at all.
+  `linkDestination` is the shared answer to "what does this node point at",
+  used both by the click handler and by the decoration that marks it, so the
+  thing that *looks* followable and the thing that *is* can't diverge. Covers
+  bare `URL` nodes (a pasted `https://…`, which has no wrapper node) as well
+  as `Link`/`Image`/`Autolink`/`WikiLink`.
+- `lib/urls.ts` — `safeUrl` scheme allowlist applied to every emitted
+  `href`/`src`, and `normalizeBareUrl` for GFM autolinks. C0 control
+  characters are stripped before the scheme test, because browsers strip them
+  while parsing and `java\nscript:` would otherwise pass.
+- `lib/editorSearch.ts`, `lib/markdownPaste.ts`, `lib/outline.ts` — Mod-F
+  find/replace, paste-URL-over-selection → `[text](url)`, and the heading
+  outline behind `components/OutlineButton.tsx`.
+
+**Two compartments** (`completionCompartment`, `placeholderCompartment`) let
+those change after mount without recreating the view and losing undo history —
+the vault index arrives asynchronously. Nothing else gets one; a compartment
+per extension is ceremony. `MarkdownEditor` reports its view via an
+`onViewReady` callback rather than an imperative handle, because
+`useImperativeHandle` is a *layout* effect and fires before the passive effect
+that creates the view.
+
+All CodeMirror styling lives in `EditorView.theme()` next to the feature it
+belongs to, never in `styles.css` — which holds only the React chrome around
+the editor (`.md-toolbar`, `.md-conflict`, `.md-outline-*`, `.scratchpad-*`).
 
 ## Managed Processes (Development tab)
 
@@ -242,9 +329,9 @@ what rows exist at all.
 
 ## Command Palette
 
-`⌘K`/`Ctrl+K` opens a global fuzzy-filter launcher over tabs, Claude Code
-projects, Local Apps/Learning links, Docker start/stop, and a couple of quick
-actions ("Refresh all", "New scratchpad note"). It's app-wide navigation, not
+`⌘P`/`Ctrl+P` opens a global fuzzy-filter launcher over tabs, Claude Code
+projects, Local Apps/Learning links, pinned Notes, Docker start/stop, and a
+couple of quick actions ("Refresh all", "New scratchpad note"). It's app-wide navigation, not
 a per-tab widget, so it skips the five-touch-point pattern above:
 `src/renderer/src/palette.ts` holds the action registry (`buildActions()`
 rebuilds the list fresh every time the palette opens, from whatever state
@@ -252,6 +339,13 @@ rebuilds the list fresh every time the palette opens, from whatever state
 `components/CommandPalette.tsx` is the overlay itself. The global keydown
 listener lives in `App.tsx`; it's renderer-only (no Electron `globalShortcut`),
 so it only fires while a Command Center window is focused.
+
+**Why `⌘P` and not the more usual `⌘K`:** this listener is on `window` and
+calls `preventDefault()`, so it wins against any CodeMirror binding no matter
+what the editor asks for — and `⌘K` is the near-universal "insert link"
+shortcut, which the markdown editor now uses. Anything bound here is
+effectively taken away from every editor in the app, so keep that in mind
+before adding more.
 
 ## Settings
 

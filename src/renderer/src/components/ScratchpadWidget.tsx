@@ -1,22 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { renderMarkdown } from "../lib/markdown";
-import { splitFrontmatter } from "../lib/frontmatter";
-import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
-import FrontmatterBlock from "./FrontmatterBlock";
+import { useEffect, useState } from "react";
+import { useAutosave } from "../hooks/useAutosave";
 import Panel from "./Panel";
-import MarkdownEditor from "./MarkdownEditor";
+import MarkdownPane, { MarkdownPaneToolbar } from "./MarkdownPane";
+import type { ViewMode } from "./MarkdownPane";
 import { IconTrash } from "./icons";
 
-type ViewMode = "edit" | "preview";
-
-const AUTOSAVE_MS = 500;
+// One document, so the autosave key is a constant — the hook is keyed for
+// NotesWidget's sake (several notes open at once). Same reason docKey below
+// is constant: the Scratchpad's document identity never changes, so the
+// editor should never remount.
+const KEY = "scratchpad";
 
 export default function ScratchpadWidget() {
   const [content, setContent] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [mode, setMode] = useState<ViewMode>("edit");
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const autosave = useAutosave<string>((_key, text) => window.api.scratchpad.save(text));
 
   useEffect(() => {
     window.api.scratchpad.get().then((text) => {
@@ -25,36 +25,19 @@ export default function ScratchpadWidget() {
     });
   }, []);
 
-  const scheduleSave = useCallback((text: string) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaving(true);
-      await window.api.scratchpad.save(text);
-      setSaving(false);
-    }, AUTOSAVE_MS);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, []);
-
   function handleChange(text: string) {
     setContent(text);
-    scheduleSave(text);
-  }
-
-  function handleToggleTask(from: number, to: number, checked: boolean) {
-    handleChange(content.slice(0, from) + (checked ? "[x]" : "[ ]") + content.slice(to));
+    autosave.schedule(KEY, text);
   }
 
   async function handleClear() {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
+    // Drop the queued save rather than flushing it — we're about to write ""
+    // ourselves, and flushing would write the pre-clear text on top of it.
+    autosave.cancel(KEY);
     setContent("");
-    setSaving(true);
+    setClearing(true);
     await window.api.scratchpad.clear();
-    setSaving(false);
+    setClearing(false);
   }
 
   if (!loaded) {
@@ -65,28 +48,16 @@ export default function ScratchpadWidget() {
     );
   }
 
-  const showEditor = mode === "edit";
-  const showPreview = mode === "preview";
-  const fm = splitFrontmatter(content);
-
   return (
     <Panel
       title="Scratchpad"
       headerRight={
-        <div className="scratchpad-toolbar">
-          <div className="scratchpad-modes">
-            {(["edit", "preview"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`scratchpad-mode ${mode === m ? "active" : ""}`}
-                onClick={() => setMode(m)}
-              >
-                {m === "edit" ? "Write" : "Preview"}
-              </button>
-            ))}
-          </div>
-          <span className="scratchpad-status">{saving ? "Saving…" : "Saved"}</span>
+        <MarkdownPaneToolbar
+          mode={mode}
+          onModeChange={setMode}
+          saving={autosave.savingKey !== null || clearing}
+          value={content}
+        >
           <button
             type="button"
             className="scratchpad-clear"
@@ -97,30 +68,16 @@ export default function ScratchpadWidget() {
             <IconTrash />
             Clear
           </button>
-        </div>
+        </MarkdownPaneToolbar>
       }
     >
-      <div className={`scratchpad ${mode}`}>
-        {showEditor && (
-          <MarkdownEditor
-            className="scratchpad-editor"
-            value={content}
-            onChange={handleChange}
-            placeholder="Jot something down… supports markdown headings, nested bullets, tasks, bold, and italic."
-          />
-        )}
-        {showPreview && (
-          <div className="scratchpad-preview note">
-            {fm && <FrontmatterBlock yaml={fm.yaml} />}
-            <div
-              onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
-              dangerouslySetInnerHTML={{
-                __html: renderMarkdown(content, { interactiveTasks: true, includeFrontmatter: false }),
-              }}
-            />
-          </div>
-        )}
-      </div>
+      <MarkdownPane
+        mode={mode}
+        value={content}
+        onChange={handleChange}
+        docKey={KEY}
+        placeholder="Jot something down… supports markdown headings, nested bullets, tasks, bold, and italic."
+      />
     </Panel>
   );
 }

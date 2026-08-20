@@ -93,6 +93,7 @@ import {
   buildVaultIndex,
   readNoteFile,
   saveNoteFile,
+  statNotes,
   createNoteFile,
   listTemplates,
   listNavNotes,
@@ -423,8 +424,13 @@ ipcMain.handle("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(vaul
 ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
   readNoteFile(vaultLabel, filePath)
 );
-ipcMain.handle("notes:save", (_evt, vaultLabel: string, filePath: string, content: string) =>
-  saveNoteFile(vaultLabel, filePath, content)
+ipcMain.handle(
+  "notes:save",
+  (_evt, vaultLabel: string, filePath: string, content: string, expectedMtimeMs?: number) =>
+    saveNoteFile(vaultLabel, filePath, content, expectedMtimeMs)
+);
+ipcMain.handle("notes:statMany", (_evt, targets: { vaultLabel: string; filePath: string }[]) =>
+  statNotes(targets)
 );
 ipcMain.handle(
   "notes:create",

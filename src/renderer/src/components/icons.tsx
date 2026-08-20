@@ -221,3 +221,142 @@ export function IconCopy({ size = 13, className }: IconProps) {
     </svg>
   );
 }
+
+// ---- markdown formatting toolbar (components/MarkdownToolbar.tsx) ----
+// Heavier stroke than the rest of the set: these render at 13px next to
+// text, where the default 1.75 reads as washed out.
+
+const glyph = { ...base, strokeWidth: 2 };
+
+export function IconBold({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M7 4h6.5a4 4 0 0 1 0 8H7Z" />
+      <path d="M7 12h7.5a4 4 0 0 1 0 8H7Z" />
+    </svg>
+  );
+}
+
+export function IconItalic({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M15 4H9M15 20H9M14 4 10 20" />
+    </svg>
+  );
+}
+
+export function IconStrikethrough({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 12h16" />
+      <path d="M16.5 7A4.5 4.5 0 0 0 8 8.5c0 1.4 1 2.6 3 3.5" />
+      <path d="M7.5 17a4.5 4.5 0 0 0 8.5-1.5c0-.8-.3-1.5-.8-2" />
+    </svg>
+  );
+}
+
+export function IconCodeInline({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="m9 8-4 4 4 4M15 8l4 4-4 4" />
+    </svg>
+  );
+}
+
+export function IconCodeBlock({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m9 10-2 2 2 2M15 10l2 2-2 2" />
+    </svg>
+  );
+}
+
+export function IconLink({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M10.5 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6" />
+      <path d="M13.5 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6" />
+    </svg>
+  );
+}
+
+export function IconH1({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 5v14M12 5v14M4 12h8" />
+      <path d="M16.5 10.5 19 9v10" />
+    </svg>
+  );
+}
+
+export function IconH2({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 5v14M12 5v14M4 12h8" />
+      <path d="M16 10.5a2.5 2.5 0 0 1 4.3 1.7c0 2.3-4.3 3.6-4.3 6.8h4.5" />
+    </svg>
+  );
+}
+
+export function IconH3({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 5v14M12 5v14M4 12h8" />
+      <path d="M16 9.5h4.3L17.5 13a2.75 2.75 0 1 1-1.8 4.8" />
+    </svg>
+  );
+}
+
+export function IconList({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </svg>
+  );
+}
+
+export function IconListOrdered({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M10 6h10M10 12h10M10 18h10" />
+      <path d="M4 5.5 5.5 5v4M3.5 15.2a1.6 1.6 0 0 1 2.8 1c0 1.3-2.8 2-2.8 3.3h3" />
+    </svg>
+  );
+}
+
+export function IconTask({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <rect x="3" y="4" width="8" height="8" rx="1.5" />
+      <path d="m4.5 8 2 2 3-3.5M14 8h7M3 17h18" />
+    </svg>
+  );
+}
+
+export function IconQuote({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 5v14" />
+      <path d="M9 8h11M9 12h11M9 16h7" />
+    </svg>
+  );
+}
+
+export function IconTable({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9.5h18M9.5 9.5V20M3 15h18" />
+    </svg>
+  );
+}
+
+export function IconOutline({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
+      <path d="M4 5h16M4 10h11M4 15h13M4 20h8" />
+    </svg>
+  );
+}

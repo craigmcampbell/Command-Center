@@ -11,6 +11,7 @@ import { highlightFencedCode } from "./codeHighlight";
 import { wikilinkExtension } from "./wikilinkExtension";
 import { highlightExtension } from "./highlightExtension";
 import { countFrontmatterProperties, splitFrontmatter } from "./frontmatter";
+import { normalizeBareUrl, safeUrl } from "./urls";
 
 const parser = baseParser.configure([GFM, wikilinkExtension, highlightExtension]);
 
@@ -42,6 +43,14 @@ export function escapeHtml(s: string): string {
 
 function escapeAttr(s: string): string {
   return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
+// A link/image whose URL failed safeUrl. Rendered as a span, not a disabled
+// <a> — an anchor would still carry the rejected URL in the DOM for some
+// later refactor of markdownPreviewInteractions.ts to pick back up. `label`
+// is already-escaped HTML (it comes from the inline renderer).
+function blockedLink(label: string): string {
+  return `<span class="link-blocked" title="Blocked link (unsupported URL scheme)">${label}</span>`;
 }
 
 // Same path data as components/icons.tsx's IconCopy/IconCheck — duplicated
@@ -194,12 +203,16 @@ function renderInlineNode(node: SyntaxNode, md: string, options: RenderMarkdownO
     }
     case "Link": {
       const { text, href, title } = linkParts(node, md, options);
-      return `<a href="${escapeAttr(href)}"${title ? ` title="${escapeAttr(title)}"` : ""}>${text}</a>`;
+      const safe = safeUrl(href);
+      if (safe === null) return blockedLink(text);
+      return `<a href="${escapeAttr(safe)}"${title ? ` title="${escapeAttr(title)}"` : ""}>${text}</a>`;
     }
     case "Image": {
       const { text, href, title } = linkParts(node, md, options);
       const alt = text.replace(/<[^>]*>/g, "");
-      return `<img src="${escapeAttr(href)}" alt="${escapeAttr(alt)}"${title ? ` title="${escapeAttr(title)}"` : ""}>`;
+      const safe = safeUrl(href);
+      if (safe === null) return blockedLink(escapeHtml(alt));
+      return `<img src="${escapeAttr(safe)}" alt="${escapeAttr(alt)}"${title ? ` title="${escapeAttr(title)}"` : ""}>`;
     }
     case "WikiLink":
       return renderWikilink(node, md, options, false);
@@ -207,7 +220,21 @@ function renderInlineNode(node: SyntaxNode, md: string, options: RenderMarkdownO
       return renderWikilink(node, md, options, true);
     case "Autolink": {
       const url = md.slice(node.from, node.to).replace(/^<|>$/g, "");
-      return `<a href="${escapeAttr(url)}">${escapeHtml(url)}</a>`;
+      const safe = safeUrl(url);
+      if (safe === null) return blockedLink(escapeHtml(url));
+      return `<a href="${escapeAttr(safe)}">${escapeHtml(url)}</a>`;
+    }
+    // A bare URL — "https://x.com" pasted into a paragraph, or GFM-linkified
+    // "www.x.com"/"a@b.com". @lezer/markdown emits these as a standalone URL
+    // node with no wrapper (unlike <...>, which gets an Autolink), so
+    // without this case they fell through to `default` and rendered as plain
+    // text — inconsistent with the editor, which follows them on Mod+click
+    // (see lib/linkDestination.ts, which shares the normalization).
+    case "URL": {
+      const raw = md.slice(node.from, node.to);
+      const safe = safeUrl(normalizeBareUrl(raw));
+      if (safe === null) return blockedLink(escapeHtml(raw));
+      return `<a href="${escapeAttr(safe)}">${escapeHtml(raw)}</a>`;
     }
     case "HardBreak":
       return "<br>";

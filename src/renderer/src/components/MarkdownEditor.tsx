@@ -1,8 +1,15 @@
 import { useEffect, useRef } from "react";
-import { EditorState } from "@codemirror/state";
+import type { Extension } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { buildMarkdownEditorExtensions } from "../lib/markdownEditor";
+import {
+  buildMarkdownEditorExtensions,
+  completionCompartment,
+  externalSync,
+  placeholderCompartment,
+} from "../lib/markdownEditor";
 import { foldFrontmatterByDefault } from "../lib/frontmatterFold";
+import { placeholder as cmPlaceholder } from "@codemirror/view";
 
 interface MarkdownEditorProps {
   value: string;
@@ -13,6 +20,20 @@ interface MarkdownEditorProps {
   // there's no vault to resolve against (Scratchpad, Daily Note), same as
   // resolveWikilink being omitted from those widgets' renderMarkdown calls.
   onOpenWikilink?: (target: string) => void;
+  // Autocomplete sources. Vault-dependent and resolved asynchronously, so
+  // this arrives after mount and is applied through a Compartment rather
+  // than by recreating the editor (which would drop undo history).
+  completions?: Extension;
+  // Called with the live view once it exists, and with null on teardown, so
+  // a toolbar can dispatch commands against it.
+  //
+  // Deliberately a callback rather than an imperative handle: useImperativeHandle
+  // is a *layout* effect, so it attaches before the passive effect below has
+  // created the view — a parent reading `handle.view` at attach time would
+  // only ever see null, which is exactly the bug that left every toolbar
+  // button permanently disabled. Calling from inside the mount effect makes
+  // the timing explicit and correct.
+  onViewReady?: (view: EditorView | null) => void;
 }
 
 export default function MarkdownEditor({
@@ -21,6 +42,8 @@ export default function MarkdownEditor({
   placeholder,
   className,
   onOpenWikilink,
+  completions,
+  onViewReady,
 }: MarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -29,40 +52,68 @@ export default function MarkdownEditor({
   const onOpenWikilinkRef = useRef(onOpenWikilink);
   onOpenWikilinkRef.current = onOpenWikilink;
 
+  const onViewReadyRef = useRef(onViewReady);
+  onViewReadyRef.current = onViewReady;
+
   useEffect(() => {
     if (!containerRef.current) return;
 
     const initialState = EditorState.create({
       doc: value,
-      extensions: buildMarkdownEditorExtensions(
-        (text) => onChangeRef.current(text),
-        placeholder,
-        (target) => onOpenWikilinkRef.current?.(target)
-      ),
+      extensions: buildMarkdownEditorExtensions({
+        onDocChanged: (text) => onChangeRef.current(text),
+        placeholderText: placeholder,
+        onOpenWikilink: (target) => onOpenWikilinkRef.current?.(target),
+        completions,
+      }),
     });
     const view = new EditorView({
       state: foldFrontmatterByDefault(initialState),
       parent: containerRef.current,
     });
     viewRef.current = view;
+    onViewReadyRef.current?.(view);
 
     return () => {
+      onViewReadyRef.current?.(null);
       view.destroy();
       viewRef.current = null;
     };
     // Intentionally empty: the editor is created once. `value` changes after
     // mount are synced via the effect below instead of recreating the view,
-    // which would drop cursor position and undo history on every render.
+    // which would drop cursor position and undo history on every render;
+    // `placeholder`/`completions` changes go through their compartments.
   }, []);
 
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
-    if (current !== value) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
-    }
+    if (current === value) return;
+
+    // Keep the cursor where it was. A bare full-document replace leaves the
+    // selection at position 0, so any content arriving from outside (a parent
+    // re-render, a note reloaded from disk) would silently jump the caret to
+    // the top of the note mid-edit. Clamped, since the new doc may be shorter.
+    const head = Math.min(view.state.selection.main.head, value.length);
+    view.dispatch({
+      changes: { from: 0, to: current.length, insert: value },
+      selection: EditorSelection.cursor(head),
+      annotations: externalSync.of(true),
+    });
   }, [value]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: completionCompartment.reconfigure(completions ?? []),
+    });
+  }, [completions]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: placeholderCompartment.reconfigure(cmPlaceholder(placeholder ?? "")),
+    });
+  }, [placeholder]);
 
   return <div ref={containerRef} className={className} />;
 }

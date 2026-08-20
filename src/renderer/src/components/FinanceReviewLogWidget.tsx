@@ -1,42 +1,29 @@
-import { useCallback, useRef, useState } from "react";
+import { useState } from "react";
 import type { NoteContent } from "../../../shared/types";
-import { renderMarkdown } from "../lib/markdown";
-import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
+import { useAutosave } from "../hooks/useAutosave";
 import Panel from "./Panel";
-import MarkdownEditor from "./MarkdownEditor";
+import MarkdownPane, { MarkdownPaneToolbar } from "./MarkdownPane";
+import type { ViewMode } from "./MarkdownPane";
 
 interface FinanceReviewLogWidgetProps {
   data: NoteContent | null;
   onChange: (data: NoteContent) => void;
 }
 
-type ViewMode = "edit" | "preview";
-
-const AUTOSAVE_MS = 500;
+// One fixed document — constant autosave key and constant docKey, so the
+// editor never remounts.
+const KEY = "finance-review-log";
 
 export default function FinanceReviewLogWidget({ data, onChange }: FinanceReviewLogWidgetProps) {
   const [mode, setMode] = useState<ViewMode>("edit");
-  const [saving, setSaving] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  const scheduleSave = useCallback((text: string) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaving(true);
-      await window.api.grimoire.saveFinanceReviewLog(text);
-      setSaving(false);
-    }, AUTOSAVE_MS);
-  }, []);
+  const autosave = useAutosave<string>((_key, text) =>
+    window.api.grimoire.saveFinanceReviewLog(text)
+  );
 
   function handleChange(text: string) {
     if (!data?.ok) return;
     onChange({ ...data, content: text });
-    scheduleSave(text);
-  }
-
-  function handleToggleTask(from: number, to: number, checked: boolean) {
-    if (!data?.ok) return;
-    handleChange(data.content.slice(0, from) + (checked ? "[x]" : "[ ]") + data.content.slice(to));
+    autosave.schedule(KEY, text);
   }
 
   if (!data) {
@@ -55,49 +42,25 @@ export default function FinanceReviewLogWidget({ data, onChange }: FinanceReview
     );
   }
 
-  const showEditor = mode === "edit";
-  const showPreview = mode === "preview";
-
   return (
     <Panel
       title="Finance Review Log"
       headerRight={
-        <div className="scratchpad-toolbar">
-          <div className="scratchpad-modes">
-            {(["edit", "preview"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`scratchpad-mode ${mode === m ? "active" : ""}`}
-                onClick={() => setMode(m)}
-              >
-                {m === "edit" ? "Write" : "Preview"}
-              </button>
-            ))}
-          </div>
-          <span className="scratchpad-status">{saving ? "Saving…" : "Saved"}</span>
-        </div>
+        <MarkdownPaneToolbar
+          mode={mode}
+          onModeChange={setMode}
+          saving={autosave.savingKey !== null}
+          value={data.content}
+        />
       }
     >
-      <div className={`scratchpad ${mode}`}>
-        {showEditor && (
-          <MarkdownEditor
-            className="scratchpad-editor"
-            value={data.content}
-            onChange={handleChange}
-            placeholder="Log finance review notes…"
-          />
-        )}
-        {showPreview && (
-          <div
-            className="scratchpad-preview note"
-            onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
-            dangerouslySetInnerHTML={{
-              __html: renderMarkdown(data.content, { interactiveTasks: true }),
-            }}
-          />
-        )}
-      </div>
+      <MarkdownPane
+        mode={mode}
+        value={data.content}
+        onChange={handleChange}
+        docKey={KEY}
+        placeholder="Log finance review notes…"
+      />
     </Panel>
   );
 }

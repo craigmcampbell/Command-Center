@@ -103,15 +103,34 @@ export function readDailyNote(
     const content = fs.readFileSync(file, "utf8");
     return { ok: true, file, content, date, prevDate, nextDate, obsidianUri };
   } catch {
+    // Distinguish "this day has no note yet" from "the vault isn't readable".
+    // The first is the normal case before you've written anything today, and
+    // the widget turns it into an empty editable note; the second is a real
+    // configuration problem and must keep surfacing as one. Checked by
+    // statting the daily-log directory rather than by matching on the reason
+    // string downstream. Deliberately does NOT create the directory — that
+    // would be inventing vault structure out from under Obsidian.
+    let dirExists = false;
+    try {
+      dirExists = fs.statSync(path.join(vaultPath, dailyLogDir)).isDirectory();
+    } catch {
+      dirExists = false;
+    }
+
     return {
       ok: false,
       file,
-      reason: date === todayDateString() ? "No note for today yet" : "No note for this day",
+      reason: dirExists
+        ? date === todayDateString()
+          ? "No note for today yet"
+          : "No note for this day"
+        : "Daily log folder not found",
       content: "",
       date,
       prevDate,
       nextDate,
       obsidianUri,
+      missing: dirExists,
     };
   }
 }

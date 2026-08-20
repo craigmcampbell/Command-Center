@@ -169,8 +169,10 @@ const api: CommandCenterApi = {
     index: (vaultLabel: string) => ipcRenderer.invoke("notes:index", vaultLabel),
     read: (vaultLabel: string, filePath: string) =>
       ipcRenderer.invoke("notes:read", vaultLabel, filePath),
-    save: (vaultLabel: string, filePath: string, content: string) =>
-      ipcRenderer.invoke("notes:save", vaultLabel, filePath, content),
+    save: (vaultLabel: string, filePath: string, content: string, expectedMtimeMs?: number) =>
+      ipcRenderer.invoke("notes:save", vaultLabel, filePath, content, expectedMtimeMs),
+    statMany: (targets: { vaultLabel: string; filePath: string }[]) =>
+      ipcRenderer.invoke("notes:statMany", targets),
     create: (vaultLabel: string, dirPath: string, name: string, templatePath?: string | null) =>
       ipcRenderer.invoke("notes:create", vaultLabel, dirPath, name, templatePath),
     templates: (vaultLabel: string) => ipcRenderer.invoke("notes:templates", vaultLabel),

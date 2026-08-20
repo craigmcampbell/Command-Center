@@ -5,8 +5,9 @@
 // the lifecycle wiring.
 
 import type { Extension } from "@codemirror/state";
-import { EditorSelection } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
+import type { Command } from "@codemirror/view";
 import {
   defaultKeymap,
   history,
@@ -14,6 +15,7 @@ import {
   indentMore,
   indentLess,
 } from "@codemirror/commands";
+import { searchKeymap } from "@codemirror/search";
 import { HighlightStyle, syntaxHighlighting, indentUnit } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
@@ -24,6 +26,8 @@ import { liveMarkdownPreview } from "./liveMarkdownPreview";
 import { codeFenceCopyButton } from "./codeCopyButton";
 import { frontmatterFold } from "./frontmatterFold";
 import { clickableLinks } from "./clickableLinks";
+import { markdownPaste } from "./markdownPaste";
+import { markdownSearch } from "./editorSearch";
 
 // Bullets, ordered markers, and tasks — deliberately matches exactly what
 // lib/markdown.ts's preview renderer recognizes, so editor behavior and
@@ -147,9 +151,181 @@ function wrapSelection(view: EditorView, wrapper: string): boolean {
   return true;
 }
 
-const toggleBold = (view: EditorView): boolean => wrapSelection(view, "**");
-const toggleItalic = (view: EditorView): boolean => wrapSelection(view, "_");
-const toggleStrikethrough = (view: EditorView): boolean => wrapSelection(view, "~~");
+export const toggleBold: Command = (view) => wrapSelection(view, "**");
+export const toggleItalic: Command = (view) => wrapSelection(view, "_");
+export const toggleStrikethrough: Command = (view) => wrapSelection(view, "~~");
+export const toggleInlineCode: Command = (view) => wrapSelection(view, "`");
+
+// ---- line-prefix commands (headings, quotes, lists) ----
+
+interface LineChange {
+  from: number;
+  to: number;
+  insert: string;
+}
+
+// Applies an edit to every line any selection range touches, as ONE
+// transaction. Deliberately not state.changeByRange: that maps one change
+// per *range*, and a single range spanning five lines needs five changes.
+// Returning null from `edit` skips that line (blank lines, mostly).
+function editSelectedLines(
+  view: EditorView,
+  edit: (text: string, lineFrom: number) => LineChange | null
+): boolean {
+  const { state } = view;
+  const seen = new Set<number>();
+  const changes: LineChange[] = [];
+
+  for (const range of state.selection.ranges) {
+    const first = state.doc.lineAt(range.from).number;
+    const last = state.doc.lineAt(range.to).number;
+    for (let n = first; n <= last; n++) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      const line = state.doc.line(n);
+      const change = edit(line.text, line.from);
+      if (change) changes.push(change);
+    }
+  }
+
+  if (changes.length === 0) return false;
+  changes.sort((a, b) => a.from - b.from);
+  view.dispatch(state.update({ changes, scrollIntoView: true }));
+  return true;
+}
+
+function leadingIndent(text: string): string {
+  return /^\s*/.exec(text)![0];
+}
+
+const ATX_PREFIX = /^(\s*)(#{1,6})(\s+)/;
+const QUOTE_PREFIX = /^(\s*)(>\s?)/;
+
+// level 0 strips any heading. Re-applying the level you're already at also
+// strips it, so the toolbar's H1/H2/H3 buttons toggle rather than only ever
+// adding.
+export function setHeadingLevel(level: 0 | 1 | 2 | 3 | 4 | 5 | 6): Command {
+  return (view) =>
+    editSelectedLines(view, (text, from) => {
+      const indent = leadingIndent(text);
+      const existing = ATX_PREFIX.exec(text);
+      if (existing) {
+        const same = existing[2].length === level;
+        return {
+          from: from + indent.length,
+          to: from + existing[0].length,
+          insert: same || level === 0 ? "" : `${"#".repeat(level)} `,
+        };
+      }
+      if (level === 0 || text.trim() === "") return null;
+      return { from: from + indent.length, to: from + indent.length, insert: `${"#".repeat(level)} ` };
+    });
+}
+
+export const toggleBlockquote: Command = (view) =>
+  editSelectedLines(view, (text, from) => {
+    const indent = leadingIndent(text);
+    const existing = QUOTE_PREFIX.exec(text);
+    if (existing) {
+      return { from: from + indent.length, to: from + existing[0].length, insert: "" };
+    }
+    return { from: from + indent.length, to: from + indent.length, insert: "> " };
+  });
+
+// All three list toggles read the existing marker through matchListLine
+// rather than their own regexes — that function is the single definition of
+// what this app considers a list, shared with continueList above and kept
+// deliberately in step with lib/markdown.ts's preview renderer.
+function replaceListMarker(
+  text: string,
+  lineFrom: number,
+  marker: string | null,
+  isAlreadyThisKind: (info: ListLineInfo) => boolean
+): LineChange | null {
+  if (text.trim() === "") return null;
+  const indent = leadingIndent(text);
+  const info = matchListLine(text);
+  // Same kind again = toggle off: drop the marker, keep the content.
+  if (info && isAlreadyThisKind(info)) {
+    return { from: lineFrom + indent.length, to: lineFrom + info.markerEnd, insert: "" };
+  }
+  if (marker === null) return null;
+  // Converting between kinds replaces the old marker; a plain line just
+  // gains one.
+  return {
+    from: lineFrom + indent.length,
+    to: lineFrom + (info ? info.markerEnd : indent.length),
+    insert: marker,
+  };
+}
+
+const isBullet = (info: ListLineInfo): boolean => /^[-*]$/.test(info.nextMarker);
+const isOrdered = (info: ListLineInfo): boolean => /^\d+[.)]$/.test(info.nextMarker);
+
+export const toggleBulletList: Command = (view) =>
+  editSelectedLines(view, (text, from) =>
+    replaceListMarker(text, from, "- ", (info) => isBullet(info) && !info.isTask)
+  );
+
+export const toggleOrderedList: Command = (view) => {
+  // Numbering restarts at 1 per invocation and counts only the lines that
+  // actually get a marker, so selecting five lines gives 1..5 rather than
+  // five 1.s.
+  let n = 0;
+  return editSelectedLines(view, (text, from) => {
+    const alreadyOrdered = (info: ListLineInfo): boolean => isOrdered(info) && !info.isTask;
+    const existing = matchListLine(text);
+    if (text.trim() !== "" && !(existing && alreadyOrdered(existing))) n += 1;
+    return replaceListMarker(text, from, `${n}. `, alreadyOrdered);
+  });
+};
+
+export const toggleTaskList: Command = (view) =>
+  editSelectedLines(view, (text, from) =>
+    replaceListMarker(text, from, "- [ ] ", (info) => info.isTask)
+  );
+
+// ---- insertions ----
+
+export const insertLink: Command = (view) => {
+  const { state } = view;
+  const tr = state.changeByRange((range) => {
+    const selected = state.sliceDoc(range.from, range.to);
+    const insert = `[${selected}]()`;
+    // Cursor lands inside the parens, ready for the URL — the part you
+    // always have to type, whether or not there was a selection to wrap.
+    return {
+      changes: { from: range.from, to: range.to, insert },
+      range: EditorSelection.cursor(range.from + selected.length + 3),
+    };
+  });
+  view.dispatch(state.update(tr, { scrollIntoView: true }));
+  return true;
+};
+
+// Block-level inserts go on their own line: appended after the current line
+// if it has content, in place if it's blank. `cursorOffset` is measured from
+// the start of `block`.
+function insertBlock(view: EditorView, block: string, cursorOffset: number): boolean {
+  const { state } = view;
+  const line = state.doc.lineAt(state.selection.main.from);
+  const needsBreak = line.text.trim() !== "";
+  const at = needsBreak ? line.to : line.from;
+  const insert = needsBreak ? `\n${block}` : block;
+  view.dispatch({
+    changes: { from: at, to: at, insert },
+    selection: EditorSelection.cursor(at + (needsBreak ? 1 : 0) + cursorOffset),
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+// Cursor lands on the language slot right after the opening fence, which is
+// where lib/codeLanguages.ts's highlighting reads from.
+export const insertCodeFence: Command = (view) => insertBlock(view, "```\n\n```", 3);
+
+export const insertTable: Command = (view) =>
+  insertBlock(view, "| Column | Column |\n| --- | --- |\n|  |  |", 2);
 
 const markdownHighlightStyle = HighlightStyle.define([
   // Heading size/weight/color is handled per-line by liveMarkdownPreview's
@@ -233,11 +409,43 @@ const markdownTheme = EditorView.theme(
   { dark: true }
 );
 
-export function buildMarkdownEditorExtensions(
-  onDocChanged: (text: string) => void,
-  placeholderText?: string,
-  onOpenWikilink?: (target: string) => void
-): Extension[] {
+// Marks a transaction as "the parent pushed new content in", as opposed to
+// the user typing. Without it a programmatic sync round-trips straight back
+// out through onDocChanged → parent state → autosave, which is harmless while
+// the parent is the only writer but becomes actively wrong the moment content
+// can arrive from elsewhere (a note reloaded from disk after being edited in
+// Obsidian would immediately be saved back over).
+export const externalSync = Annotation.define<boolean>();
+
+// Compartments make part of the config replaceable after the view exists.
+// Worth being clear about the mental model, because it looks like shared
+// mutable state and isn't: a Compartment is a *key*, not a value. Two live
+// EditorViews can share one module-level compartment and each hold their own
+// content under it, because the content lives in each EditorState — so this
+// does not need to be a per-instance factory.
+//
+// Only things that actually change at runtime get one. The theme, the
+// language config and the live-preview plugin deliberately don't: nothing
+// reconfigures them, and a compartment per extension is pure ceremony.
+export const completionCompartment = new Compartment();
+export const placeholderCompartment = new Compartment();
+
+export interface MarkdownEditorOptions {
+  onDocChanged: (text: string) => void;
+  placeholderText?: string;
+  onOpenWikilink?: (target: string) => void;
+  // Autocomplete sources, supplied by the consumer because they're
+  // vault-dependent (see lib/markdownCompletions.ts). Reconfigurable, since
+  // the vault index resolves asynchronously after mount.
+  completions?: Extension;
+}
+
+export function buildMarkdownEditorExtensions({
+  onDocChanged,
+  placeholderText,
+  onOpenWikilink,
+  completions,
+}: MarkdownEditorOptions): Extension[] {
   return [
     history(),
     indentUnit.of("  "),
@@ -247,6 +455,24 @@ export function buildMarkdownEditorExtensions(
       { key: "Mod-b", run: toggleBold },
       { key: "Mod-i", run: toggleItalic },
       { key: "Mod-Shift-x", run: toggleStrikethrough },
+      { key: "Mod-e", run: toggleInlineCode },
+      { key: "Mod-k", run: insertLink },
+      { key: "Mod-Alt-0", run: setHeadingLevel(0) },
+      { key: "Mod-Alt-1", run: setHeadingLevel(1) },
+      { key: "Mod-Alt-2", run: setHeadingLevel(2) },
+      { key: "Mod-Alt-3", run: setHeadingLevel(3) },
+      { key: "Mod-Alt-4", run: setHeadingLevel(4) },
+      { key: "Mod-Alt-5", run: setHeadingLevel(5) },
+      { key: "Mod-Alt-6", run: setHeadingLevel(6) },
+      { key: "Mod-Shift-.", run: toggleBlockquote },
+      { key: "Mod-Shift-8", run: toggleBulletList },
+      { key: "Mod-Shift-7", run: toggleOrderedList },
+      { key: "Mod-Shift-Enter", run: toggleTaskList },
+      { key: "Mod-Shift-c", run: insertCodeFence },
+      // After the custom bindings above, before defaultKeymap. Normal
+      // precedence is fine — Mod-f/Mod-g/F3/Mod-d don't collide with
+      // anything bound here.
+      ...searchKeymap,
       ...defaultKeymap,
       ...historyKeymap,
     ]),
@@ -281,10 +507,17 @@ export function buildMarkdownEditorExtensions(
     codeFenceCopyButton(),
     frontmatterFold(),
     clickableLinks({ onOpenWikilink }),
+    markdownPaste(),
+    markdownSearch(),
     EditorView.lineWrapping,
-    placeholder(placeholderText ?? ""),
+    placeholderCompartment.of(placeholder(placeholderText ?? "")),
+    completionCompartment.of(completions ?? []),
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) onDocChanged(update.state.doc.toString());
+      if (!update.docChanged) return;
+      // Don't echo a parent-driven document replacement back out as if the
+      // user had typed it — see the externalSync annotation above.
+      if (update.transactions.some((tr) => tr.annotation(externalSync))) return;
+      onDocChanged(update.state.doc.toString());
     }),
   ];
 }

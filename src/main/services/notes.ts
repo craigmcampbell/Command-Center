@@ -13,6 +13,9 @@ import type {
   NoteCreateResult,
   NoteFileEntry,
   NoteNavItem,
+  NoteSaveResult,
+  NoteStatEntry,
+  NoteStatResult,
   NotesSession,
   TemplateListResult,
   VaultConfig,
@@ -143,27 +146,89 @@ export function buildVaultIndex(vaultLabel: string): VaultNoteIndexResult {
   return { ok: true, entries };
 }
 
+function mtimeOf(absPath: string): number | null {
+  try {
+    return fs.statSync(absPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 export function readNoteFile(vaultLabel: string, filePath: string): NoteContent {
   const resolved = resolveInVault(vaultLabel, filePath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason, content: "" };
 
   try {
-    return { ok: true, content: fs.readFileSync(resolved.absPath, "utf8") };
+    const content = fs.readFileSync(resolved.absPath, "utf8");
+    // Statted after the read, so the baseline can never be older than the
+    // content it describes — the other order would leave a window where a
+    // write landing between stat and read makes stale content look current.
+    return { ok: true, content, mtimeMs: mtimeOf(resolved.absPath) ?? undefined };
   } catch {
     return { ok: false, reason: "Couldn't read that note", content: "" };
   }
 }
 
-export function saveNoteFile(vaultLabel: string, filePath: string, content: string): ActionResult {
+// These files live in a real Obsidian vault and are routinely edited there
+// too, so a write has to check that nothing else changed the file since the
+// renderer last read it. `expectedMtimeMs` omitted means write regardless —
+// that's the first save of a note and the "overwrite anyway" path after a
+// conflict has been surfaced.
+export function saveNoteFile(
+  vaultLabel: string,
+  filePath: string,
+  content: string,
+  expectedMtimeMs?: number
+): NoteSaveResult {
   const resolved = resolveInVault(vaultLabel, filePath);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
 
+  if (expectedMtimeMs !== undefined) {
+    const current = mtimeOf(resolved.absPath);
+    if (current === null) {
+      // Gone from disk — deleted or moved in Obsidian. Recreating it from a
+      // stale buffer is worse than refusing, so don't write.
+      return { ok: false, conflict: true, reason: "That note no longer exists on disk" };
+    }
+    // Strictly greater, compared against the exact float we handed the
+    // renderer from our own stat. mtimeMs is a float derived from
+    // nanosecond-resolution timestamps, and "did someone write after we last
+    // looked?" is the actual question — an equality check would be a
+    // needlessly brittle way to ask it.
+    if (current > expectedMtimeMs) {
+      return {
+        ok: false,
+        conflict: true,
+        reason: "That note changed on disk",
+        mtimeMs: current,
+      };
+    }
+  }
+
   try {
     fs.writeFileSync(resolved.absPath, content, "utf8");
-    return { ok: true };
+    return { ok: true, mtimeMs: mtimeOf(resolved.absPath) ?? undefined };
   } catch {
     return { ok: false, reason: "Couldn't save that note" };
   }
+}
+
+// Batched on purpose: the renderer checks every open note when the window
+// regains focus, and that should cost one IPC round trip. Each path still
+// goes through resolveInVault individually — the escape guard is per-path
+// and must not be skipped just because this is a bulk call.
+export function statNotes(
+  targets: { vaultLabel: string; filePath: string }[]
+): NoteStatResult {
+  const entries: NoteStatEntry[] = targets.map(({ vaultLabel, filePath }) => {
+    const resolved = resolveInVault(vaultLabel, filePath);
+    return {
+      vaultLabel,
+      filePath,
+      mtimeMs: resolved.ok ? mtimeOf(resolved.absPath) : null,
+    };
+  });
+  return { ok: true, entries };
 }
 
 // Lists the flat set of .md templates Obsidian's Templater plugin reads

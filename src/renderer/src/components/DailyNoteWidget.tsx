@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { DailyNoteResult } from "../../../shared/types";
-import { renderMarkdown } from "../lib/markdown";
-import { splitFrontmatter } from "../lib/frontmatter";
-import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
-import FrontmatterBlock from "./FrontmatterBlock";
-import MarkdownEditor from "./MarkdownEditor";
+import { useAutosave } from "../hooks/useAutosave";
+import MarkdownPane, { MarkdownPaneToolbar } from "./MarkdownPane";
+import type { ViewMode } from "./MarkdownPane";
 import Panel from "./Panel";
 import { IconChevronLeft, IconChevronRight, IconExternal } from "./icons";
 
@@ -14,10 +12,6 @@ interface DailyNoteWidgetProps {
   onChange: (result: DailyNoteResult) => void;
 }
 
-type ViewMode = "edit" | "preview";
-
-const AUTOSAVE_MS = 500;
-
 function todayDateString(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -26,88 +20,52 @@ function todayDateString(): string {
 
 export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNoteWidgetProps) {
   const [mode, setMode] = useState<ViewMode>("edit");
-  const [saving, setSaving] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, []);
-
-  const scheduleSave = useCallback((date: string, content: string) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaving(true);
-      await window.api.grimoire.saveDailyNote(date, content);
-      setSaving(false);
-    }, AUTOSAVE_MS);
-  }, []);
+  // Keyed by date, so prev/next navigation can't make a pending save for one
+  // day race an edit to another — they debounce independently.
+  const autosave = useAutosave<string>((date, content) =>
+    window.api.grimoire.saveDailyNote(date, content)
+  );
 
   function handleContentChange(text: string) {
-    if (!data || !data.ok) return;
+    if (!data) return;
     onChange({ ...data, content: text });
-    scheduleSave(data.date, text);
+    autosave.schedule(data.date, text);
   }
 
-  async function handleToggleTask(from: number, to: number, checked: boolean) {
-    if (!data || !data.ok) return;
-    const content = data.content.slice(0, from) + (checked ? "[x]" : "[ ]") + data.content.slice(to);
-    onChange({ ...data, content });
-    await window.api.grimoire.saveDailyNote(data.date, content);
-  }
+  // A note that doesn't exist yet is editable anyway: saveDailyNote writes
+  // unconditionally, so the first keystroke creates the file. Nothing here
+  // needs a "create" call — the only thing that used to block this was the
+  // widget rendering a dead-end message instead of an editor.
+  const creating = !!data && !data.ok && !!data.missing;
+  const editable = !!data && (data.ok || creating);
 
   let body;
   if (!data) {
     body = <p className="muted">Loading daily note…</p>;
-  } else if (!data.ok) {
-    body = <p className="muted">{data.reason}. It'll appear once you create today's note.</p>;
+  } else if (!editable) {
+    body = <p className="muted">{data.reason}.</p>;
   } else {
-    const showEditor = mode === "edit";
-    const showPreview = mode === "preview";
-    const fm = splitFrontmatter(data.content);
     body = (
       <>
-        <div className="daily-note-toolbar">
-          <div className="scratchpad-modes">
-            {(["edit", "preview"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`scratchpad-mode ${mode === m ? "active" : ""}`}
-                onClick={() => setMode(m)}
-              >
-                {m === "edit" ? "Write" : "Preview"}
-              </button>
-            ))}
-          </div>
-          <span className="scratchpad-status">{saving ? "Saving…" : "Saved"}</span>
-        </div>
-        <div className={`scratchpad daily-note-editor ${mode}`}>
-          {showEditor && (
-            <MarkdownEditor
-              // Remounts per date, same as NotesWidget keying its editor by
-              // note id — otherwise prev/next reuses one CodeMirror instance
-              // across completely different notes, and frontmatter's
-              // collapsed-by-default only applies at mount, not per note.
-              key={data.date}
-              className="scratchpad-editor"
-              value={data.content}
-              onChange={handleContentChange}
-            />
+        <MarkdownPaneToolbar
+          mode={mode}
+          onModeChange={setMode}
+          saving={autosave.savingKey !== null}
+          value={data.content}
+          className="daily-note-toolbar"
+        >
+          {creating && (
+            <span className="scratchpad-status muted">Start typing to create {data.date}</span>
           )}
-          {showPreview && (
-            <div className="scratchpad-preview note">
-              {fm && <FrontmatterBlock key={data.date} yaml={fm.yaml} />}
-              <div
-                onClick={(e) => handleMarkdownPreviewClick(e, { onToggleTask: handleToggleTask })}
-                dangerouslySetInnerHTML={{
-                  __html: renderMarkdown(data.content, { interactiveTasks: true, includeFrontmatter: false }),
-                }}
-              />
-            </div>
-          )}
-        </div>
+        </MarkdownPaneToolbar>
+        <MarkdownPane
+          mode={mode}
+          value={data.content}
+          onChange={handleContentChange}
+          docKey={data.date}
+          className="daily-note-editor"
+          placeholder={creating ? `Start today's log…` : undefined}
+        />
       </>
     );
   }

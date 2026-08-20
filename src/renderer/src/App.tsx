@@ -8,6 +8,7 @@ import type {
   GitHubStatusResult,
   LinkItem,
   MissionsResult,
+  NoteNavItem,
   ProcessConfig,
   ProcessStatus,
   ReaderResult,
@@ -119,6 +120,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
+  // Mirrors NotesWidget's nav list so the command palette can offer pinned
+  // notes. NotesWidget stays the owner and pushes changes up — same shape as
+  // SettingsPage pushing processConfigs here.
+  const [navNotes, setNavNotes] = useState<NoteNavItem[]>([]);
+  const [pendingNoteOpen, setPendingNoteOpen] = useState<NoteNavItem | null>(null);
   const [processStatuses, setProcessStatuses] = useState<ProcessStatus[]>([]);
   const [ynabAccounts, setYnabAccounts] = useState<YnabAccountsResult | null>(null);
   const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
@@ -240,11 +246,15 @@ export default function App() {
     setTabOrder(await window.api.settings.tabs.reorder(orderedIds));
   }, []);
 
-  // ---- command palette: global ⌘K/Ctrl+K toggle, works from any tab ----
+  // ---- command palette: global ⌘P/Ctrl+P toggle, works from any tab ----
+  // Not ⌘K: that's the near-universal "insert link" shortcut in a markdown
+  // editor, and this listener is on `window` with preventDefault, so it would
+  // always beat CodeMirror's binding no matter what the editor asked for.
+  // ⌘P would otherwise be Print, which this app has no use for.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const isMod = e.metaKey || e.ctrlKey;
-      if (isMod && e.key.toLowerCase() === "k") {
+      if (isMod && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
@@ -261,6 +271,11 @@ export default function App() {
     learning,
     fileLinks,
     docker,
+    navNotes,
+    onOpenNote: (item) => {
+      setActiveTab("notes");
+      setPendingNoteOpen(item);
+    },
     onRefreshDocker: loadDocker,
     onRefreshAll: refreshAll,
     onNewScratchpadNote: newScratchpadNote,
@@ -480,7 +495,11 @@ export default function App() {
       {activeTab === "notes" && (
         <main className="grid grid-notes">
           <div className="slot slot-notes">
-            <NotesWidget />
+            <NotesWidget
+              onNavChange={setNavNotes}
+              pendingOpen={pendingNoteOpen}
+              onPendingOpenHandled={() => setPendingNoteOpen(null)}
+            />
           </div>
         </main>
       )}

@@ -4,7 +4,7 @@
 // rather than a stale snapshot. No IPC lives here — every run() just calls
 // the same window.api methods the regular widgets already use.
 
-import type { DockerResult, LinkItem } from "../../shared/types";
+import type { DockerResult, LinkItem, NoteNavItem } from "../../shared/types";
 
 export interface PaletteAction {
   id: string;
@@ -26,6 +26,12 @@ export interface PaletteContext {
   learning: LinkItem[];
   fileLinks: LinkItem[];
   docker: DockerResult | null;
+  // Notes pinned in the Notes tab's nav. Deliberately not the whole vault:
+  // full-vault quick-open would mean running buildVaultIndex's recursive
+  // readdir walk for every configured vault at boot, which is a real launch
+  // cost for a large vault. Pinned notes are the ones you return to anyway.
+  navNotes: NoteNavItem[];
+  onOpenNote: (item: NoteNavItem) => void;
   onRefreshDocker: () => Promise<void>;
   onRefreshAll: () => Promise<void>;
   onNewScratchpadNote: () => Promise<void>;
@@ -84,6 +90,15 @@ export function buildActions(ctx: PaletteContext): PaletteAction[] {
       run: async () => {
         await window.api.forklift.open(item.link);
       },
+    });
+  }
+
+  for (const note of ctx.navNotes) {
+    actions.push({
+      id: `note:${note.id}`,
+      title: note.label,
+      category: "Note",
+      run: () => ctx.onOpenNote(note),
     });
   }
 

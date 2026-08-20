@@ -28,6 +28,7 @@ import {
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
+import { linkDestination } from "./linkDestination";
 
 function selectionOverlaps(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((r) => r.from <= to && r.to >= from);
@@ -154,6 +155,24 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
   const line: Range<Decoration>[] = [];
   const hide: Range<Decoration>[] = [];
   const atomic: Range<Decoration>[] = [];
+  const marks: Range<Decoration>[] = [];
+
+  // Marks anything lib/clickableLinks.ts can actually follow, so the theme
+  // can show it as clickable while Cmd/Ctrl is held. The title carries the
+  // destination, which is what makes a collapsed "[label](url)" trustworthy
+  // — otherwise the URL is hidden and you'd have to click to find out where
+  // it goes. Resolution goes through the shared linkDestination(), so a link
+  // that gets the underline is exactly a link that will open.
+  function addLinkAffordance(node: SyntaxNode): void {
+    const dest = linkDestination(state, node);
+    if (!dest) return;
+    marks.push(
+      Decoration.mark({
+        class: "cm-clickable-link",
+        attributes: { title: dest.target },
+      }).range(node.from, node.to)
+    );
+  }
 
   // Multiple Decoration.line entries at the same line start are fine — CM
   // merges their classes when rendering — so a line touched twice (e.g. a
@@ -228,6 +247,19 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
           case "Link":
           case "Image":
             hideLinkSyntax(state, nodeRef.node, hide);
+            addLinkAffordance(nodeRef.node);
+            break;
+          // Autolink is "<https://x.com>"; a bare URL node is a plain pasted
+          // "https://x.com" or GFM-linkified "www.x.com"/"a@b.com", which has
+          // no wrapper node at all. Neither has syntax worth hiding — they're
+          // here purely so they get the same follow affordance as [](). A URL
+          // nested inside Link/Image/Autolink returns null from
+          // linkDestination, so it can't double-mark its own parent.
+          case "Autolink":
+          case "URL":
+          case "WikiLink":
+          case "WikiEmbed":
+            addLinkAffordance(nodeRef.node);
             break;
           case "Blockquote": {
             const startLine = state.doc.lineAt(nodeRef.from).number;
@@ -293,7 +325,7 @@ function buildDecorations(view: EditorView): { deco: DecorationSet; atomic: Deco
   }
 
   return {
-    deco: Decoration.set([...line, ...hide], true),
+    deco: Decoration.set([...line, ...marks, ...hide], true),
     atomic: Decoration.set(atomic, true),
   };
 }
@@ -362,6 +394,18 @@ const livePreviewTheme = EditorView.theme({
     display: "block",
     borderTop: "1px solid var(--panel-edge)",
     margin: "8px 0",
+  },
+  // Links only *look* clickable while Cmd/Ctrl is held, matching when they
+  // actually are (see lib/clickableLinks.ts). A permanent pointer cursor
+  // would be a lie — a plain click places the cursor, it doesn't navigate.
+  // The class goes on .cm-content, so this is a descendant selector.
+  ".cm-mod-held .cm-clickable-link": {
+    cursor: "pointer",
+    textDecoration: "underline",
+    textUnderlineOffset: "2px",
+  },
+  ".cm-mod-held .cm-clickable-link:hover": {
+    color: "var(--live)",
   },
 });
 

@@ -138,6 +138,13 @@ export interface DailyNoteResult {
   prevDate: string | null;
   nextDate: string | null;
   obsidianUri: string;
+  // true when the only thing wrong is that this day's file doesn't exist yet
+  // — the vault and daily-log folder are both fine. The widget treats that as
+  // an empty, editable note (saveDailyNote creates the file on first write)
+  // rather than a dead end, so you don't have to go to Obsidian just to start
+  // today's log. A genuine failure (bad vault path, unreadable folder) leaves
+  // this false and still shows the reason.
+  missing?: boolean;
 }
 
 export interface Mission {
@@ -506,6 +513,36 @@ export interface NoteContent {
   ok: boolean;
   reason?: string;
   content: string;
+  // Last-modified time of the file this content came from, used as the
+  // baseline for the compare-before-write in saveNoteFile. Absent for the
+  // grimoire readers, which aren't mtime-guarded.
+  mtimeMs?: number;
+}
+
+// saveNoteFile's result. Carries the post-write mtime so the renderer can
+// move its baseline forward — without it, the *next* autosave would compare
+// against a stale value and report a conflict on every keystroke burst.
+export interface NoteSaveResult {
+  ok: boolean;
+  reason?: string;
+  // true when the write was refused because the file changed underneath us
+  // (edited in Obsidian, say). Distinct from a plain failure: nothing was
+  // written and the caller can offer to reload or overwrite.
+  conflict?: boolean;
+  mtimeMs?: number;
+}
+
+export interface NoteStatEntry {
+  vaultLabel: string;
+  filePath: string;
+  // null when the file no longer exists or can't be statted.
+  mtimeMs: number | null;
+}
+
+export interface NoteStatResult {
+  ok: boolean;
+  reason?: string;
+  entries: NoteStatEntry[];
 }
 
 // Result of creating a new note file — filePath is vault-relative, same
@@ -672,7 +709,17 @@ export interface CommandCenterApi {
     browse: (vaultLabel: string, subPath?: string) => Promise<NoteBrowseResult>;
     index: (vaultLabel: string) => Promise<VaultNoteIndexResult>;
     read: (vaultLabel: string, filePath: string) => Promise<NoteContent>;
-    save: (vaultLabel: string, filePath: string, content: string) => Promise<ActionResult>;
+    // expectedMtimeMs omitted = write unconditionally (first save, or an
+    // explicit "overwrite anyway" after a conflict).
+    save: (
+      vaultLabel: string,
+      filePath: string,
+      content: string,
+      expectedMtimeMs?: number
+    ) => Promise<NoteSaveResult>;
+    // Batched so checking every open note on window focus costs one IPC
+    // round trip rather than one per note.
+    statMany: (targets: { vaultLabel: string; filePath: string }[]) => Promise<NoteStatResult>;
     create: (
       vaultLabel: string,
       dirPath: string,
