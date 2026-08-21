@@ -9,6 +9,7 @@ import type {
   GoogleCalendarConfig,
   GrimoireConfig,
   GitHubScalarConfig,
+  GitHubRepoInput,
   HabitFrequencyType,
   LinkListKind,
   ProcessConfig,
@@ -124,6 +125,10 @@ const api: CommandCenterApi = {
     status: () => ipcRenderer.invoke("github:status"),
   },
 
+  git: {
+    status: () => ipcRenderer.invoke("git:status"),
+  },
+
   ynab: {
     accounts: () => ipcRenderer.invoke("ynab:accounts"),
     unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
@@ -223,6 +228,10 @@ const api: CommandCenterApi = {
     github: {
       update: (values: GitHubScalarConfig) => ipcRenderer.invoke("settings:github:update", values),
     },
+    git: {
+      update: (values: { refreshSeconds?: number }) =>
+        ipcRenderer.invoke("settings:git:update", values),
+    },
     ynab: {
       update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),
     },
@@ -236,10 +245,9 @@ const api: CommandCenterApi = {
     },
     githubRepos: {
       list: () => ipcRenderer.invoke("settings:githubRepos:list"),
-      add: (label: string, owner: string, repo: string, branch: string) =>
-        ipcRenderer.invoke("settings:githubRepos:add", label, owner, repo, branch),
-      update: (id: number, label: string, owner: string, repo: string, branch: string) =>
-        ipcRenderer.invoke("settings:githubRepos:update", id, label, owner, repo, branch),
+      add: (repo: GitHubRepoInput) => ipcRenderer.invoke("settings:githubRepos:add", repo),
+      update: (id: number, repo: GitHubRepoInput) =>
+        ipcRenderer.invoke("settings:githubRepos:update", id, repo),
       remove: (id: number) => ipcRenderer.invoke("settings:githubRepos:remove", id),
       reorder: (orderedIds: number[]) =>
         ipcRenderer.invoke("settings:githubRepos:reorder", orderedIds),

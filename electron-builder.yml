@@ -11,3 +11,19 @@ extraResources:
 mac:
   target: dir
   category: public.app-category.utilities
+  # Ad-hoc sign explicitly. Leaving `identity` unset means "auto-discover a
+  # certificate in the keychain", which finds none here and silently skips
+  # signing entirely — shipping the bundle with the linker's own signature,
+  # whose identifier is the literal string "Electron" and which doesn't cover
+  # Info.plist. macOS then treats this app's identity as generic Electron,
+  # shared with dev-mode Electron and every other ad-hoc Electron app, which
+  # is what broke notification permissions. "-" binds the real appId instead.
+  #
+  # Still not Gatekeeper-trusted (no Apple Developer cert) — first launch is
+  # still "unidentified developer"; see the packaging note in CLAUDE.md.
+  identity: "-"
+  # Required with an ad-hoc signature: hardened runtime enforces library
+  # validation, which an ad-hoc-signed bundle fails at launch unless it also
+  # ships a com.apple.security.cs.disable-library-validation entitlement.
+  # For a local, un-notarized `dir` build, turning it off is simpler.
+  hardenedRuntime: false

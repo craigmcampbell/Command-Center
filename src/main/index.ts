@@ -67,6 +67,7 @@ import {
   deleteDocument,
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
+import { getGitStatuses } from "./services/git";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
@@ -128,6 +129,8 @@ import {
   updateReaderSettings,
   getGithubScalarSettings,
   updateGithubScalarSettings,
+  getGitSettings,
+  updateGitSettings,
   getYnabSettings,
   updateYnabSettings,
   toggleYnabAccountHidden,
@@ -153,6 +156,7 @@ import type {
   GoogleCalendarConfig,
   GrimoireConfig,
   GitHubScalarConfig,
+  GitHubRepoInput,
   HabitFrequencyType,
   LinkListKind,
   ProcessConfig,
@@ -351,6 +355,10 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 
 // GitHub: latest CI run + open PR count per configured repo, plus
 // review-requested PRs across all of them.
+// Same repo list as github:status — a row contributes to whichever widget its
+// fields support (owner+repo → GitHub, localPath → here).
+ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
+
 ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
 );
@@ -513,6 +521,9 @@ ipcMain.handle("settings:getAll", () => getAllSettings());
 ipcMain.handle("settings:grimoire:update", (_evt, values: GrimoireConfig) =>
   updateGrimoireSettings(values)
 );
+ipcMain.handle("settings:git:update", (_evt, values: { refreshSeconds?: number }) =>
+  updateGitSettings(values)
+);
 ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
   updateDockerSettings(values)
 );
@@ -548,15 +559,11 @@ ipcMain.handle("settings:vaults:remove", (_evt, id: number) => removeVault(id));
 ipcMain.handle("settings:vaults:reorder", (_evt, orderedIds: number[]) => reorderVaults(orderedIds));
 
 ipcMain.handle("settings:githubRepos:list", () => listGithubRepoSettings());
-ipcMain.handle(
-  "settings:githubRepos:add",
-  (_evt, label: string, owner: string, repo: string, branch: string) =>
-    addGithubRepo(label, owner, repo, branch)
+ipcMain.handle("settings:githubRepos:add", (_evt, input: GitHubRepoInput) =>
+  addGithubRepo(input)
 );
-ipcMain.handle(
-  "settings:githubRepos:update",
-  (_evt, id: number, label: string, owner: string, repo: string, branch: string) =>
-    updateGithubRepo(id, label, owner, repo, branch)
+ipcMain.handle("settings:githubRepos:update", (_evt, id: number, input: GitHubRepoInput) =>
+  updateGithubRepo(id, input)
 );
 ipcMain.handle("settings:githubRepos:remove", (_evt, id: number) => removeGithubRepo(id));
 ipcMain.handle("settings:githubRepos:reorder", (_evt, orderedIds: number[]) =>

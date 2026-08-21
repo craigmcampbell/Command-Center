@@ -11,7 +11,8 @@
     "dev": "electron-vite dev -- --dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder --mac --dir",
+    "package": "electron-vite build && electron-builder --mac --dir && npm run verify:signing",
+    "verify:signing": "codesign --verify --strict \"dist/mac-arm64/Command Center.app\" && codesign -dv \"dist/mac-arm64/Command Center.app\" 2>&1 | grep -q \"^Identifier=com.craig.command-center\" && echo \"signing OK\" || { echo \"SIGNING CHECK FAILED — bundle identity is wrong; see the packaging note in CLAUDE.md\"; exit 1; }",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "postinstall": "electron-builder install-app-deps"
   },

@@ -45,8 +45,17 @@ function repoLabelFromApiUrl(repositoryUrl: string | undefined): string {
 // returns newest-first with no filter needed.
 const CI_HISTORY_LIMIT = 6;
 
+// A repo row that actually has a GitHub side. owner/repo are optional on
+// GitHubRepoConfig because a row may be local-only (tracked by the Git widget
+// and nothing else), so narrow before touching the API — see hasRemote below.
+type RemoteRepoConfig = GitHubRepoConfig & { owner: string; repo: string };
+
+function hasRemote(repo: GitHubRepoConfig): repo is RemoteRepoConfig {
+  return Boolean(repo.owner && repo.repo);
+}
+
 export async function getRepoStatus(
-  repoConfig: GitHubRepoConfig,
+  repoConfig: RemoteRepoConfig,
   token: string
 ): Promise<GitHubRepoStatus> {
   const { label, owner, repo, branch } = repoConfig;
@@ -161,7 +170,9 @@ export async function getGitHubStatus(config: GitHubConfig | undefined): Promise
     };
   }
 
-  const repos = config?.repos ?? [];
+  // Local-only rows have no owner/repo and would otherwise produce a request
+  // to `https://api.github.com/repos//` — filter them out here.
+  const repos = (config?.repos ?? []).filter(hasRemote);
   const [repoStatuses, reviewResult] = await Promise.all([
     Promise.all(repos.map((r) => getRepoStatus(r, token))),
     getReviewRequests(config?.reviewUser ?? "", token),

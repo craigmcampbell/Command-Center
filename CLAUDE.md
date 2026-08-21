@@ -84,7 +84,21 @@ Three walled-off parts — this separation is the security model, keep it intact
     slicing itself.
   - `services/github.ts` — GitHub REST API for latest Actions run + open PR count
     per configured repo, plus a cross-repo review-requested search, given the
-    current `github` scalar settings + `github_repos` table combined.
+    current `github` scalar settings + `github_repos` table combined. Skips rows
+    with no `owner`/`repo` (see `git.ts` below) so a local-only repo never
+    produces an API call.
+  - `services/git.ts` — local working-tree status (`git status --porcelain=v2
+    --branch` + a one-line `git log`) for every `github_repos` row that has a
+    `localPath`. The counterpart to `github.ts`: that one asks the API about CI
+    and PRs, this one answers "do I have uncommitted work, and am I behind?"
+    from disk, for free. Parses porcelain **v2** deliberately — v1 is ambiguous
+    around renames and spaces in paths. A file that's both staged and further
+    edited counts toward `staged` *and* `unstaged`; those are independent
+    counters, not an either/or. Fails soft per repo (`ok: false` + reason on the
+    row) so one bad path doesn't blank the widget. Note it does **not** copy
+    `docker.ts`'s PATH widening: that exists because Docker Desktop installs
+    outside launchd's bare PATH, whereas `git` is at `/usr/bin/git` and resolves
+    fine from a GUI-launched app.
   - `services/notes.ts` — browses/reads/writes markdown files directly in
     configured Obsidian vaults (`settings.ts`'s `vaults` table, looked up by label
     via `listVaultSettings()`) for the Notes tab. All paths are resolved and
@@ -159,7 +173,8 @@ under `<main>` is tab-gated, state lives in `App.tsx` same as always.
 
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
   Missions, Local Apps, Learning.
-- **Development** — Services (Docker), Claude Code, Processes (managed local
+- **Development** — GitHub (CI + PRs), Git (local working-tree status),
+  Services (Docker), Claude Code, Processes (managed local
   processes), GitHub (CI status + PRs).
 - **Reader** — latest Readwise Reader documents, paginated.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
@@ -180,8 +195,10 @@ launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses
 links) · File Links launcher (opens a local folder in ForkLift) · Claude Code
 launcher (opens in Warp) · Reader (latest Readwise Reader documents, paginated 15
 at a time) · GitHub (per-repo latest CI run + open PR count, cross-repo
-review-requested PRs, auto-refresh on `github.refreshSeconds`) · Managed Processes
-(start/stop/tail arbitrary local tools, see below).
+review-requested PRs, auto-refresh on `github.refreshSeconds`) · Git (local
+working-tree status per configured repo path — branch, ahead/behind, staged/
+unstaged/untracked/conflict counts, last commit; click to open in ForkLift) ·
+Managed Processes (start/stop/tail arbitrary local tools, see below).
 
 Local Apps, Learning, and File Links all render via the generic
 `LinkLauncherWidget` (`components/LinkLauncherWidget.tsx`) — a SQLite-backed
@@ -352,7 +369,7 @@ before adding more.
 The gear icon in the header (`.refresh-control`, next to Refresh) opens
 `components/SettingsPage.tsx` — a full-screen overlay (same scrim+panel visual
 language as `CommandPalette`/`NoteBrowserModal`, closes via scrim-click/Escape/X)
-with a left section-nav (General, Grimoire, Integrations, Vaults, GitHub Repos,
+with a left section-nav (General, Grimoire, Integrations, Vaults, Repositories,
 Processes) and a scrollable content pane. It's app-wide config management, not a
 per-tab widget, so it skips the five-touch-point pattern — its data model is
 `services/settings.ts` end to end (see Architecture above), exposed through a
@@ -427,8 +444,14 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   for one-time consent and caches tokens after that.
 - **GitHub widget setup**: put a personal access token (repo + read:org scope) and your
   review username into Settings → Integrations → GitHub, and list repos to track under
-  Settings → GitHub Repos. Without a token the widget fails soft with "No GitHub token
+  Settings → Repositories. Without a token the widget fails soft with "No GitHub token
   configured".
+- **Git widget setup**: give a row under Settings → Repositories a **local path**. That
+  section backs both widgets: `owner`/`repo` put a row in the GitHub widget, a local
+  path puts it in the Git widget, and either alone is valid — so a local-only scratch
+  repo with no GitHub counterpart is fine, as is a GitHub repo you haven't cloned.
+  Clicking a row opens it in ForkLift. Its poll interval is Settings → General → Git
+  (default 30s), deliberately separate from GitHub's 300s: local git costs no API quota.
 - **Notes tab setup**: add vault roots to browse under Settings → Vaults (a label +
   the vault's root folder path, each). Without any configured, the nav shows "No
   vaults configured"; with none yet pinned for a given vault, its group still shows
@@ -440,8 +463,29 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   the widget shows "No processes configured". Prefer an explicit args list over a
   shell string where possible (matches `docker.ts`'s `execFile`-over-`exec`
   preference elsewhere in this codebase).
-- **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
-  be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
-  to bypass, or `xattr -cr "Command Center.app"`. All settings live in the packaged
+- **Packaged app is ad-hoc signed, not Gatekeeper-trusted** (no Apple Developer cert
+  configured). First launch is still blocked as "unidentified developer" — right-click
+  the app → Open once to bypass, or `xattr -cr "Command Center.app"`.
+  `electron-builder.yml` sets `mac.identity: "-"` deliberately: leaving it unset means
+  "auto-discover a certificate", which finds none and **skips signing entirely**,
+  shipping the bundle with the linker's own signature whose identifier is the literal
+  string `Electron` and which doesn't cover Info.plist. macOS then treats the app's
+  identity as generic Electron — shared with dev-mode Electron and every other ad-hoc
+  Electron app on the machine — which breaks notification permissions. (Electron 42+
+  makes that fatal rather than flaky: macOS notifications moved to `UNNotification`,
+  which refuses to display for an unsigned app.) `hardenedRuntime: false` accompanies
+  it, since hardened runtime enforces library validation that an ad-hoc bundle fails at
+  launch without a `disable-library-validation` entitlement.
+
+  Signing is electron-builder's job, **not** the `package` script's — don't add a
+  manual `codesign` step. electron-builder signs the bundle inside-out (every helper,
+  framework, and `.dylib` in dependency order); a post-hoc `codesign --force --deep`
+  would overwrite that with a blunter signature, and Apple treats `--deep` as a
+  repair tool rather than a build step. What the script *does* add is
+  `npm run verify:signing`, chained onto `package`, because both regressions here are
+  silent: removing `mac.identity` makes electron-builder skip signing with only a
+  warning, and on a non-macOS host it skips unconditionally. The check asserts the
+  Identifier is `com.craig.command-center` and exits non-zero otherwise. Its path is
+  hardcoded to `dist/mac-arm64/` — update it if you ever build universal or x64. All settings live in the packaged
   app's SQLite DB at `~/Library/Application Support/Command Center/command-center.db`,
   editable via the Settings page — not a file to hand-edit.

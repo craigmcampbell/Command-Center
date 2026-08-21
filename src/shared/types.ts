@@ -26,14 +26,26 @@ export interface GoogleCalendarConfig {
   clientSecret: string;
 }
 
+// One tracked repository, remote and/or local. A row serves whichever roles
+// its fields fill in: owner+repo puts it in the GitHub widget (CI + PRs),
+// localPath puts it in the Git widget (working-tree status), both puts it in
+// both. That's why owner/repo are optional — a local-only scratch repo with
+// no GitHub counterpart is still worth watching for uncommitted work.
 export interface GitHubRepoConfig {
   id: number;
   label: string;
-  owner: string;
-  repo: string;
+  owner?: string;
+  repo?: string;
   branch: string;
+  localPath?: string;
   sortOrder: number;
 }
+
+// What the Settings form supplies on add/update. An object rather than
+// positional args (matching ProcessConfig's CRUD) because most of the fields
+// are optional now and a positional list of maybe-undefined strings is easy
+// to get subtly wrong at a call site.
+export type GitHubRepoInput = Omit<GitHubRepoConfig, "id" | "sortOrder">;
 
 // The non-array part of GitHub settings, editable as one scalar section in
 // Settings. `repos` is its own DB table/CRUD surface (see GitHubRepoConfig).
@@ -107,6 +119,7 @@ export interface AppConfig {
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
   github?: GitHubConfig;
+  git?: { refreshSeconds?: number };
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
@@ -127,6 +140,35 @@ export interface DockerResult {
   ok: boolean;
   reason?: string;
   containers: DockerContainer[];
+}
+
+// Working-tree state for one configured repo with a localPath. Each row
+// carries its own `ok`/`reason` — a bad path or a directory that isn't a repo
+// shouldn't blank the whole widget, same per-item fail-soft shape the rest of
+// the services use.
+export interface GitRepoStatus {
+  id: number;
+  label: string;
+  path: string;
+  ok: boolean;
+  reason?: string;
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+  lastCommit?: { hash: string; subject: string; relative: string };
+}
+
+// `reason` here is only for a global failure (no git binary at all); a repo
+// that individually failed reports it on its own row instead.
+export interface GitStatusResult {
+  ok: boolean;
+  reason?: string;
+  repos: GitRepoStatus[];
 }
 
 export interface DailyNoteResult {
@@ -679,6 +721,9 @@ export interface CommandCenterApi {
   github: {
     status: () => Promise<GitHubStatusResult>;
   };
+  git: {
+    status: () => Promise<GitStatusResult>;
+  };
   ynab: {
     accounts: () => Promise<YnabAccountsResult>;
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
@@ -769,6 +814,9 @@ export interface CommandCenterApi {
     github: {
       update: (values: GitHubScalarConfig) => Promise<GitHubScalarConfig>;
     };
+    git: {
+      update: (values: { refreshSeconds?: number }) => Promise<{ refreshSeconds?: number }>;
+    };
     ynab: {
       update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;
     };
@@ -781,14 +829,8 @@ export interface CommandCenterApi {
     };
     githubRepos: {
       list: () => Promise<GitHubRepoConfig[]>;
-      add: (label: string, owner: string, repo: string, branch: string) => Promise<GitHubRepoConfig[]>;
-      update: (
-        id: number,
-        label: string,
-        owner: string,
-        repo: string,
-        branch: string
-      ) => Promise<GitHubRepoConfig[]>;
+      add: (repo: GitHubRepoInput) => Promise<GitHubRepoConfig[]>;
+      update: (id: number, repo: GitHubRepoInput) => Promise<GitHubRepoConfig[]>;
       remove: (id: number) => Promise<GitHubRepoConfig[]>;
       reorder: (orderedIds: number[]) => Promise<GitHubRepoConfig[]>;
     };

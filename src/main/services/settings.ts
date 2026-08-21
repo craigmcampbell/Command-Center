@@ -19,6 +19,7 @@ import type {
   GoogleCalendarConfig,
   GitHubScalarConfig,
   GitHubRepoConfig,
+  GitHubRepoInput,
   VaultConfig,
   ProcessConfig,
   YnabScalarConfig,
@@ -52,6 +53,11 @@ export function initSettings(): void {
     path TEXT NOT NULL,
     sort_order INTEGER NOT NULL
   )`);
+  // owner/repo stay NOT NULL even though they're optional at the type level:
+  // the columns shipped that way, and relaxing the constraint on an existing
+  // install would mean a full table rebuild. Empty string is the "not set"
+  // sentinel instead, normalized to undefined on read — so a fresh install
+  // and a migrated one behave identically.
   db.exec(`CREATE TABLE IF NOT EXISTS github_repos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     label TEXT NOT NULL,
@@ -60,6 +66,16 @@ export function initSettings(): void {
     branch TEXT NOT NULL,
     sort_order INTEGER NOT NULL
   )`);
+  // Additive migration for `local_path`, added after the table shipped — so
+  // CREATE TABLE IF NOT EXISTS alone won't backfill it on an existing
+  // install. Idempotent every boot: SQLite errors on a duplicate column,
+  // which just means a prior boot already added it. Same pattern as
+  // services/bills.ts's `note` column.
+  try {
+    db.exec(`ALTER TABLE github_repos ADD COLUMN local_path TEXT`);
+  } catch {
+    // already migrated
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS processes (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
@@ -139,6 +155,19 @@ export function updateDockerSettings(values: {
   refreshSeconds: number;
 }): { refreshSeconds: number } {
   setRaw("docker", values);
+  return values;
+}
+
+// Deliberately separate from `github`'s refreshSeconds: that one is slow on
+// purpose (300s) to protect the API rate limit, while local git costs nothing
+// and wants to react quickly to a file you just touched.
+export function getGitSettings(): { refreshSeconds?: number } {
+  return getRaw("git") ?? { refreshSeconds: 30 };
+}
+export function updateGitSettings(values: {
+  refreshSeconds?: number;
+}): { refreshSeconds?: number } {
+  setRaw("git", values);
   return values;
 }
 
@@ -254,44 +283,74 @@ export function reorderVaults(orderedIds: number[]): VaultConfig[] {
 
 // ---- github repos ----
 
+interface GithubRepoRow {
+  id: number;
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  localPath: string | null;
+  sortOrder: number;
+}
+
 function githubRepoRowsToItems(): GitHubRepoConfig[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
-      `SELECT id, label, owner, repo, branch, sort_order as sortOrder FROM github_repos ORDER BY sort_order ASC`
+      `SELECT id, label, owner, repo, branch, local_path as localPath, sort_order as sortOrder
+       FROM github_repos ORDER BY sort_order ASC`
     )
-    .all() as GitHubRepoConfig[];
+    .all() as GithubRepoRow[];
+
+  // Collapse the empty-string/NULL sentinels to undefined so consumers can
+  // just test truthiness of the field they care about.
+  return rows.map((r) => ({
+    id: r.id,
+    label: r.label,
+    owner: r.owner || undefined,
+    repo: r.repo || undefined,
+    branch: r.branch,
+    localPath: r.localPath || undefined,
+    sortOrder: r.sortOrder,
+  }));
 }
 
 export function listGithubRepoSettings(): GitHubRepoConfig[] {
   return githubRepoRowsToItems();
 }
 
-export function addGithubRepo(
-  label: string,
-  owner: string,
-  repo: string,
-  branch: string
-): GitHubRepoConfig[] {
+export function addGithubRepo(input: GitHubRepoInput): GitHubRepoConfig[] {
   const db = getDatabase();
   const { maxOrder } = db
     .prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM github_repos`)
     .get() as { maxOrder: number };
   db.prepare(
-    `INSERT INTO github_repos (label, owner, repo, branch, sort_order) VALUES (?, ?, ?, ?, ?)`
-  ).run(label, owner, repo, branch, maxOrder + 1);
+    `INSERT INTO github_repos (label, owner, repo, branch, local_path, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.label,
+    input.owner ?? "",
+    input.repo ?? "",
+    input.branch,
+    input.localPath ?? null,
+    maxOrder + 1
+  );
   return githubRepoRowsToItems();
 }
 
-export function updateGithubRepo(
-  id: number,
-  label: string,
-  owner: string,
-  repo: string,
-  branch: string
-): GitHubRepoConfig[] {
+export function updateGithubRepo(id: number, input: GitHubRepoInput): GitHubRepoConfig[] {
   getDatabase()
-    .prepare(`UPDATE github_repos SET label = ?, owner = ?, repo = ?, branch = ? WHERE id = ?`)
-    .run(label, owner, repo, branch, id);
+    .prepare(
+      `UPDATE github_repos SET label = ?, owner = ?, repo = ?, branch = ?, local_path = ?
+       WHERE id = ?`
+    )
+    .run(
+      input.label,
+      input.owner ?? "",
+      input.repo ?? "",
+      input.branch,
+      input.localPath ?? null,
+      id
+    );
   return githubRepoRowsToItems();
 }
 
@@ -451,6 +510,7 @@ export function getAllSettings(): AppConfig {
     googleCalendar: getGoogleCalendarSettings(),
     reader: getReaderSettings(),
     github: { ...githubScalar, repos },
+    git: getGitSettings(),
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
@@ -497,6 +557,9 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
 
   seedRawIfEmpty("grimoire", pick("grimoire") ?? { vaultPath: "", dailyLogDir: "", missionsDir: "" });
   seedRawIfEmpty("docker", pick("docker") ?? { refreshSeconds: 15 });
+  // No legacy config.json counterpart — this section postdates the migration,
+  // so it always seeds from the default.
+  seedRawIfEmpty("git", { refreshSeconds: 30 });
   seedRawIfEmpty("app", pick("app") ?? {});
   seedRawIfEmpty("todoist", pick("todoist") ?? { apiToken: "" });
   seedRawIfEmpty("googleCalendar", pick("googleCalendar") ?? { clientId: "", clientSecret: "" });

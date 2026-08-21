@@ -255,6 +255,7 @@ body {
   grid-template-columns: 2fr 1fr;
   grid-template-areas:
     "github github"
+    "git git"
     "services claude"
     "processes processes";
 }
@@ -323,6 +324,9 @@ body {
 .slot-processes {
   grid-area: processes;
 }
+.slot-git {
+  grid-area: git;
+}
 .slot-reader {
   grid-area: reader;
 }
@@ -372,6 +376,7 @@ body {
     grid-template-columns: 1fr;
     grid-template-areas:
       "github"
+      "git"
       "services"
       "claude"
       "processes";
@@ -1865,6 +1870,10 @@ body {
 .row .dot.alert {
   background: var(--alert);
   box-shadow: 0 0 8px var(--alert);
+}
+.row .dot.warn {
+  background: var(--pending);
+  box-shadow: 0 0 8px var(--pending);
 }
 .row .name {
   font-family: var(--mono);
@@ -3743,4 +3752,64 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
+}
+
+/* ---- Git widget (Development tab) ---- */
+
+.git-row {
+  cursor: pointer;
+}
+.git-row:hover {
+  background: var(--panel-hover, rgba(255, 255, 255, 0.03));
+}
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.git-ab {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+/* Counts are deliberately colorless except conflicts — four tinted badges on
+   one row reads as an alarm, and most dirty repos are just work in progress. */
+.git-count {
+  flex-shrink: 0;
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: center;
+  color: var(--ink-dim);
+}
+.git-count.git-staged {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 40%, transparent);
+}
+.git-count.git-conflicted {
+  color: var(--alert);
+  border-color: color-mix(in srgb, var(--alert) 45%, transparent);
+}
+.git-last {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
 }

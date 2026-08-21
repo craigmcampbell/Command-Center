@@ -6,6 +6,7 @@ import type {
   DockerResult,
   DailyNoteResult,
   GitHubStatusResult,
+  GitStatusResult,
   LinkItem,
   MissionsResult,
   NoteNavItem,
@@ -25,6 +26,7 @@ import type {
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
+import GitStatusWidget from "./components/GitStatusWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import BillsWidget from "./components/BillsWidget";
@@ -72,6 +74,9 @@ const DEFAULT_TABS: TabConfig[] = [
 const DEFAULT_REFRESH_MINUTES = 10;
 const DEFAULT_DOCKER_REFRESH_SECONDS = 15;
 const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
+// Much faster than GitHub's: that one is slow to protect the API rate limit,
+// while local git costs nothing and should react to a file you just touched.
+const DEFAULT_GIT_REFRESH_SECONDS = 30;
 const DEFAULT_YNAB_REFRESH_SECONDS = 300;
 
 function tickClock(): string {
@@ -119,6 +124,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
+  const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
+  const [gitRefreshSeconds, setGitRefreshSeconds] = useState(DEFAULT_GIT_REFRESH_SECONDS);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
   // Mirrors NotesWidget's nav list so the command palette can offer pinned
   // notes. NotesWidget stays the owner and pushes changes up — same shape as
@@ -141,6 +148,9 @@ export default function App() {
   }, []);
   const loadGithub = useCallback(async () => {
     setGithub(await window.api.github.status());
+  }, []);
+  const loadGit = useCallback(async () => {
+    setGitStatus(await window.api.git.status());
   }, []);
   const loadProcessStatuses = useCallback(async () => {
     setProcessStatuses(await window.api.process.statusAll());
@@ -209,6 +219,7 @@ export default function App() {
       loadCalendar(),
       loadReader(readerPage, true),
       loadGithub(),
+      loadGit(),
       loadProcessStatuses(),
       loadYnab(),
       loadFinanceReviewLog(),
@@ -226,6 +237,7 @@ export default function App() {
     loadReader,
     readerPage,
     loadGithub,
+    loadGit,
     loadProcessStatuses,
     loadYnab,
     loadFinanceReviewLog,
@@ -293,6 +305,7 @@ export default function App() {
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
+      setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
       if (cfg.tabs && cfg.tabs.length > 0) setTabOrder(cfg.tabs);
@@ -308,6 +321,7 @@ export default function App() {
         window.api.links.list("fileLinks").then(setFileLinks),
         loadReader(0),
         loadGithub(),
+        loadGit(),
         loadProcessStatuses(),
         loadYnab(),
         loadFinanceReviewLog(),
@@ -340,6 +354,12 @@ export default function App() {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadGithub, githubRefreshSeconds]);
+
+  // ---- Git refresh, reactive to Settings edits ----
+  useEffect(() => {
+    const id = setInterval(loadGit, gitRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadGit, gitRefreshSeconds]);
 
   // ---- YNAB refresh, reactive to Settings edits ----
   useEffect(() => {
@@ -448,6 +468,9 @@ export default function App() {
           <div className="slot slot-github">
             <GitHubWidget data={github} />
           </div>
+          <div className="slot slot-git">
+            <GitStatusWidget data={gitStatus} />
+          </div>
           <div className="slot slot-services">
             <DockerWidget data={docker} onRefresh={loadDocker} />
           </div>
@@ -543,6 +566,9 @@ export default function App() {
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
+        onGitRefreshSecondsChange={(seconds) =>
+          setGitRefreshSeconds(seconds ?? DEFAULT_GIT_REFRESH_SECONDS)
+        }
         onYnabRefreshSecondsChange={setYnabRefreshSeconds}
         onTodoistShowTimeTrackingChange={setShowTimeTracking}
       />

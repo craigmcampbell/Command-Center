@@ -360,3 +360,14 @@ export function IconOutline({ size = 13, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconBranch({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <circle cx="7" cy="5" r="2.25" />
+      <circle cx="7" cy="19" r="2.25" />
+      <circle cx="17" cy="9" r="2.25" />
+      <path d="M7 7.25v9.5M17 11.25c0 3-3.5 3.25-6.25 4" />
+    </svg>
+  );
+}

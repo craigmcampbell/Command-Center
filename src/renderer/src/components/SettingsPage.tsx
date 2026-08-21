@@ -25,6 +25,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type {
   AppConfig,
   GitHubRepoConfig,
+  GitHubRepoInput,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
@@ -52,7 +53,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "grimoire", label: "Grimoire" },
   { id: "integrations", label: "Integrations" },
   { id: "vaults", label: "Vaults" },
-  { id: "githubRepos", label: "GitHub Repos" },
+  { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
 ];
 
@@ -62,6 +63,7 @@ interface SettingsPageProps {
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
+  onGitRefreshSecondsChange: (seconds?: number) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
@@ -191,6 +193,55 @@ function DockerCard({
     <form className="settings-card" onSubmit={handleSave}>
       <h3>Docker</h3>
       <p className="settings-card-hint">How often the Services widget polls `docker ps`.</p>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={seconds}
+          onChange={(e) => setSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function GitCard({
+  value,
+  onSaved,
+}: {
+  value: { refreshSeconds?: number };
+  onSaved: (v: { refreshSeconds?: number }) => void;
+}) {
+  const current = String(value.refreshSeconds ?? 30);
+  const [seconds, setSeconds] = useState(current);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setSeconds(current), [current]);
+  const dirty = seconds !== current;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.git.update({
+      refreshSeconds: Number(seconds) || 30,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Git</h3>
+      <p className="settings-card-hint">
+        How often the Git widget re-runs `git status` over your local repos. Separate from the
+        GitHub interval — this one costs no API quota, so it can be much shorter.
+      </p>
       <div className="settings-field-row">
         <label>Refresh seconds</label>
         <input
@@ -712,7 +763,39 @@ function VaultsSection({ vaults, onChange }: { vaults: VaultConfig[]; onChange: 
   );
 }
 
-// ---- GitHub Repos section ----
+// ---- Repositories section ----
+
+// A row is valid with a label, a branch, and at least one of the two sides it
+// can describe: owner+repo (GitHub widget) or a local path (Git widget). A
+// GitHub-only row and a local-only row are both legitimate.
+function repoDraftIsValid(d: {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  localPath: string;
+}): boolean {
+  if (!d.label.trim() || !d.branch.trim()) return false;
+  const hasRemote = Boolean(d.owner.trim() && d.repo.trim());
+  const hasLocal = Boolean(d.localPath.trim());
+  return hasRemote || hasLocal;
+}
+
+function draftToRepoInput(d: {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  localPath: string;
+}): GitHubRepoInput {
+  return {
+    label: d.label.trim(),
+    owner: d.owner.trim() || undefined,
+    repo: d.repo.trim() || undefined,
+    branch: d.branch.trim(),
+    localPath: d.localPath.trim() || undefined,
+  };
+}
 
 function GithubRepoEditForm({
   item,
@@ -720,17 +803,19 @@ function GithubRepoEditForm({
   onCancel,
 }: {
   item: GitHubRepoConfig;
-  onSave: (label: string, owner: string, repo: string, branch: string) => void;
+  onSave: (input: GitHubRepoInput) => void;
   onCancel: () => void;
 }) {
   const [label, setLabel] = useState(item.label);
-  const [owner, setOwner] = useState(item.owner);
-  const [repo, setRepo] = useState(item.repo);
+  const [owner, setOwner] = useState(item.owner ?? "");
+  const [repo, setRepo] = useState(item.repo ?? "");
   const [branch, setBranch] = useState(item.branch);
+  const [localPath, setLocalPath] = useState(item.localPath ?? "");
+  const draft = { label, owner, repo, branch, localPath };
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()) return;
-    onSave(label.trim(), owner.trim(), repo.trim(), branch.trim());
+    if (!repoDraftIsValid(draft)) return;
+    onSave(draftToRepoInput(draft));
   }
   return (
     <form className="settings-array-form" onSubmit={handleSubmit}>
@@ -738,6 +823,7 @@ function GithubRepoEditForm({
       <input className="settings-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner" />
       <input className="settings-input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="repo" />
       <input className="settings-input" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+      <input className="settings-input" value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="/local/path (optional)" />
       <button type="submit" className="settings-array-save" aria-label="Save">
         <IconCheck />
       </button>
@@ -754,7 +840,7 @@ function GithubRepoRow({
   onDelete,
 }: {
   item: GitHubRepoConfig;
-  onSave: (label: string, owner: string, repo: string, branch: string) => void;
+  onSave: (input: GitHubRepoInput) => void;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -768,8 +854,8 @@ function GithubRepoRow({
       <div ref={setNodeRef} style={style} className="settings-array-row editing">
         <GithubRepoEditForm
           item={item}
-          onSave={(label, owner, repo, branch) => {
-            onSave(label, owner, repo, branch);
+          onSave={(input) => {
+            onSave(input);
             setEditing(false);
           }}
           onCancel={() => setEditing(false)}
@@ -786,7 +872,12 @@ function GithubRepoRow({
       <div className="settings-array-row-main">
         <span className="settings-array-row-label">{item.label}</span>
         <span className="settings-array-row-sub">
-          {item.owner}/{item.repo}@{item.branch}
+          {[
+            item.owner && item.repo ? `${item.owner}/${item.repo}@${item.branch}` : null,
+            item.localPath,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </div>
       <span className="row-actions">
@@ -813,6 +904,8 @@ function GithubReposSection({
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("main");
+  const [localPath, setLocalPath] = useState("");
+  const draft = { label, owner, repo, branch, localPath };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   function handleDragEnd(e: DragEndEvent) {
@@ -826,18 +919,22 @@ function GithubReposSection({
 
   function handleAdd(e: FormEvent) {
     e.preventDefault();
-    if (!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()) return;
-    add(label.trim(), owner.trim(), repo.trim(), branch.trim());
+    if (!repoDraftIsValid(draft)) return;
+    add(draftToRepoInput(draft));
     setLabel("");
     setOwner("");
     setRepo("");
     setBranch("main");
+    setLocalPath("");
   }
 
   return (
     <div className="settings-card">
-      <h3>GitHub Repos</h3>
-      <p className="settings-card-hint">Repos tracked by the GitHub widget's CI status + PR count.</p>
+      <h3>Repositories</h3>
+      <p className="settings-card-hint">
+        Tracked repos. Set owner/repo for the GitHub widget's CI status + PR count, and a local
+        path for the Git widget's working-tree status — either alone is fine, or both together.
+      </p>
       {repos.length === 0 ? (
         <p className="muted">No repos configured.</p>
       ) : (
@@ -847,7 +944,7 @@ function GithubReposSection({
               <GithubRepoRow
                 key={r.id}
                 item={r}
-                onSave={(label, owner, repo, branch) => update(r.id, label, owner, repo, branch)}
+                onSave={(input) => update(r.id, input)}
                 onDelete={() => remove(r.id)}
               />
             ))}
@@ -859,11 +956,8 @@ function GithubReposSection({
         <input className="settings-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner" />
         <input className="settings-input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="repo" />
         <input className="settings-input" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
-        <button
-          type="submit"
-          disabled={!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()}
-          aria-label="Add"
-        >
+        <input className="settings-input" value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="/local/path (optional)" />
+        <button type="submit" disabled={!repoDraftIsValid(draft)} aria-label="Add">
           <IconPlus />
         </button>
       </form>
@@ -1164,6 +1258,7 @@ export default function SettingsPage({
   onProcessConfigsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
+  onGitRefreshSecondsChange,
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
   onTodoistShowTimeTrackingChange,
@@ -1238,6 +1333,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, docker: v } : prev));
                       onDockerRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <GitCard
+                    value={data.git ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, git: v } : prev));
+                      onGitRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
                 </>
