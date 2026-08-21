@@ -26,6 +26,8 @@ import type {
   AppConfig,
   GitHubRepoConfig,
   GitHubRepoInput,
+  NotificationHealth,
+  NotificationSettings,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
@@ -64,6 +66,7 @@ interface SettingsPageProps {
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
   onGitRefreshSecondsChange: (seconds?: number) => void;
+  onNotificationSettingsChange: (values: NotificationSettings) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
@@ -252,6 +255,97 @@ function GitCard({
           onChange={(e) => setSeconds(e.target.value)}
         />
       </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function NotificationsCard({
+  value,
+  onSaved,
+}: {
+  value: NotificationSettings;
+  onSaved: (v: NotificationSettings) => void;
+}) {
+  // Absent means on — matches getNotificationSettings()'s defaults, so a
+  // config written before this section existed reads as fully enabled.
+  const norm = (v: NotificationSettings) => ({
+    enabled: v.enabled !== false,
+    ciFailure: v.ciFailure !== false,
+    processCrash: v.processCrash !== false,
+    dockerExit: v.dockerExit !== false,
+  });
+  const [draft, setDraft] = useState(norm(value));
+  const [saving, setSaving] = useState(false);
+  const [health, setHealth] = useState<NotificationHealth | null>(null);
+
+  useEffect(() => setDraft(norm(value)), [value]);
+  useEffect(() => {
+    void window.api.notifications.health().then(setHealth);
+  }, []);
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(norm(value));
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.notifications.update(draft);
+    setSaving(false);
+    onSaved(result);
+  }
+
+  const triggers: { key: keyof typeof draft; label: string }[] = [
+    { key: "ciFailure", label: "CI turns red" },
+    { key: "processCrash", label: "A managed process crashes" },
+    { key: "dockerExit", label: "A Docker container stops" },
+  ];
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Notifications</h3>
+      <p className="settings-card-hint">
+        Desktop notifications for things worth interrupting you about. Each fires only on the
+        transition into that state, never repeatedly while it persists.
+      </p>
+
+      {health && !health.supported && (
+        <p className="settings-card-warning">
+          This system reports that notifications aren’t supported. The menubar tray still shows
+          status.
+        </p>
+      )}
+      {health?.lastFailure && (
+        <p className="settings-card-warning">
+          macOS rejected the last notification ({health.lastFailure}). Check System Settings →
+          Notifications → Command Center. The menubar tray still shows status.
+        </p>
+      )}
+
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+        />
+        Enable notifications
+      </label>
+
+      {triggers.map((t) => (
+        <label key={t.key} className="settings-checkbox-label settings-checkbox-nested">
+          <input
+            type="checkbox"
+            checked={draft[t.key]}
+            disabled={!draft.enabled}
+            onChange={(e) => setDraft({ ...draft, [t.key]: e.target.checked })}
+          />
+          {t.label}
+        </label>
+      ))}
+
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -1259,6 +1353,7 @@ export default function SettingsPage({
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
   onGitRefreshSecondsChange,
+  onNotificationSettingsChange,
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
   onTodoistShowTimeTrackingChange,
@@ -1340,6 +1435,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, git: v } : prev));
                       onGitRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <NotificationsCard
+                    value={data.notifications ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, notifications: v } : prev));
+                      onNotificationSettingsChange(v);
                     }}
                   />
                 </>

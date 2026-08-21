@@ -20,6 +20,7 @@ import type {
   GitHubScalarConfig,
   GitHubRepoConfig,
   GitHubRepoInput,
+  NotificationSettings,
   VaultConfig,
   ProcessConfig,
   YnabScalarConfig,
@@ -168,6 +169,24 @@ export function updateGitSettings(values: {
   refreshSeconds?: number;
 }): { refreshSeconds?: number } {
   setRaw("git", values);
+  return values;
+}
+
+// Every flag defaults to on when absent, so a config predating this section
+// (or a partially-written one) notifies rather than silently staying quiet —
+// the failure mode that's actually noticeable and fixable.
+export function getNotificationSettings(): NotificationSettings {
+  return (
+    getRaw("notifications") ?? {
+      enabled: true,
+      ciFailure: true,
+      processCrash: true,
+      dockerExit: true,
+    }
+  );
+}
+export function updateNotificationSettings(values: NotificationSettings): NotificationSettings {
+  setRaw("notifications", values);
   return values;
 }
 
@@ -511,6 +530,7 @@ export function getAllSettings(): AppConfig {
     reader: getReaderSettings(),
     github: { ...githubScalar, repos },
     git: getGitSettings(),
+    notifications: getNotificationSettings(),
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
@@ -560,6 +580,12 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   // No legacy config.json counterpart — this section postdates the migration,
   // so it always seeds from the default.
   seedRawIfEmpty("git", { refreshSeconds: 30 });
+  seedRawIfEmpty("notifications", {
+    enabled: true,
+    ciFailure: true,
+    processCrash: true,
+    dockerExit: true,
+  });
   seedRawIfEmpty("app", pick("app") ?? {});
   seedRawIfEmpty("todoist", pick("todoist") ?? { apiToken: "" });
   seedRawIfEmpty("googleCalendar", pick("googleCalendar") ?? { clientId: "", clientSecret: "" });

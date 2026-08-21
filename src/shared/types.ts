@@ -120,6 +120,7 @@ export interface AppConfig {
   reader: { apiToken: string };
   github?: GitHubConfig;
   git?: { refreshSeconds?: number };
+  notifications?: NotificationSettings;
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
@@ -141,6 +142,52 @@ export interface DockerResult {
   reason?: string;
   containers: DockerContainer[];
 }
+
+export type AlertKind = "ci" | "process" | "docker";
+
+// One thing worth interrupting the user about. Produced by the renderer's
+// pure transition detector (renderer/src/lib/alerts.ts) and handed to main to
+// become an OS notification. `key` is the stable identity of the *thing* that
+// changed (repo label / process id / container name), not of the event.
+export interface AppAlert {
+  kind: AlertKind;
+  key: string;
+  title: string;
+  body: string;
+  tab?: string;
+}
+
+// What the tray renders, pushed up from the renderer whenever the underlying
+// widget state changes. Counts, not lists — the tray shows a tally and the
+// window shows detail.
+export interface TraySummary {
+  ciFailures: number;
+  processesDown: number;
+  containersExited: number;
+}
+
+export interface NotificationSettings {
+  enabled?: boolean;
+  ciFailure?: boolean;
+  processCrash?: boolean;
+  dockerExit?: boolean;
+}
+
+// Whether the OS will actually display notifications. `supported` is
+// Electron's static check; `lastFailure` is set when a notification we
+// actually tried to show emitted `failed` — the difference between "this
+// platform can't" and "macOS refused this one".
+export interface NotificationHealth {
+  supported: boolean;
+  lastFailure?: string;
+}
+
+// The one main→renderer message shape. Everything else in this app is
+// renderer→main invoke; this exists because the tray and notification clicks
+// originate in main and need to drive the UI.
+export type AppCommand =
+  | { type: "refreshAll" }
+  | { type: "openTab"; tab: string };
 
 // Working-tree state for one configured repo with a localPath. Each row
 // carries its own `ok`/`reason` — a bad path or a directory that isn't a repo
@@ -724,6 +771,16 @@ export interface CommandCenterApi {
   git: {
     status: () => Promise<GitStatusResult>;
   };
+  notifications: {
+    show: (alert: AppAlert) => Promise<void>;
+    health: () => Promise<NotificationHealth>;
+  };
+  tray: {
+    update: (summary: TraySummary) => Promise<void>;
+  };
+  // Returns an unsubscribe. The raw IpcRendererEvent is never passed across
+  // the bridge — only the payload.
+  onCommand: (cb: (command: AppCommand) => void) => () => void;
   ynab: {
     accounts: () => Promise<YnabAccountsResult>;
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
@@ -816,6 +873,9 @@ export interface CommandCenterApi {
     };
     git: {
       update: (values: { refreshSeconds?: number }) => Promise<{ refreshSeconds?: number }>;
+    };
+    notifications: {
+      update: (values: NotificationSettings) => Promise<NotificationSettings>;
     };
     ynab: {
       update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;

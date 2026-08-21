@@ -3199,6 +3199,25 @@ body {
   font-size: 12px;
   color: var(--ink-dim);
 }
+/* Per-trigger rows sit under their master toggle; they dim with it so the
+   disabled state reads as "off because the parent is off". */
+.settings-checkbox-nested {
+  margin-left: 18px;
+  margin-top: 6px;
+}
+.settings-checkbox-nested:has(input:disabled) {
+  opacity: 0.45;
+}
+.settings-card-warning {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--pending) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
 
 /* Vaults / GitHub Repos / Processes rows — same shape as .link-row but
    fields vary per section, so the row's main content is free-form. */

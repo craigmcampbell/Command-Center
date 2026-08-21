@@ -68,6 +68,8 @@ import {
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
 import { getGitStatuses } from "./services/git";
+import { getNotificationHealth, showAlert } from "./services/notifications";
+import { destroyTray, initTray, updateTray } from "./services/tray";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
@@ -131,6 +133,7 @@ import {
   updateGithubScalarSettings,
   getGitSettings,
   updateGitSettings,
+  updateNotificationSettings,
   getYnabSettings,
   updateYnabSettings,
   toggleYnabAccountHidden,
@@ -155,9 +158,13 @@ import {
 import type {
   GoogleCalendarConfig,
   GrimoireConfig,
+  AppAlert,
+  AppCommand,
   GitHubScalarConfig,
   GitHubRepoInput,
   HabitFrequencyType,
+  NotificationSettings,
+  TraySummary,
   LinkListKind,
   ProcessConfig,
   YnabScalarConfig,
@@ -194,6 +201,34 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon);
 }
 
+// Held at module scope so the tray and notification clicks can reach the
+// window — everything else in this file is request/response IPC and never
+// needed a reference.
+let mainWindow: BrowserWindow | null = null;
+
+// Set once a real quit is underway, so the close handler below knows to let
+// the window actually close instead of hiding it.
+let quitting = false;
+
+// Bring the dashboard back from the tray (or rebuild it if it was genuinely
+// destroyed, e.g. on a platform where close isn't intercepted).
+function showMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  createWindow();
+}
+
+// The single main→renderer channel. Everything else in this app is
+// renderer→main invoke; this exists because the tray and notification clicks
+// originate here and need to drive the UI.
+function sendCommand(command: AppCommand): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app:command", command);
+}
+
 function createWindow(): void {
   const icon = nativeImage.createFromPath(appIconPath());
   const win = new BrowserWindow({
@@ -224,6 +259,23 @@ function createWindow(): void {
   if (process.argv.includes("--dev")) {
     win.webContents.openDevTools({ mode: "detach" });
   }
+
+  mainWindow = win;
+
+  // Close hides rather than destroys. Every poller in this app lives in the
+  // renderer (App.tsx), so destroying the window would stop all polling —
+  // no notifications and a tray frozen at its last value. Hiding keeps the
+  // renderer alive so the app can keep watching in the background. A real
+  // quit sets `quitting` first and falls through.
+  win.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    win.hide();
+  });
+
+  win.on("closed", () => {
+    mainWindow = null;
+  });
 }
 
 // ---- IPC handlers: each one is something the UI can invoke by name. ----
@@ -358,6 +410,18 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 // Same repo list as github:status — a row contributes to whichever widget its
 // fields support (owner+repo → GitHub, localPath → here).
 ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
+
+// Transition detection happens in the renderer (that's where the polled state
+// lives); main's job is only to turn a decided alert into an OS notification.
+ipcMain.handle("notifications:show", (_evt, alert: AppAlert) => {
+  showAlert(alert, (tab) => {
+    showMainWindow();
+    if (tab) sendCommand({ type: "openTab", tab });
+  });
+});
+ipcMain.handle("notifications:health", () => getNotificationHealth());
+
+ipcMain.handle("tray:update", (_evt, summary: TraySummary) => updateTray(summary));
 
 ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
@@ -524,6 +588,9 @@ ipcMain.handle("settings:grimoire:update", (_evt, values: GrimoireConfig) =>
 ipcMain.handle("settings:git:update", (_evt, values: { refreshSeconds?: number }) =>
   updateGitSettings(values)
 );
+ipcMain.handle("settings:notifications:update", (_evt, values: NotificationSettings) =>
+  updateNotificationSettings(values)
+);
 ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
   updateDockerSettings(values)
 );
@@ -589,12 +656,19 @@ ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderT
 app.whenReady().then(() => {
   setDockIcon();
   createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  initTray({
+    onShow: showMainWindow,
+    onRefresh: () => sendCommand({ type: "refreshAll" }),
+    onQuit: () => app.quit(),
   });
+  // Clicking the Dock icon reopens the hidden window, same as the tray's Show.
+  app.on("activate", showMainWindow);
 });
 
 app.on("window-all-closed", () => {
+  // On macOS the window is hidden rather than destroyed (see createWindow), so
+  // this generally won't fire at all — the app lives on in the tray until an
+  // explicit Quit.
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -607,10 +681,12 @@ app.on("window-all-closed", () => {
 // where a second app.quit() from inside this handler never actually
 // completed the exit (observed in dev mode with the detached DevTools
 // window still open).
-let quitting = false;
+// `quitting` is declared up by createWindow — the window's close handler needs
+// it too, to tell a real quit apart from a hide-to-tray.
 app.on("before-quit", (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
+  destroyTray();
   stopAllProcesses().finally(() => app.exit());
 });

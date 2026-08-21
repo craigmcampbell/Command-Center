@@ -4,7 +4,10 @@
 // IPC handler defined in the main process.
 
 import { contextBridge, ipcRenderer } from "electron";
+import type { IpcRendererEvent } from "electron";
 import type {
+  AppAlert,
+  AppCommand,
   CommandCenterApi,
   GoogleCalendarConfig,
   GrimoireConfig,
@@ -12,7 +15,9 @@ import type {
   GitHubRepoInput,
   HabitFrequencyType,
   LinkListKind,
+  NotificationSettings,
   ProcessConfig,
+  TraySummary,
   YnabScalarConfig,
   YnabNewTransactionInput,
 } from "../shared/types";
@@ -129,6 +134,29 @@ const api: CommandCenterApi = {
     status: () => ipcRenderer.invoke("git:status"),
   },
 
+  notifications: {
+    show: (alert: AppAlert) => ipcRenderer.invoke("notifications:show", alert),
+    health: () => ipcRenderer.invoke("notifications:health"),
+  },
+
+  tray: {
+    update: (summary: TraySummary) => ipcRenderer.invoke("tray:update", summary),
+  },
+
+  // The only main→renderer channel in the app. Deliberately a narrow
+  // subscription rather than exposing ipcRenderer: the raw IpcRendererEvent
+  // never crosses the bridge (it carries `sender`, which would hand the
+  // sandboxed renderer a way to reach back into main), and the returned
+  // unsubscribe keeps it safe to call from a useEffect without leaking a
+  // listener per remount.
+  onCommand: (cb: (command: AppCommand) => void) => {
+    const handler = (_event: IpcRendererEvent, command: AppCommand) => cb(command);
+    ipcRenderer.on("app:command", handler);
+    return () => {
+      ipcRenderer.removeListener("app:command", handler);
+    };
+  },
+
   ynab: {
     accounts: () => ipcRenderer.invoke("ynab:accounts"),
     unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
@@ -231,6 +259,10 @@ const api: CommandCenterApi = {
     git: {
       update: (values: { refreshSeconds?: number }) =>
         ipcRenderer.invoke("settings:git:update", values),
+    },
+    notifications: {
+      update: (values: NotificationSettings) =>
+        ipcRenderer.invoke("settings:notifications:update", values),
     },
     ynab: {
       update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),

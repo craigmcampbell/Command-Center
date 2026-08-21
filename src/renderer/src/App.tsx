@@ -1,13 +1,14 @@
 // The UI. Runs sandboxed — it can only reach the main process through the
 // `window.api` object that the preload set up. No Node, no fs, no exec here.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DockerResult,
   DailyNoteResult,
   GitHubStatusResult,
   GitStatusResult,
   LinkItem,
+  NotificationSettings,
   MissionsResult,
   NoteNavItem,
   ProcessConfig,
@@ -47,6 +48,8 @@ import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./components/SettingsPage";
 import { IconGear, IconRefresh } from "./components/icons";
 import type { PaletteContext } from "./palette";
+import { buildSnapshot, diffAlerts, summarize } from "./lib/alerts";
+import type { AlertSnapshot } from "./lib/alerts";
 import appLogo from "./assets/icon.png";
 
 type TabId =
@@ -125,6 +128,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({});
+  // Previous poll's snapshot, for edge-triggered alerting. A ref, not state:
+  // updating it must not itself cause a render, or the alert effect would
+  // re-run and compare a snapshot against itself.
+  const prevSnapshot = useRef<AlertSnapshot | null>(null);
   const [gitRefreshSeconds, setGitRefreshSeconds] = useState(DEFAULT_GIT_REFRESH_SECONDS);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
   // Mirrors NotesWidget's nav list so the command palette can offer pinned
@@ -306,6 +314,7 @@ export default function App() {
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
       setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
+      setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
       if (cfg.tabs && cfg.tabs.length > 0) setTabOrder(cfg.tabs);
@@ -354,6 +363,26 @@ export default function App() {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadGithub, githubRefreshSeconds]);
+
+  // ---- alerts + tray, derived from state the widgets already poll ----
+  // No new polling: this reacts to github/processStatuses/docker changing,
+  // each of which has its own interval elsewhere in this file.
+  useEffect(() => {
+    const next = buildSnapshot(github, processStatuses, docker);
+    for (const alert of diffAlerts(prevSnapshot.current, next, notificationSettings, processConfigs)) {
+      void window.api.notifications.show(alert);
+    }
+    prevSnapshot.current = next;
+    void window.api.tray.update(summarize(next));
+  }, [github, processStatuses, docker, notificationSettings, processConfigs]);
+
+  // ---- commands pushed from main (tray menu, notification clicks) ----
+  useEffect(() => {
+    return window.api.onCommand((command) => {
+      if (command.type === "refreshAll") void refreshAll();
+      else if (command.type === "openTab") setActiveTab(command.tab as TabId);
+    });
+  }, [refreshAll]);
 
   // ---- Git refresh, reactive to Settings edits ----
   useEffect(() => {
@@ -569,6 +598,7 @@ export default function App() {
         onGitRefreshSecondsChange={(seconds) =>
           setGitRefreshSeconds(seconds ?? DEFAULT_GIT_REFRESH_SECONDS)
         }
+        onNotificationSettingsChange={setNotificationSettings}
         onYnabRefreshSecondsChange={setYnabRefreshSeconds}
         onTodoistShowTimeTrackingChange={setShowTimeTracking}
       />

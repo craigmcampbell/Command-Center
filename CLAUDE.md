@@ -99,6 +99,19 @@ Three walled-off parts — this separation is the security model, keep it intact
     `docker.ts`'s PATH widening: that exists because Docker Desktop installs
     outside launchd's bare PATH, whereas `git` is at `/usr/bin/git` and resolves
     fine from a GUI-launched app.
+  - `services/notifications.ts` — OS notifications, given an already-decided
+    alert (transition detection happens in the renderer, where the polled state
+    lives — see "Notifications + tray" below). Exists mainly to make failure
+    *visible*: it reports `Notification.isSupported()` and captures the `failed`
+    event, so Settings can say macOS rejected a notification instead of the app
+    silently appearing to work.
+  - `services/tray.ts` — the menubar status item: a summary line, Show /
+    Refresh all / Quit, plus a count badge via `setTitle` only when something is
+    actually wrong. Its icon comes from `trayIcon.ts` (embedded base64 template
+    PNGs) rather than from disk — see that file for why. No `click` handler:
+    with a context menu attached, macOS opens the menu on left-click, and a
+    click handler on top of that made one click both open the menu and raise
+    the window.
   - `services/notes.ts` — browses/reads/writes markdown files directly in
     configured Obsidian vaults (`settings.ts`'s `vaults` table, looked up by label
     via `listVaultSettings()`) for the Notes tab. All paths are resolved and
@@ -363,6 +376,62 @@ what the editor asks for — and `⌘K` is the near-universal "insert link"
 shortcut, which the markdown editor now uses. Anything bound here is
 effectively taken away from every editor in the app, so keep that in mind
 before adding more.
+
+## Notifications + tray
+
+Desktop notifications for three transitions — CI turning red, a managed process
+crashing, a Docker container stopping — plus a menubar tray that always shows
+current status. Toggled per-trigger in Settings → General → Notifications.
+
+**Detection lives in the renderer, in `renderer/src/lib/alerts.ts`.** That's
+where the polled state already is, so no new polling was added: an effect in
+`App.tsx` keyed on `[github, processStatuses, docker]` diffs the current
+snapshot against the previous one. The module is pure (no React, no IPC, no
+clock) so the rules can be tested directly. Main's only job is turning a
+decided alert into an OS notification.
+
+Two rules that matter, and are easy to regress:
+
+- **Edge-triggered, never level-triggered.** Alerts fire when something
+  *changes into* a bad state. Level-triggering would re-notify about the same
+  red build every poll — Docker's is every 15s.
+- **The first poll seeds the baseline and fires nothing**, so launching with CI
+  already red doesn't produce a burst about things you already knew. A key
+  absent from the previous snapshot is likewise skipped, so a newly-configured
+  repo that's already failing stays quiet.
+
+A deliberate process stop needs no special-casing: `services/processes.ts`
+records `null` when a child dies by signal, and a crash is `exitCode` non-null
+and non-zero — so SIGTERM stops can't reach the crash rule.
+
+**Close hides the window instead of destroying it** (`main/index.ts`'s `close`
+handler). Every poller lives in the renderer, so a destroyed window would mean
+no polling, no notifications, and a tray frozen at its last value. `quitting`
+distinguishes a real quit, which falls through to the existing `before-quit` →
+`stopAllProcesses()` → `app.exit()` path.
+
+**`app:command` is the only main→renderer channel** in the app; everything else
+is renderer→main `invoke`. It exists because the tray menu and notification
+clicks originate in main. The preload exposes a single subscription returning
+an unsubscribe — the raw `IpcRendererEvent` never crosses the bridge, since it
+carries `sender`.
+
+### macOS gotchas (all found the hard way)
+
+- **A menu bar manager can swallow the tray icon entirely.** This machine runs
+  [Ice](https://github.com/jordanbaird/Ice), which hides new status items into
+  a collapsed section by default (`AutoRehide`), re-hiding after 15s. `new
+  Tray()` succeeds, no error is raised, and nothing is visible. If the icon
+  seems missing, expand the hidden section before suspecting the code — this is
+  the most likely explanation for a "the tray doesn't work" report.
+- **Notifications need a LaunchServices launch.** Running the binary directly
+  (`Contents/MacOS/Command Center`) makes `show()` silently do nothing — no
+  banner and no `failed` event. Launch with `open path/to/Command Center.app`.
+  This bites when testing from a terminal.
+- **Test notifications against the packaged app, not `npm start`.** Dev runs
+  `node_modules`' Electron, identity `com.github.Electron`, so notifications
+  appear under the name "Electron" and register separately. Only the packaged,
+  ad-hoc-signed bundle posts as Command Center (see the packaging note below).
 
 ## Settings
 
