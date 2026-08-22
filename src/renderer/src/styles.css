@@ -4123,3 +4123,94 @@ body {
   padding-top: 0;
   border-top: none;
 }
+
+/* ---- OpenRouter tab ---- */
+
+.grid-openrouter {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "openrouter-summary openrouter-summary"
+    "openrouter-models openrouter-keys";
+}
+.slot-openrouter-summary {
+  grid-area: openrouter-summary;
+}
+.slot-openrouter-models {
+  grid-area: openrouter-models;
+}
+.slot-openrouter-keys {
+  grid-area: openrouter-keys;
+}
+
+/* Segmented period switcher — the app's first multi-way toggle group, so it
+   gets its own small pattern rather than reusing .daily-nav-btn, which is a
+   directional prev/next control, not a selector. */
+.openrouter-period-toggle {
+  display: inline-flex;
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.openrouter-period-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.openrouter-period-btn:hover {
+  color: var(--ink);
+}
+.openrouter-period-btn.active {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+.openrouter-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.openrouter-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge-soft);
+  border-radius: 9px;
+}
+.openrouter-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.openrouter-stat-value {
+  font-family: var(--mono);
+  font-size: 22px;
+  color: var(--ink);
+}
+.openrouter-stat-sub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+
+.openrouter-breakdown-row .openrouter-cost,
+.openrouter-breakdown-row .status {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.openrouter-breakdown-row .openrouter-cost {
+  min-width: 62px;
+  text-align: right;
+  color: var(--ink);
+}
+.openrouter-breakdown-row .status {
+  margin-left: auto;
+  color: var(--ink-dim);
+}

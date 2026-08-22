@@ -27,6 +27,7 @@ import type {
   VaultConfig,
   ProcessConfig,
   YnabScalarConfig,
+  OpenRouterScalarConfig,
   TabConfig,
 } from "../../shared/types";
 
@@ -48,6 +49,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "notes", label: "Notes" },
   { id: "finances", label: "Finances" },
   { id: "claude", label: "Claude" },
+  { id: "openrouter", label: "OpenRouter" },
 ];
 
 export function initSettings(): void {
@@ -277,6 +279,14 @@ export function updateYnabSettings(values: YnabScalarConfig): YnabScalarConfig {
   setRaw("ynab", values);
   return values;
 }
+export function getOpenRouterSettings(): OpenRouterScalarConfig {
+  return getRaw<OpenRouterScalarConfig>("openrouter") ?? {};
+}
+export function updateOpenRouterSettings(values: OpenRouterScalarConfig): OpenRouterScalarConfig {
+  setRaw("openrouter", values);
+  return values;
+}
+
 export function toggleYnabAccountHidden(accountId: string): YnabScalarConfig {
   const current = getYnabSettings();
   const hidden = new Set(current.hiddenAccountIds ?? []);
@@ -571,6 +581,7 @@ export function getAllSettings(): AppConfig {
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
+    openrouter: getOpenRouterSettings(),
     tabs: listTabSettings(),
   };
 }
@@ -643,6 +654,9 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   });
 
   seedRawIfEmpty("ynab", pick("ynab") ?? { hiddenAccountIds: [] });
+  // No legacy config.json counterpart — this section postdates the migration,
+  // so it always seeds from the empty default.
+  seedRawIfEmpty("openrouter", {});
 
   seedVaultsIfEmpty(pick<{ label: string; path: string }[]>("vaults") ?? []);
   seedGithubReposIfEmpty(legacyGithub.repos ?? []);

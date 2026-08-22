@@ -33,6 +33,7 @@ import type {
   GrimoireConfig,
   NotificationHealth,
   NotificationSettings,
+  OpenRouterScalarConfig,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
@@ -84,6 +85,7 @@ interface SettingsPageProps {
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
+  onOpenRouterRefreshSecondsChange: (seconds?: number) => void;
 }
 
 function slugify(label: string): string {
@@ -859,6 +861,71 @@ function GithubScalarCard({
   );
 }
 
+function OpenRouterCard({
+  value,
+  onSaved,
+}: {
+  value: OpenRouterScalarConfig;
+  onSaved: (v: OpenRouterScalarConfig) => void;
+}) {
+  const [managementApiKey, setManagementApiKey] = useState(value.managementApiKey ?? "");
+  const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setManagementApiKey(value.managementApiKey ?? "");
+    setRefreshSeconds(String(value.refreshSeconds ?? 900));
+  }, [value.managementApiKey, value.refreshSeconds]);
+  const dirty =
+    managementApiKey !== (value.managementApiKey ?? "") ||
+    refreshSeconds !== String(value.refreshSeconds ?? 900);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.openrouter.update({
+      managementApiKey: managementApiKey || undefined,
+      refreshSeconds: Number(refreshSeconds) || 900,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>OpenRouter</h3>
+      <p className="settings-card-hint">
+        Requires a <strong>Management API key</strong> — a separate credential from a normal
+        OpenRouter inference key, created under OpenRouter's dashboard (Settings → Provisioning
+        Keys). It powers the OpenRouter tab's usage-by-model, usage-by-key, and credit balance
+        reporting; a regular inference key can't be used here.
+      </p>
+      <div className="settings-field-row">
+        <label>Management API key</label>
+        <SecretField
+          value={managementApiKey}
+          onChange={setManagementApiKey}
+          placeholder="•••••••••••••••"
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={refreshSeconds}
+          onChange={(e) => setRefreshSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function YnabScalarCard({
   value,
   onSaved,
@@ -1576,6 +1643,7 @@ export default function SettingsPage({
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
   onTodoistShowTimeTrackingChange,
+  onOpenRouterRefreshSecondsChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -1713,6 +1781,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, ynab: v } : prev));
                       onYnabRefreshSecondsChange(v.refreshSeconds ?? 300);
+                    }}
+                  />
+                  <OpenRouterCard
+                    value={data.openrouter ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, openrouter: v } : prev));
+                      onOpenRouterRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
                 </>

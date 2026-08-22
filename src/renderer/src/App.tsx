@@ -26,6 +26,8 @@ import type {
   BillItem,
   CardItem,
   TabConfig,
+  OpenRouterUsageResult,
+  OpenRouterPeriod,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
@@ -42,6 +44,7 @@ import LinkLauncherWidget, { toDisplayBasename } from "./components/LinkLauncher
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import ClaudeUsageWidget, { ClaudeBreakdown } from "./components/ClaudeUsageWidget";
 import ClaudeSessionsWidget from "./components/ClaudeSessionsWidget";
+import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
@@ -64,7 +67,8 @@ type TabId =
   | "habits"
   | "notes"
   | "finances"
-  | "claude";
+  | "claude"
+  | "openrouter";
 
 // Fallback order/labels for the very first render, before settings.getAll()
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
@@ -78,6 +82,7 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "notes", label: "Notes", sortOrder: 5 },
   { id: "finances", label: "Finances", sortOrder: 6 },
   { id: "claude", label: "Claude", sortOrder: 7 },
+  { id: "openrouter", label: "OpenRouter", sortOrder: 8 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -87,6 +92,10 @@ const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
 // while local git costs nothing and should react to a file you just touched.
 const DEFAULT_GIT_REFRESH_SECONDS = 30;
 const DEFAULT_YNAB_REFRESH_SECONDS = 300;
+// Usage/cost data, not something reacting to in real time — a longer default
+// than GitHub's keeps this well clear of any per-key rate limit on the
+// Management API's N+1 /activity calls.
+const DEFAULT_OPENROUTER_REFRESH_SECONDS = 900;
 
 function tickClock(): string {
   return new Date()
@@ -158,6 +167,11 @@ export default function App() {
   const [cards, setCards] = useState<CardItem[]>([]);
   const [ynabRefreshSeconds, setYnabRefreshSeconds] = useState(DEFAULT_YNAB_REFRESH_SECONDS);
   const [showTimeTracking, setShowTimeTracking] = useState(true);
+  const [openRouterUsage, setOpenRouterUsage] = useState<OpenRouterUsageResult | null>(null);
+  const [openRouterPeriod, setOpenRouterPeriod] = useState<OpenRouterPeriod>("30d");
+  const [openRouterRefreshSeconds, setOpenRouterRefreshSeconds] = useState(
+    DEFAULT_OPENROUTER_REFRESH_SECONDS
+  );
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
@@ -216,6 +230,9 @@ export default function App() {
     setReaderPage(page);
     setReader(await window.api.reader.list(page, forceRefresh));
   }, []);
+  const loadOpenRouter = useCallback(async () => {
+    setOpenRouterUsage(await window.api.openrouter.usage(openRouterPeriod));
+  }, [openRouterPeriod]);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
@@ -251,6 +268,7 @@ export default function App() {
       loadFinanceReviewLog(),
       loadBills(),
       loadCards(),
+      loadOpenRouter(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -270,6 +288,7 @@ export default function App() {
     loadFinanceReviewLog,
     loadBills,
     loadCards,
+    loadOpenRouter,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -332,6 +351,9 @@ export default function App() {
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
+      setOpenRouterRefreshSeconds(
+        cfg.openrouter?.refreshSeconds || DEFAULT_OPENROUTER_REFRESH_SECONDS
+      );
       setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
       setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
@@ -356,6 +378,7 @@ export default function App() {
         loadFinanceReviewLog(),
         loadBills(),
         loadCards(),
+        loadOpenRouter(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -383,6 +406,21 @@ export default function App() {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadGithub, githubRefreshSeconds]);
+
+  // ---- OpenRouter refresh, reactive to Settings edits and period changes ----
+  useEffect(() => {
+    const id = setInterval(loadOpenRouter, openRouterRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadOpenRouter, openRouterRefreshSeconds]);
+
+  // Switching the period should refetch immediately rather than waiting for
+  // the next interval tick.
+  useEffect(() => {
+    void loadOpenRouter();
+    // loadOpenRouter's identity already changes with openRouterPeriod, so
+    // depending on it alone would double-fire; depend on the period instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRouterPeriod]);
 
   // ---- alerts + tray, derived from state the widgets already poll ----
   // No new polling: this reacts to github/processStatuses/docker changing,
@@ -634,6 +672,32 @@ export default function App() {
         </main>
       )}
 
+      {activeTab === "openrouter" && (
+        <main className="grid grid-openrouter">
+          <div className="slot slot-openrouter-summary">
+            <OpenRouterUsageWidget
+              data={openRouterUsage}
+              period={openRouterPeriod}
+              onPeriodChange={setOpenRouterPeriod}
+            />
+          </div>
+          <div className="slot slot-openrouter-models">
+            <OpenRouterBreakdown
+              title="By model"
+              rows={openRouterUsage?.byModel ?? []}
+              emptyLabel="No usage in this period."
+            />
+          </div>
+          <div className="slot slot-openrouter-keys">
+            <OpenRouterBreakdown
+              title="By API key"
+              rows={openRouterUsage?.byKey ?? []}
+              emptyLabel="No usage in this period."
+            />
+          </div>
+        </main>
+      )}
+
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -653,6 +717,9 @@ export default function App() {
         onNotificationSettingsChange={setNotificationSettings}
         onYnabRefreshSecondsChange={setYnabRefreshSeconds}
         onTodoistShowTimeTrackingChange={setShowTimeTracking}
+        onOpenRouterRefreshSecondsChange={(seconds) =>
+          setOpenRouterRefreshSeconds(seconds ?? DEFAULT_OPENROUTER_REFRESH_SECONDS)
+        }
       />
     </>
   );

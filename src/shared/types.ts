@@ -66,6 +66,16 @@ export interface GitHubConfig extends GitHubScalarConfig {
   repos?: GitHubRepoConfig[];
 }
 
+// `managementApiKey` is a Management/Provisioning API key from OpenRouter's
+// dashboard — a credential distinct from a normal inference key, and unable
+// to make completion calls. It's required for every endpoint this feature
+// uses (credits, keys, activity); a regular inference key can't answer any
+// of them. See services/openrouter.ts.
+export interface OpenRouterScalarConfig {
+  managementApiKey?: string;
+  refreshSeconds?: number;
+}
+
 // A labeled Obsidian vault root for the Notes tab. Separate from
 // grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
 // point the Notes tab at several vaults, including that same one.
@@ -130,6 +140,7 @@ export interface AppConfig {
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
+  openrouter?: OpenRouterScalarConfig;
   tabs?: TabConfig[];
 }
 
@@ -211,6 +222,42 @@ export interface ClaudeUsageResult {
   byProject: ClaudeUsageBucket[];
   byModel: ClaudeUsageBucket[];
   unpricedModels: string[];
+  scanMs: number;
+}
+
+// OpenRouter's reporting periods. Capped at 30d deliberately: OpenRouter's
+// own /activity endpoint hard-limits history to the last 30 completed UTC
+// days — there's no 60d/90d to offer even with pagination.
+export type OpenRouterPeriod = "daily" | "weekly" | "30d";
+
+export interface OpenRouterTokenTotals {
+  prompt: number;
+  completion: number;
+  reasoning: number;
+}
+
+// One row of a by-model or by-key breakdown.
+export interface OpenRouterUsageBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+  requests: number;
+  tokens: OpenRouterTokenTotals;
+}
+
+export interface OpenRouterUsageResult {
+  ok: boolean;
+  reason?: string;
+  period: OpenRouterPeriod;
+  costUsd: number;
+  requests: number;
+  tokens: OpenRouterTokenTotals;
+  byModel: OpenRouterUsageBucket[];
+  byKey: OpenRouterUsageBucket[];
+  // Absent when the credits endpoint itself failed even though activity
+  // succeeded — kept optional rather than folding into `ok` so a partial
+  // result still shows usage even if the balance call had trouble.
+  creditBalance?: { totalCredits: number; totalUsage: number; remaining: number };
   scanMs: number;
 }
 
@@ -907,6 +954,9 @@ export interface CommandCenterApi {
   git: {
     status: () => Promise<GitStatusResult>;
   };
+  openrouter: {
+    usage: (period: OpenRouterPeriod) => Promise<OpenRouterUsageResult>;
+  };
   notifications: {
     show: (alert: AppAlert) => Promise<void>;
     health: () => Promise<NotificationHealth>;
@@ -1031,6 +1081,9 @@ export interface CommandCenterApi {
     };
     ynab: {
       update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;
+    };
+    openrouter: {
+      update: (values: OpenRouterScalarConfig) => Promise<OpenRouterScalarConfig>;
     };
     vaults: {
       list: () => Promise<VaultConfig[]>;

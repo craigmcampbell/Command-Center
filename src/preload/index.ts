@@ -19,6 +19,8 @@ import type {
   HabitFrequencyType,
   LinkListKind,
   NotificationSettings,
+  OpenRouterPeriod,
+  OpenRouterScalarConfig,
   ProcessConfig,
   TraySummary,
   YnabScalarConfig,
@@ -139,6 +141,10 @@ const api: CommandCenterApi = {
 
   git: {
     status: () => ipcRenderer.invoke("git:status"),
+  },
+
+  openrouter: {
+    usage: (period: OpenRouterPeriod) => ipcRenderer.invoke("openrouter:usage", period),
   },
 
   notifications: {
@@ -292,6 +298,10 @@ const api: CommandCenterApi = {
     },
     ynab: {
       update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),
+    },
+    openrouter: {
+      update: (values: OpenRouterScalarConfig) =>
+        ipcRenderer.invoke("settings:openrouter:update", values),
     },
     vaults: {
       list: () => ipcRenderer.invoke("settings:vaults:list"),
