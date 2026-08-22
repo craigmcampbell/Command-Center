@@ -61,12 +61,17 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
   // re-reads the file; this drops any queued save first, because flushing it
   // afterwards would write our pre-capture buffer over the captured line.
   // The cancel is synchronous and the refetch is not, so ordering holds.
+  // Only cancel when the viewed day is today — capture never writes another
+  // day's file, and cancelling a different date would drop unrelated edits.
+  const viewingDate = data?.date;
   useEffect(() => {
     return window.api.onCommand((command) => {
       if (command.type !== "captured" || command.target !== "dailyNote") return;
-      if (data) autosave.cancel(data.date);
+      if (viewingDate && viewingDate === todayDateString()) {
+        autosave.cancel(viewingDate);
+      }
     });
-  }, [autosave, data]);
+  }, [autosave.cancel, viewingDate]);
 
   // A note that doesn't exist yet is editable anyway: saveDailyNote writes
   // unconditionally, so the first keystroke creates the file. Nothing here

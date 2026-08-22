@@ -35,7 +35,7 @@ export default function ScratchpadWidget() {
       autosave.cancel(KEY);
       void window.api.scratchpad.get().then(setContent);
     });
-  }, [autosave]);
+  }, [autosave.cancel]);
 
   function handleChange(text: string) {
     setContent(text);
