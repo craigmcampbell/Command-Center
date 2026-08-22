@@ -3936,3 +3936,190 @@ body {
   font-size: 11.5px;
   color: var(--alert);
 }
+
+/* ---- Claude tab ---- */
+
+.grid-claude {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "claude-usage claude-usage"
+    "claude-projects claude-models"
+    "claude-sessions claude-sessions";
+}
+.slot-claude-usage {
+  grid-area: claude-usage;
+}
+.slot-claude-projects {
+  grid-area: claude-projects;
+}
+.slot-claude-models {
+  grid-area: claude-models;
+}
+.slot-claude-sessions {
+  grid-area: claude-sessions;
+}
+
+.claude-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.claude-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge-soft);
+  border-radius: 9px;
+}
+.claude-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.claude-stat-value {
+  font-family: var(--mono);
+  font-size: 22px;
+  color: var(--ink);
+}
+.claude-stat-sub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+
+/* One bar per day. Bars are stretched to fill, so the shape reads as a
+   trend even though the underlying values span three orders of magnitude. */
+.claude-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 56px;
+  padding: 0 2px;
+  margin-bottom: 10px;
+}
+.claude-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  background: var(--panel-edge-soft);
+}
+.claude-bar.has-value {
+  background: var(--accent);
+}
+
+.claude-tokenline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.claude-disclaimer {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.claude-scan {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.claude-breakdown-row .claude-cost,
+.claude-breakdown-row .status {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.claude-breakdown-row .claude-cost {
+  min-width: 62px;
+  text-align: right;
+  color: var(--ink);
+}
+.claude-breakdown-row .status {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+.claude-unpriced {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--pending);
+}
+
+.claude-session-row {
+  align-items: center;
+  gap: 12px;
+}
+.claude-session-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.claude-session-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.claude-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.claude-resume:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--ink);
+}
+.claude-resume:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.claude-value {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.claude-value strong {
+  color: var(--ink);
+  font-family: var(--mono);
+}
+
+/* Recent sessions, grouped by project — same visual language as
+   .todoist-group-title, reused rather than reinvented. */
+.claude-session-group + .claude-session-group {
+  margin-top: 4px;
+}
+.claude-session-group-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-top: 10px;
+  margin-bottom: 2px;
+  border-top: 1px solid var(--panel-edge-soft);
+}
+.claude-session-group:first-child .claude-session-group-title {
+  padding-top: 0;
+  border-top: none;
+}

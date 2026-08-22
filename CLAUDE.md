@@ -117,6 +117,11 @@ Three walled-off parts — this separation is the security model, keep it intact
     looked up live, so a monthly report still reads correctly after the upstream
     task is completed or deleted. Only one timer runs at a time — starting one
     auto-stops whichever was running.
+  - `services/claudeUsage.ts` + `services/claudePricing.ts` — token and cost
+    accounting for Claude Code, read from the transcripts it already writes to
+    `~/.claude/projects`. See "Claude Code usage" below — the three correctness
+    constraints there are easy to break and produce plausible-looking numbers
+    when broken.
   - `services/windowState.ts` — remembers the dashboard window's size, position
     and maximized/fullscreen state in a `window` settings blob. Uses
     `getNormalBounds()`, **not** `getBounds()`: while maximized or fullscreen the
@@ -228,6 +233,9 @@ lives in `App.tsx` same as always.
 - **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
   and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
   transactions with inline category/memo editing.
+- **Claude** — Claude Code token/cost usage (today, 7d, 30d, with a per-day bar
+  strip), by-project and by-model breakdowns, and recent sessions with Resume.
+  See "Claude Code usage" below.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
   five-touch-point widget pattern.
@@ -424,6 +432,74 @@ what the editor asks for — and `⌘K` is the near-universal "insert link"
 shortcut, which the markdown editor now uses. Anything bound here is
 effectively taken away from every editor in the app, so keep that in mind
 before adding more.
+
+## Claude Code usage
+
+The **Claude** tab reads `~/.claude/projects/**/*.jsonl` — the transcripts
+Claude Code writes anyway — and reports tokens and estimated cost by day,
+project and model, plus a list of recent sessions with a Resume action.
+Entirely local: no API token, no network. Resume reuses `launcher.ts`'s
+`openInTerminal(cwd, "claude -r <id>")`; the session id is the transcript's
+filename.
+
+**Three things are load-bearing correctness, not optimizations.** Each one
+produces believable-but-wrong numbers if broken, which is why the verification
+below checks them by size rather than by eye:
+
+- **Dedupe on `(requestId, message.id)`.** Resuming or forking a session copies
+  earlier messages into the new transcript, so the same request appears in
+  several files — 46.7% of usage records here are duplicates. Skipping this
+  roughly **doubles** every figure ($340 → $688 on the same window).
+- **Walk recursively.** Subagent turns live one level deeper, in
+  `<project>/<session-id>/subagents/agent-*.jsonl` (`isSidechain: true`). They
+  are real spend; a one-level scan silently understates cost. Those files are
+  attributed to the parent session named by their directory and are never
+  listed as sessions of their own.
+- **Resolve rates from each message's own date.** `claudePricing.ts` carries
+  intro pricing with a cutoff; Sonnet 5's intro period covers essentially all
+  existing history, and pricing it at standard rates overstated a real month by
+  ~26%.
+
+Two further details worth not "simplifying":
+
+- **Cache creation is split by TTL** (`ephemeral_5m` / `ephemeral_1h`) because
+  they're priced differently — 1.25× vs 2× the input rate — and the 1h bucket
+  dominates. Cache *reads* are ~99% of all tokens, so the cache split is
+  basically the whole cost story.
+- **An unknown model is not free.** Anything without a rate keeps its tokens
+  counted and renders as `unpriced` with no cost, rather than contributing $0
+  and quietly deflating the total. `<synthetic>` records legitimately carry
+  zero tokens; that's not the same thing.
+
+Performance: transcripts here are ~390MB across 43 files, but a full scan takes
+well under two seconds because `line.includes('"usage"')` skips the enormous
+attachment lines before `JSON.parse` runs. That's why there's no worker process
+and no persistent cache. Files are append-only, so results memoize per file on
+`(size, mtimeMs)`; a refresh re-parses only what changed (~1.4s cold, ~270ms
+warm). `fs.promises.glob` is deliberately not used — it needs Node 22 and
+Electron 33 ships Node 20.
+
+**Tokens lead; dollars are a value figure, not spend.** This is a deliberate
+reframe, not a styling choice — leading with cost on a subscription implies a
+bill that never existed. Token volume is what's actually consumed, so it's the
+headline; the dollar figure is labelled *API-equivalent* and expressed as a
+multiple of the plan price ("$357 in 30 days — about 18× a $20/mo Pro plan"),
+which is the one genuinely useful thing it says to a subscriber. Don't promote
+cost back to the headline.
+
+Keep the dollar figure rather than dropping it, though: it's what weights Opus
+against Sonnet. Raw token counts invert the picture — Opus used *fewer* tokens
+than Sonnet last month but represents more value, because its input rate is 5×.
+
+The plan is detected from `~/.claude.json`'s `oauthAccount.organizationType`,
+and the price used is printed inline so a stale entry in `PLAN_PRICES` is
+visible rather than silently skewing the multiple. An unrecognised plan is
+named but gets no multiple.
+
+**There is no local record of quota remaining**, so this cannot show how much
+of a subscription is used up — checked: `rateLimits` appears in transcripts
+only inside a 429 error payload, after the fact. Don't imply otherwise in the
+UI.
 
 ## Daily note template
 

@@ -73,6 +73,7 @@ import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
 import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
 import { capture } from "./services/capture";
+import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
 import {
   captureHotkeyStatus,
@@ -387,6 +388,12 @@ ipcMain.handle("open:url", async (_evt, url: string) => {
 // Launch a Claude Code session in a terminal, scoped to a project dir.
 ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
+});
+ipcMain.handle("claude:usage", () => getClaudeUsage());
+ipcMain.handle("claude:sessions", (_evt, limit?: number) => listClaudeSessions(limit));
+// `claude -r <id>` resumes by session id; the id is the transcript filename.
+ipcMain.handle("claude:resume", async (_evt, sessionId: string, cwd: string) => {
+  return openInTerminal(cwd, `claude -r ${sessionId}`);
 });
 
 // Open a local directory in ForkLift (File Links widget).

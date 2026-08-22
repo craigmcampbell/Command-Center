@@ -47,6 +47,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "habits", label: "Habits" },
   { id: "notes", label: "Notes" },
   { id: "finances", label: "Finances" },
+  { id: "claude", label: "Claude" },
 ];
 
 export function initSettings(): void {

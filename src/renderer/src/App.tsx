@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DockerResult,
   DailyNoteResult,
+  ClaudeSessionsResult,
+  ClaudeUsageResult,
   GitHubStatusResult,
   GitStatusResult,
   LinkItem,
@@ -38,6 +40,8 @@ import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
 import LinkLauncherWidget, { toDisplayBasename } from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
+import ClaudeUsageWidget, { ClaudeBreakdown } from "./components/ClaudeUsageWidget";
+import ClaudeSessionsWidget from "./components/ClaudeSessionsWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
@@ -59,7 +63,8 @@ type TabId =
   | "scratchpad"
   | "habits"
   | "notes"
-  | "finances";
+  | "finances"
+  | "claude";
 
 // Fallback order/labels for the very first render, before settings.getAll()
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
@@ -72,6 +77,7 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "habits", label: "Habits", sortOrder: 4 },
   { id: "notes", label: "Notes", sortOrder: 5 },
   { id: "finances", label: "Finances", sortOrder: 6 },
+  { id: "claude", label: "Claude", sortOrder: 7 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -128,6 +134,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsageResult | null>(null);
+  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionsResult | null>(null);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({});
   // Previous poll's snapshot, for edge-triggered alerting. A ref, not state:
   // updating it must not itself cause a render, or the alert effect would
@@ -159,6 +167,15 @@ export default function App() {
   }, []);
   const loadGit = useCallback(async () => {
     setGitStatus(await window.api.git.status());
+  }, []);
+  // One scan serves both, and the service memoizes per file — so the second
+  // call here is effectively free rather than a second pass over ~400MB.
+  const loadClaude = useCallback(async () => {
+    setClaudeUsage(await window.api.claude.usage());
+    // Grouped by project now, so a small cap mostly shows one dominant
+    // project's most recent work and starves quieter ones out of the list
+    // entirely — 40 gives every active project a real chance to appear.
+    setClaudeSessions(await window.api.claude.sessions(40));
   }, []);
   const loadProcessStatuses = useCallback(async () => {
     setProcessStatuses(await window.api.process.statusAll());
@@ -228,6 +245,7 @@ export default function App() {
       loadReader(readerPage, true),
       loadGithub(),
       loadGit(),
+      loadClaude(),
       loadProcessStatuses(),
       loadYnab(),
       loadFinanceReviewLog(),
@@ -246,6 +264,7 @@ export default function App() {
     readerPage,
     loadGithub,
     loadGit,
+    loadClaude,
     loadProcessStatuses,
     loadYnab,
     loadFinanceReviewLog,
@@ -331,6 +350,7 @@ export default function App() {
         loadReader(0),
         loadGithub(),
         loadGit(),
+        loadClaude(),
         loadProcessStatuses(),
         loadYnab(),
         loadFinanceReviewLog(),
@@ -585,6 +605,31 @@ export default function App() {
               accounts={ynabAccounts}
               onRefresh={loadYnabUnapproved}
             />
+          </div>
+        </main>
+      )}
+
+      {activeTab === "claude" && (
+        <main className="grid grid-claude">
+          <div className="slot slot-claude-usage">
+            <ClaudeUsageWidget data={claudeUsage} />
+          </div>
+          <div className="slot slot-claude-projects">
+            <ClaudeBreakdown
+              title="By project (30d)"
+              rows={claudeUsage?.byProject ?? []}
+              emptyLabel="No usage in the last 30 days."
+            />
+          </div>
+          <div className="slot slot-claude-models">
+            <ClaudeBreakdown
+              title="By model (30d)"
+              rows={claudeUsage?.byModel ?? []}
+              emptyLabel="No usage in the last 30 days."
+            />
+          </div>
+          <div className="slot slot-claude-sessions">
+            <ClaudeSessionsWidget data={claudeSessions} />
           </div>
         </main>
       )}

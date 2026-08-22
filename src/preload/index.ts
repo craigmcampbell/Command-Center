@@ -75,6 +75,10 @@ const api: CommandCenterApi = {
 
   claude: {
     launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
+    usage: () => ipcRenderer.invoke("claude:usage"),
+    sessions: (limit?: number) => ipcRenderer.invoke("claude:sessions", limit),
+    resume: (sessionId: string, cwd: string) =>
+      ipcRenderer.invoke("claude:resume", sessionId, cwd),
   },
 
   forklift: {

@@ -162,6 +162,77 @@ export interface WindowState {
   fullscreen?: boolean;
 }
 
+// Token counts split the way Claude Code's transcripts record them. The two
+// cache-write buckets are separate because they're priced differently (5-minute
+// TTL is 1.25x the input rate, 1-hour is 2x), and the 1-hour bucket dominates
+// in practice — collapsing them would materially skew cost.
+export interface ClaudeTokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+}
+
+export interface ClaudeUsageWindow {
+  costUsd: number;
+  requests: number;
+  tokens: ClaudeTokenTotals;
+}
+
+// One row of a by-project or by-model breakdown. `unpriced` marks a model we
+// have no rate for: its tokens are still counted and shown, but its cost is
+// excluded rather than silently counted as $0.
+export interface ClaudeUsageBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+  requests: number;
+  tokens: ClaudeTokenTotals;
+  unpriced?: boolean;
+}
+
+export interface ClaudeUsageDay {
+  date: string;
+  costUsd: number;
+}
+
+export interface ClaudeUsageResult {
+  ok: boolean;
+  reason?: string;
+  // The signed-in plan, used only to express API-equivalent usage as a
+  // multiple of the subscription price. `monthlyUsd` is absent for a plan we
+  // don't have a price for — in which case no multiple is shown.
+  plan?: { label: string; monthlyUsd?: number };
+  today: ClaudeUsageWindow;
+  last7: ClaudeUsageWindow;
+  last30: ClaudeUsageWindow;
+  days: ClaudeUsageDay[];
+  byProject: ClaudeUsageBucket[];
+  byModel: ClaudeUsageBucket[];
+  unpricedModels: string[];
+  scanMs: number;
+}
+
+// A resumable Claude Code session. `id` is the transcript's filename, which is
+// exactly what `claude -r <id>` takes.
+export interface ClaudeSession {
+  id: string;
+  cwd: string;
+  projectLabel: string;
+  title?: string;
+  lastPrompt?: string;
+  updatedAt: number;
+  requests: number;
+  costUsd: number;
+}
+
+export interface ClaudeSessionsResult {
+  ok: boolean;
+  reason?: string;
+  sessions: ClaudeSession[];
+}
+
 export interface BackupFile {
   path: string;
   name: string;
@@ -787,6 +858,9 @@ export interface CommandCenterApi {
   openUrl: (url: string) => Promise<boolean>;
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
+    usage: () => Promise<ClaudeUsageResult>;
+    sessions: (limit?: number) => Promise<ClaudeSessionsResult>;
+    resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   forklift: {
     open: (dirPath: string) => Promise<ActionResult>;
