@@ -25,6 +25,18 @@ export default function ScratchpadWidget() {
     });
   }, []);
 
+  // Quick capture appends to the scratchpad from the main process, behind this
+  // component's back. Our in-memory copy is now stale, and the next keystroke
+  // would autosave it straight over the captured line — so drop any queued
+  // save (same reasoning as handleClear below) and reload from source.
+  useEffect(() => {
+    return window.api.onCommand((command) => {
+      if (command.type !== "captured" || command.target !== "scratchpad") return;
+      autosave.cancel(KEY);
+      void window.api.scratchpad.get().then(setContent);
+    });
+  }, [autosave.cancel]);
+
   function handleChange(text: string) {
     setContent(text);
     autosave.schedule(KEY, text);

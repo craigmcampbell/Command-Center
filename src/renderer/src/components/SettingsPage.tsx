@@ -25,10 +25,19 @@ import { CSS } from "@dnd-kit/utilities";
 import type {
   AppConfig,
   GitHubRepoConfig,
+  GitHubRepoInput,
+  BackupFile,
+  BackupSettings,
+  CaptureHotkeyStatus,
+  CaptureSettings,
+  GrimoireConfig,
+  NotificationHealth,
+  NotificationSettings,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
 } from "../../../shared/types";
+import { validateAccelerator } from "../../../shared/accelerator";
 import {
   useGithubRepoSettingsList,
   useProcessSettingsList,
@@ -45,15 +54,23 @@ import {
   IconX,
 } from "./icons";
 
-type SectionId = "general" | "grimoire" | "integrations" | "vaults" | "githubRepos" | "processes";
+type SectionId =
+  | "general"
+  | "grimoire"
+  | "integrations"
+  | "vaults"
+  | "githubRepos"
+  | "processes"
+  | "data";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "General" },
   { id: "grimoire", label: "Grimoire" },
   { id: "integrations", label: "Integrations" },
   { id: "vaults", label: "Vaults" },
-  { id: "githubRepos", label: "GitHub Repos" },
+  { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
+  { id: "data", label: "Data" },
 ];
 
 interface SettingsPageProps {
@@ -62,6 +79,8 @@ interface SettingsPageProps {
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
+  onGitRefreshSecondsChange: (seconds?: number) => void;
+  onNotificationSettingsChange: (values: NotificationSettings) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
@@ -210,31 +229,362 @@ function DockerCard({
   );
 }
 
+function GitCard({
+  value,
+  onSaved,
+}: {
+  value: { refreshSeconds?: number };
+  onSaved: (v: { refreshSeconds?: number }) => void;
+}) {
+  const current = String(value.refreshSeconds ?? 30);
+  const [seconds, setSeconds] = useState(current);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setSeconds(current), [current]);
+  const dirty = seconds !== current;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.git.update({
+      refreshSeconds: Number(seconds) || 30,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Git</h3>
+      <p className="settings-card-hint">
+        How often the Git widget re-runs `git status` over your local repos. Separate from the
+        GitHub interval — this one costs no API quota, so it can be much shorter.
+      </p>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={seconds}
+          onChange={(e) => setSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function NotificationsCard({
+  value,
+  onSaved,
+}: {
+  value: NotificationSettings;
+  onSaved: (v: NotificationSettings) => void;
+}) {
+  // Absent means on — matches getNotificationSettings()'s defaults, so a
+  // config written before this section existed reads as fully enabled.
+  const norm = (v: NotificationSettings) => ({
+    enabled: v.enabled !== false,
+    ciFailure: v.ciFailure !== false,
+    processCrash: v.processCrash !== false,
+    dockerExit: v.dockerExit !== false,
+  });
+  const [draft, setDraft] = useState(norm(value));
+  const [saving, setSaving] = useState(false);
+  const [health, setHealth] = useState<NotificationHealth | null>(null);
+
+  useEffect(() => setDraft(norm(value)), [value]);
+  useEffect(() => {
+    void window.api.notifications.health().then(setHealth);
+  }, []);
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(norm(value));
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.notifications.update(draft);
+    setSaving(false);
+    onSaved(result);
+  }
+
+  const triggers: { key: keyof typeof draft; label: string }[] = [
+    { key: "ciFailure", label: "CI turns red" },
+    { key: "processCrash", label: "A managed process crashes" },
+    { key: "dockerExit", label: "A Docker container stops" },
+  ];
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Notifications</h3>
+      <p className="settings-card-hint">
+        Desktop notifications for things worth interrupting you about. Each fires only on the
+        transition into that state, never repeatedly while it persists.
+      </p>
+
+      {health && !health.supported && (
+        <p className="settings-card-warning">
+          This system reports that notifications aren’t supported. The menubar tray still shows
+          status.
+        </p>
+      )}
+      {health?.lastFailure && (
+        <p className="settings-card-warning">
+          macOS rejected the last notification ({health.lastFailure}). Check System Settings →
+          Notifications → Command Center. The menubar tray still shows status.
+        </p>
+      )}
+
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+        />
+        Enable notifications
+      </label>
+
+      {triggers.map((t) => (
+        <label key={t.key} className="settings-checkbox-label settings-checkbox-nested">
+          <input
+            type="checkbox"
+            checked={draft[t.key]}
+            disabled={!draft.enabled}
+            onChange={(e) => setDraft({ ...draft, [t.key]: e.target.checked })}
+          />
+          {t.label}
+        </label>
+      ))}
+
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function CaptureCard({
+  value,
+  onSaved,
+}: {
+  value: CaptureSettings;
+  onSaved: (v: CaptureSettings) => void;
+}) {
+  const current = value.accelerator ?? "";
+  const [accelerator, setAccelerator] = useState(current);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
+
+  useEffect(() => setAccelerator(current), [current]);
+  useEffect(() => {
+    void window.api.capture.hotkeyStatus().then(setStatus);
+  }, []);
+
+  const dirty = accelerator !== current;
+  const validationError = accelerator.trim() ? validateAccelerator(accelerator) : null;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    if (validationError) return;
+    setSaving(true);
+    const result = await window.api.settings.capture.update({ ...value, accelerator });
+    setStatus(await window.api.capture.hotkeyStatus());
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Quick capture</h3>
+      <p className="settings-card-hint">
+        A global hotkey that opens a small capture panel from any app, writing to today's daily
+        note or the scratchpad. Uses Electron accelerator syntax, e.g.{" "}
+        <code>Cmd+Ctrl+Alt+Shift+Q</code>.
+      </p>
+
+      {status && !status.registered && status.accelerator && (
+        <p className="settings-card-warning">
+          Couldn’t register <code>{status.accelerator}</code>. Pick a different combination.
+        </p>
+      )}
+
+      <div className="settings-field-row">
+        <label>Hotkey</label>
+        <input
+          className="settings-input"
+          value={accelerator}
+          onChange={(e) => setAccelerator(e.target.value)}
+          placeholder="Cmd+Ctrl+Alt+Shift+Q"
+        />
+      </div>
+      {validationError && <p className="settings-field-error">{validationError}</p>}
+
+      {/* macOS gives no usable signal here: globalShortcut.register() returns
+          true even for a combo another app already owns, so promising conflict
+          detection would be a lie. Say what to do instead. */}
+      <p className="settings-card-hint">
+        If the hotkey does nothing, another app has likely claimed it — launchers and macro tools
+        take precedence, and macOS gives no way to detect that. Try a different combination.
+      </p>
+
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving || !!validationError}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DataCard({
+  value,
+  onSaved,
+}: {
+  value: BackupSettings;
+  onSaved: (v: BackupSettings) => void;
+}) {
+  const norm = (v: BackupSettings) => ({ enabled: v.enabled !== false, keep: v.keep ?? 7 });
+  const [draft, setDraft] = useState(norm(value));
+  const [saving, setSaving] = useState(false);
+  const [backups, setBackups] = useState<BackupFile[]>([]);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+
+  useEffect(() => setDraft(norm(value)), [value]);
+  const refreshList = () => void window.api.backup.list().then(setBackups);
+  useEffect(refreshList, []);
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(norm(value));
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.backup.update(draft);
+    setSaving(false);
+    onSaved(result);
+  }
+
+  async function handleExport() {
+    setExportMsg(null);
+    const result = await window.api.backup.export();
+    // A dismissed save dialog is not a failure — say nothing at all.
+    if (result.canceled) return;
+    setExportMsg(result.ok ? `Exported to ${result.path}` : `Export failed: ${result.reason}`);
+  }
+
+  return (
+    <>
+      <form className="settings-card" onSubmit={handleSave}>
+        <h3>Backups</h3>
+        <p className="settings-card-hint">
+          Everything this app stores lives in a single SQLite file — notes, habits, finances, time
+          entries, and settings. A copy is written automatically once per day.
+        </p>
+
+        <label className="settings-checkbox-label">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+          />
+          Back up automatically on launch
+        </label>
+        <div className="settings-field-row">
+          <label>Keep</label>
+          <input
+            className="settings-input"
+            type="number"
+            min={1}
+            value={draft.keep}
+            disabled={!draft.enabled}
+            onChange={(e) => setDraft({ ...draft, keep: Number(e.target.value) || 7 })}
+          />
+        </div>
+
+        {backups.length > 0 && (
+          <ul className="settings-backup-list">
+            {backups.map((b) => (
+              <li key={b.path}>
+                <span className="settings-backup-name">{b.name}</span>
+                <span className="settings-backup-size">{formatBytes(b.size)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="settings-card-footer">
+          <button type="submit" disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+
+      <div className="settings-card">
+        <h3>Export database</h3>
+        <p className="settings-card-hint">
+          Writes a complete copy wherever you choose — for moving to another machine, or keeping a
+          copy somewhere else.
+        </p>
+        <p className="settings-card-warning">
+          The exported file contains your API tokens (Todoist, GitHub, Readwise, YNAB, Google) in
+          plaintext, exactly as they are stored here. Treat it like a password file, and think
+          twice before putting it in a synced or shared folder.
+        </p>
+        {exportMsg && <p className="settings-card-hint">{exportMsg}</p>}
+        <div className="settings-card-footer">
+          <button type="button" onClick={handleExport}>
+            Export database…
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function GrimoireCard({
   value,
   onSaved,
 }: {
-  value: { vaultPath: string; dailyLogDir: string; missionsDir: string };
-  onSaved: (v: { vaultPath: string; dailyLogDir: string; missionsDir: string }) => void;
+  value: GrimoireConfig;
+  onSaved: (v: GrimoireConfig) => void;
 }) {
   const [vaultPath, setVaultPath] = useState(value.vaultPath);
   const [dailyLogDir, setDailyLogDir] = useState(value.dailyLogDir);
   const [missionsDir, setMissionsDir] = useState(value.missionsDir);
+  const [dailyTemplatePath, setDailyTemplatePath] = useState(value.dailyTemplatePath ?? "");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setVaultPath(value.vaultPath);
     setDailyLogDir(value.dailyLogDir);
     setMissionsDir(value.missionsDir);
-  }, [value.vaultPath, value.dailyLogDir, value.missionsDir]);
+    setDailyTemplatePath(value.dailyTemplatePath ?? "");
+  }, [value.vaultPath, value.dailyLogDir, value.missionsDir, value.dailyTemplatePath]);
   const dirty =
     vaultPath !== value.vaultPath ||
     dailyLogDir !== value.dailyLogDir ||
-    missionsDir !== value.missionsDir;
+    missionsDir !== value.missionsDir ||
+    dailyTemplatePath !== (value.dailyTemplatePath ?? "");
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const result = await window.api.settings.grimoire.update({ vaultPath, dailyLogDir, missionsDir });
+    const result = await window.api.settings.grimoire.update({
+      vaultPath,
+      dailyLogDir,
+      missionsDir,
+      dailyTemplatePath: dailyTemplatePath.trim() || undefined,
+    });
     setSaving(false);
     onSaved(result);
   }
@@ -272,6 +622,20 @@ function GrimoireCard({
           placeholder="3 Missions"
         />
       </div>
+      <div className="settings-field-row">
+        <label>Daily template</label>
+        <input
+          className="settings-input"
+          value={dailyTemplatePath}
+          onChange={(e) => setDailyTemplatePath(e.target.value)}
+          placeholder="_System/templates/daily template.md (optional)"
+        />
+      </div>
+      <p className="settings-card-hint">
+        Vault-relative template seeded into a daily note that doesn’t exist yet. <code>
+        {"{{date}}"}</code> placeholders are filled in for that note’s date; Templater{" "}
+        <code>{"<% … %>"}</code> blocks are removed, since nothing here can execute them.
+      </p>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -712,7 +1076,39 @@ function VaultsSection({ vaults, onChange }: { vaults: VaultConfig[]; onChange: 
   );
 }
 
-// ---- GitHub Repos section ----
+// ---- Repositories section ----
+
+// A row is valid with a label, a branch, and at least one of the two sides it
+// can describe: owner+repo (GitHub widget) or a local path (Git widget). A
+// GitHub-only row and a local-only row are both legitimate.
+function repoDraftIsValid(d: {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  localPath: string;
+}): boolean {
+  if (!d.label.trim() || !d.branch.trim()) return false;
+  const hasRemote = Boolean(d.owner.trim() && d.repo.trim());
+  const hasLocal = Boolean(d.localPath.trim());
+  return hasRemote || hasLocal;
+}
+
+function draftToRepoInput(d: {
+  label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  localPath: string;
+}): GitHubRepoInput {
+  return {
+    label: d.label.trim(),
+    owner: d.owner.trim() || undefined,
+    repo: d.repo.trim() || undefined,
+    branch: d.branch.trim(),
+    localPath: d.localPath.trim() || undefined,
+  };
+}
 
 function GithubRepoEditForm({
   item,
@@ -720,17 +1116,19 @@ function GithubRepoEditForm({
   onCancel,
 }: {
   item: GitHubRepoConfig;
-  onSave: (label: string, owner: string, repo: string, branch: string) => void;
+  onSave: (input: GitHubRepoInput) => void;
   onCancel: () => void;
 }) {
   const [label, setLabel] = useState(item.label);
-  const [owner, setOwner] = useState(item.owner);
-  const [repo, setRepo] = useState(item.repo);
+  const [owner, setOwner] = useState(item.owner ?? "");
+  const [repo, setRepo] = useState(item.repo ?? "");
   const [branch, setBranch] = useState(item.branch);
+  const [localPath, setLocalPath] = useState(item.localPath ?? "");
+  const draft = { label, owner, repo, branch, localPath };
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()) return;
-    onSave(label.trim(), owner.trim(), repo.trim(), branch.trim());
+    if (!repoDraftIsValid(draft)) return;
+    onSave(draftToRepoInput(draft));
   }
   return (
     <form className="settings-array-form" onSubmit={handleSubmit}>
@@ -738,6 +1136,7 @@ function GithubRepoEditForm({
       <input className="settings-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner" />
       <input className="settings-input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="repo" />
       <input className="settings-input" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+      <input className="settings-input" value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="/local/path (optional)" />
       <button type="submit" className="settings-array-save" aria-label="Save">
         <IconCheck />
       </button>
@@ -754,7 +1153,7 @@ function GithubRepoRow({
   onDelete,
 }: {
   item: GitHubRepoConfig;
-  onSave: (label: string, owner: string, repo: string, branch: string) => void;
+  onSave: (input: GitHubRepoInput) => void;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -768,8 +1167,8 @@ function GithubRepoRow({
       <div ref={setNodeRef} style={style} className="settings-array-row editing">
         <GithubRepoEditForm
           item={item}
-          onSave={(label, owner, repo, branch) => {
-            onSave(label, owner, repo, branch);
+          onSave={(input) => {
+            onSave(input);
             setEditing(false);
           }}
           onCancel={() => setEditing(false)}
@@ -786,7 +1185,12 @@ function GithubRepoRow({
       <div className="settings-array-row-main">
         <span className="settings-array-row-label">{item.label}</span>
         <span className="settings-array-row-sub">
-          {item.owner}/{item.repo}@{item.branch}
+          {[
+            item.owner && item.repo ? `${item.owner}/${item.repo}@${item.branch}` : null,
+            item.localPath,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </div>
       <span className="row-actions">
@@ -813,6 +1217,8 @@ function GithubReposSection({
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("main");
+  const [localPath, setLocalPath] = useState("");
+  const draft = { label, owner, repo, branch, localPath };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   function handleDragEnd(e: DragEndEvent) {
@@ -826,18 +1232,22 @@ function GithubReposSection({
 
   function handleAdd(e: FormEvent) {
     e.preventDefault();
-    if (!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()) return;
-    add(label.trim(), owner.trim(), repo.trim(), branch.trim());
+    if (!repoDraftIsValid(draft)) return;
+    add(draftToRepoInput(draft));
     setLabel("");
     setOwner("");
     setRepo("");
     setBranch("main");
+    setLocalPath("");
   }
 
   return (
     <div className="settings-card">
-      <h3>GitHub Repos</h3>
-      <p className="settings-card-hint">Repos tracked by the GitHub widget's CI status + PR count.</p>
+      <h3>Repositories</h3>
+      <p className="settings-card-hint">
+        Tracked repos. Set owner/repo for the GitHub widget's CI status + PR count, and a local
+        path for the Git widget's working-tree status — either alone is fine, or both together.
+      </p>
       {repos.length === 0 ? (
         <p className="muted">No repos configured.</p>
       ) : (
@@ -847,7 +1257,7 @@ function GithubReposSection({
               <GithubRepoRow
                 key={r.id}
                 item={r}
-                onSave={(label, owner, repo, branch) => update(r.id, label, owner, repo, branch)}
+                onSave={(input) => update(r.id, input)}
                 onDelete={() => remove(r.id)}
               />
             ))}
@@ -859,11 +1269,8 @@ function GithubReposSection({
         <input className="settings-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner" />
         <input className="settings-input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="repo" />
         <input className="settings-input" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
-        <button
-          type="submit"
-          disabled={!label.trim() || !owner.trim() || !repo.trim() || !branch.trim()}
-          aria-label="Add"
-        >
+        <input className="settings-input" value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="/local/path (optional)" />
+        <button type="submit" disabled={!repoDraftIsValid(draft)} aria-label="Add">
           <IconPlus />
         </button>
       </form>
@@ -1164,6 +1571,8 @@ export default function SettingsPage({
   onProcessConfigsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
+  onGitRefreshSecondsChange,
+  onNotificationSettingsChange,
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
   onTodoistShowTimeTrackingChange,
@@ -1240,7 +1649,32 @@ export default function SettingsPage({
                       onDockerRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
+                  <GitCard
+                    value={data.git ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, git: v } : prev));
+                      onGitRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <NotificationsCard
+                    value={data.notifications ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, notifications: v } : prev));
+                      onNotificationSettingsChange(v);
+                    }}
+                  />
+                  <CaptureCard
+                    value={data.capture ?? {}}
+                    onSaved={(v) => setData((prev) => (prev ? { ...prev, capture: v } : prev))}
+                  />
                 </>
+              )}
+
+              {section === "data" && (
+                <DataCard
+                  value={data.backup ?? {}}
+                  onSaved={(v) => setData((prev) => (prev ? { ...prev, backup: v } : prev))}
+                />
               )}
 
               {section === "grimoire" && (

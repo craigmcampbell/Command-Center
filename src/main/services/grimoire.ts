@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { renderDailyTemplate } from "./dailyTemplate";
 import type {
   ActionResult,
   GrimoireConfig,
@@ -87,7 +88,7 @@ function listDailyNoteDates(vaultPath: string, dailyLogDir: string): string[] {
 }
 
 export function readDailyNote(
-  { vaultPath, dailyLogDir }: GrimoireConfig,
+  { vaultPath, dailyLogDir, dailyTemplatePath }: GrimoireConfig,
   dateStr?: string
 ): DailyNoteResult {
   const date = dateStr || todayDateString();
@@ -117,6 +118,17 @@ export function readDailyNote(
       dirExists = false;
     }
 
+    // The template is returned SEPARATELY from `content`, which stays empty.
+    // It used to be returned as the content, which made the widget display a
+    // full note for a file that doesn't exist — indistinguishable from a real
+    // one, and easily mistaken for some other day's note. The template is now
+    // applied at the moment of creation instead (the first keystroke, see
+    // DailyNoteWidget) rather than previewed. Placeholders resolve against
+    // this note's date, not today, so an older empty day renders coherently.
+    const templateContent = dirExists
+      ? renderDailyTemplate(vaultPath, dailyTemplatePath, date)
+      : null;
+
     return {
       ok: false,
       file,
@@ -126,6 +138,7 @@ export function readDailyNote(
           : "No note for this day"
         : "Daily log folder not found",
       content: "",
+      templateContent: templateContent ?? undefined,
       date,
       prevDate,
       nextDate,

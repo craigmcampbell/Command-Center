@@ -4,7 +4,8 @@
 // it has to ask the main process to do those things. That separation is what
 // keeps an Electron app safe.
 
-import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
@@ -67,6 +68,20 @@ import {
   deleteDocument,
 } from "./services/reader";
 import { getGitHubStatus } from "./services/github";
+import { getGitStatuses } from "./services/git";
+import { getNotificationHealth, showAlert } from "./services/notifications";
+import { destroyTray, initTray, updateTray } from "./services/tray";
+import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
+import { capture } from "./services/capture";
+import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
+import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
+import {
+  captureHotkeyStatus,
+  destroyCaptureWindow,
+  hideCaptureWindow,
+  initCaptureWindow,
+  registerCaptureHotkey,
+} from "./services/captureWindow";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
@@ -128,6 +143,14 @@ import {
   updateReaderSettings,
   getGithubScalarSettings,
   updateGithubScalarSettings,
+  getGitSettings,
+  updateGitSettings,
+  updateNotificationSettings,
+  getBackupSettings,
+  updateBackupSettings,
+  getCaptureSettings,
+  updateCaptureSettings,
+  DEFAULT_CAPTURE_ACCELERATOR,
   getYnabSettings,
   updateYnabSettings,
   toggleYnabAccountHidden,
@@ -152,8 +175,18 @@ import {
 import type {
   GoogleCalendarConfig,
   GrimoireConfig,
+  ActionResult,
+  AppAlert,
+  AppCommand,
+  BackupSettings,
+  CaptureSettings,
+  CaptureTarget,
+  ExportResult,
   GitHubScalarConfig,
+  GitHubRepoInput,
   HabitFrequencyType,
+  NotificationSettings,
+  TraySummary,
   LinkListKind,
   ProcessConfig,
   YnabScalarConfig,
@@ -190,11 +223,39 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon);
 }
 
+// Held at module scope so the tray and notification clicks can reach the
+// window — everything else in this file is request/response IPC and never
+// needed a reference.
+let mainWindow: BrowserWindow | null = null;
+
+// Set once a real quit is underway, so the close handler below knows to let
+// the window actually close instead of hiding it.
+let quitting = false;
+
+// Bring the dashboard back from the tray (or rebuild it if it was genuinely
+// destroyed, e.g. on a platform where close isn't intercepted).
+function showMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  createWindow();
+}
+
+// The single main→renderer channel. Everything else in this app is
+// renderer→main invoke; this exists because the tray and notification clicks
+// originate here and need to drive the UI.
+function sendCommand(command: AppCommand): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app:command", command);
+}
+
 function createWindow(): void {
   const icon = nativeImage.createFromPath(appIconPath());
+  const { maximized, fullscreen, ...bounds } = restoreBounds();
   const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...bounds,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#12100e",
@@ -220,6 +281,28 @@ function createWindow(): void {
   if (process.argv.includes("--dev")) {
     win.webContents.openDevTools({ mode: "detach" });
   }
+
+  mainWindow = win;
+  // Fullscreen wins if both are somehow set — it's the more specific state,
+  // and maximizing into a fullscreen window would just fight itself.
+  if (fullscreen) win.setFullScreen(true);
+  else if (maximized) win.maximize();
+  trackWindow(win);
+
+  // Close hides rather than destroys. Every poller in this app lives in the
+  // renderer (App.tsx), so destroying the window would stop all polling —
+  // no notifications and a tray frozen at its last value. Hiding keeps the
+  // renderer alive so the app can keep watching in the background. A real
+  // quit sets `quitting` first and falls through.
+  win.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    win.hide();
+  });
+
+  win.on("closed", () => {
+    mainWindow = null;
+  });
 }
 
 // ---- IPC handlers: each one is something the UI can invoke by name. ----
@@ -306,6 +389,12 @@ ipcMain.handle("open:url", async (_evt, url: string) => {
 ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
 });
+ipcMain.handle("claude:usage", () => getClaudeUsage());
+ipcMain.handle("claude:sessions", (_evt, limit?: number) => listClaudeSessions(limit));
+// `claude -r <id>` resumes by session id; the id is the transcript filename.
+ipcMain.handle("claude:resume", async (_evt, sessionId: string, cwd: string) => {
+  return openInTerminal(cwd, `claude -r ${sessionId}`);
+});
 
 // Open a local directory in ForkLift (File Links widget).
 ipcMain.handle("forklift:open", async (_evt, dirPath: string) => {
@@ -351,6 +440,52 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 
 // GitHub: latest CI run + open PR count per configured repo, plus
 // review-requested PRs across all of them.
+// Same repo list as github:status — a row contributes to whichever widget its
+// fields support (owner+repo → GitHub, localPath → here).
+ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
+
+// Transition detection happens in the renderer (that's where the polled state
+// lives); main's job is only to turn a decided alert into an OS notification.
+ipcMain.handle("notifications:show", (_evt, alert: AppAlert) => {
+  showAlert(alert, (tab) => {
+    showMainWindow();
+    if (tab) sendCommand({ type: "openTab", tab });
+  });
+});
+ipcMain.handle("notifications:health", () => getNotificationHealth());
+
+ipcMain.handle("tray:update", (_evt, summary: TraySummary) => updateTray(summary));
+
+ipcMain.handle("backup:export", async (): Promise<ExportResult> => {
+  const result = await dialog.showSaveDialog({
+    title: "Export database",
+    defaultPath: defaultExportName(),
+    filters: [{ name: "SQLite database", extensions: ["db"] }],
+  });
+  // A dismissed dialog is not a failure — the UI must stay silent for it.
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  const written = await exportDatabase(result.filePath);
+  return written.ok ? { ok: true, path: result.filePath } : written;
+});
+ipcMain.handle("backup:list", () => listBackups());
+ipcMain.handle("backup:runNow", async (): Promise<ActionResult> => {
+  const dest = path.join(backupsDir(), `manual-${Date.now()}.db`);
+  fs.mkdirSync(backupsDir(), { recursive: true });
+  return exportDatabase(dest);
+});
+
+ipcMain.handle("capture:submit", (_evt, target: CaptureTarget, text: string) => {
+  const result = capture(target, text);
+  // Both targets are also edited by autosaving widgets holding the whole
+  // buffer in memory; tell the renderer to drop its stale copy, or its next
+  // save will overwrite what we just appended.
+  if (result.ok) sendCommand({ type: "captured", target });
+  return result;
+});
+ipcMain.handle("capture:cancel", () => hideCaptureWindow());
+ipcMain.handle("capture:hotkeyStatus", () => captureHotkeyStatus());
+
 ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
 );
@@ -513,6 +648,23 @@ ipcMain.handle("settings:getAll", () => getAllSettings());
 ipcMain.handle("settings:grimoire:update", (_evt, values: GrimoireConfig) =>
   updateGrimoireSettings(values)
 );
+ipcMain.handle("settings:git:update", (_evt, values: { refreshSeconds?: number }) =>
+  updateGitSettings(values)
+);
+ipcMain.handle("settings:notifications:update", (_evt, values: NotificationSettings) =>
+  updateNotificationSettings(values)
+);
+ipcMain.handle("settings:backup:update", (_evt, values: BackupSettings) =>
+  updateBackupSettings(values)
+);
+// Re-register immediately so a changed accelerator takes effect without a
+// restart — and so the Settings UI can report right away whether the new one
+// was actually claimable.
+ipcMain.handle("settings:capture:update", (_evt, values: CaptureSettings) => {
+  const saved = updateCaptureSettings(values);
+  if (saved.accelerator) registerCaptureHotkey(saved.accelerator);
+  return saved;
+});
 ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
   updateDockerSettings(values)
 );
@@ -548,15 +700,11 @@ ipcMain.handle("settings:vaults:remove", (_evt, id: number) => removeVault(id));
 ipcMain.handle("settings:vaults:reorder", (_evt, orderedIds: number[]) => reorderVaults(orderedIds));
 
 ipcMain.handle("settings:githubRepos:list", () => listGithubRepoSettings());
-ipcMain.handle(
-  "settings:githubRepos:add",
-  (_evt, label: string, owner: string, repo: string, branch: string) =>
-    addGithubRepo(label, owner, repo, branch)
+ipcMain.handle("settings:githubRepos:add", (_evt, input: GitHubRepoInput) =>
+  addGithubRepo(input)
 );
-ipcMain.handle(
-  "settings:githubRepos:update",
-  (_evt, id: number, label: string, owner: string, repo: string, branch: string) =>
-    updateGithubRepo(id, label, owner, repo, branch)
+ipcMain.handle("settings:githubRepos:update", (_evt, id: number, input: GitHubRepoInput) =>
+  updateGithubRepo(id, input)
 );
 ipcMain.handle("settings:githubRepos:remove", (_evt, id: number) => removeGithubRepo(id));
 ipcMain.handle("settings:githubRepos:reorder", (_evt, orderedIds: number[]) =>
@@ -582,12 +730,27 @@ ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderT
 app.whenReady().then(() => {
   setDockIcon();
   createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+
+  // Fire-and-forget: a backup must never delay startup or break it.
+  const backupSettings = getBackupSettings();
+  void runDailyBackup(backupSettings.enabled !== false, backupSettings.keep ?? 7);
+
+  initCaptureWindow();
+  registerCaptureHotkey(getCaptureSettings().accelerator ?? DEFAULT_CAPTURE_ACCELERATOR);
+
+  initTray({
+    onShow: showMainWindow,
+    onRefresh: () => sendCommand({ type: "refreshAll" }),
+    onQuit: () => app.quit(),
   });
+  // Clicking the Dock icon reopens the hidden window, same as the tray's Show.
+  app.on("activate", showMainWindow);
 });
 
 app.on("window-all-closed", () => {
+  // On macOS the window is hidden rather than destroyed (see createWindow), so
+  // this generally won't fire at all — the app lives on in the tray until an
+  // explicit Quit.
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -600,10 +763,18 @@ app.on("window-all-closed", () => {
 // where a second app.quit() from inside this handler never actually
 // completed the exit (observed in dev mode with the detached DevTools
 // window still open).
-let quitting = false;
+// `quitting` is declared up by createWindow — the window's close handler needs
+// it too, to tell a real quit apart from a hide-to-tray.
 app.on("before-quit", (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
+  destroyTray();
+  // Close hides rather than destroys, so there's no close event to save on;
+  // this is the last chance, and it also flushes any pending debounce.
+  flushWindowState();
+  // Also unregisters the global shortcut — leaving it claimed after quit
+  // would make the hotkey dead until the next launch.
+  destroyCaptureWindow();
   stopAllProcesses().finally(() => app.exit());
 });

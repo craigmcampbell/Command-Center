@@ -1,12 +1,16 @@
 // The UI. Runs sandboxed — it can only reach the main process through the
 // `window.api` object that the preload set up. No Node, no fs, no exec here.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DockerResult,
   DailyNoteResult,
+  ClaudeSessionsResult,
+  ClaudeUsageResult,
   GitHubStatusResult,
+  GitStatusResult,
   LinkItem,
+  NotificationSettings,
   MissionsResult,
   NoteNavItem,
   ProcessConfig,
@@ -25,6 +29,7 @@ import type {
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import GitHubWidget from "./components/GitHubWidget";
+import GitStatusWidget from "./components/GitStatusWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import BillsWidget from "./components/BillsWidget";
@@ -35,6 +40,8 @@ import MissionsWidget from "./components/MissionsWidget";
 import TodoistWidget from "./components/TodoistWidget";
 import LinkLauncherWidget, { toDisplayBasename } from "./components/LinkLauncherWidget";
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
+import ClaudeUsageWidget, { ClaudeBreakdown } from "./components/ClaudeUsageWidget";
+import ClaudeSessionsWidget from "./components/ClaudeSessionsWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
@@ -45,6 +52,8 @@ import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./components/SettingsPage";
 import { IconGear, IconRefresh } from "./components/icons";
 import type { PaletteContext } from "./palette";
+import { buildSnapshot, diffAlerts, summarize } from "./lib/alerts";
+import type { AlertSnapshot } from "./lib/alerts";
 import appLogo from "./assets/icon.png";
 
 type TabId =
@@ -54,7 +63,8 @@ type TabId =
   | "scratchpad"
   | "habits"
   | "notes"
-  | "finances";
+  | "finances"
+  | "claude";
 
 // Fallback order/labels for the very first render, before settings.getAll()
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
@@ -67,11 +77,15 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "habits", label: "Habits", sortOrder: 4 },
   { id: "notes", label: "Notes", sortOrder: 5 },
   { id: "finances", label: "Finances", sortOrder: 6 },
+  { id: "claude", label: "Claude", sortOrder: 7 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
 const DEFAULT_DOCKER_REFRESH_SECONDS = 15;
 const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
+// Much faster than GitHub's: that one is slow to protect the API rate limit,
+// while local git costs nothing and should react to a file you just touched.
+const DEFAULT_GIT_REFRESH_SECONDS = 30;
 const DEFAULT_YNAB_REFRESH_SECONDS = 300;
 
 function tickClock(): string {
@@ -119,6 +133,15 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
+  const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsageResult | null>(null);
+  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionsResult | null>(null);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({});
+  // Previous poll's snapshot, for edge-triggered alerting. A ref, not state:
+  // updating it must not itself cause a render, or the alert effect would
+  // re-run and compare a snapshot against itself.
+  const prevSnapshot = useRef<AlertSnapshot | null>(null);
+  const [gitRefreshSeconds, setGitRefreshSeconds] = useState(DEFAULT_GIT_REFRESH_SECONDS);
   const [processConfigs, setProcessConfigs] = useState<ProcessConfig[]>([]);
   // Mirrors NotesWidget's nav list so the command palette can offer pinned
   // notes. NotesWidget stays the owner and pushes changes up — same shape as
@@ -141,6 +164,18 @@ export default function App() {
   }, []);
   const loadGithub = useCallback(async () => {
     setGithub(await window.api.github.status());
+  }, []);
+  const loadGit = useCallback(async () => {
+    setGitStatus(await window.api.git.status());
+  }, []);
+  // One scan serves both, and the service memoizes per file — so the second
+  // call here is effectively free rather than a second pass over ~400MB.
+  const loadClaude = useCallback(async () => {
+    setClaudeUsage(await window.api.claude.usage());
+    // Grouped by project now, so a small cap mostly shows one dominant
+    // project's most recent work and starves quieter ones out of the list
+    // entirely — 40 gives every active project a real chance to appear.
+    setClaudeSessions(await window.api.claude.sessions(40));
   }, []);
   const loadProcessStatuses = useCallback(async () => {
     setProcessStatuses(await window.api.process.statusAll());
@@ -209,6 +244,8 @@ export default function App() {
       loadCalendar(),
       loadReader(readerPage, true),
       loadGithub(),
+      loadGit(),
+      loadClaude(),
       loadProcessStatuses(),
       loadYnab(),
       loadFinanceReviewLog(),
@@ -226,6 +263,8 @@ export default function App() {
     loadReader,
     readerPage,
     loadGithub,
+    loadGit,
+    loadClaude,
     loadProcessStatuses,
     loadYnab,
     loadFinanceReviewLog,
@@ -293,6 +332,8 @@ export default function App() {
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
+      setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
+      setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
       if (cfg.tabs && cfg.tabs.length > 0) setTabOrder(cfg.tabs);
@@ -308,6 +349,8 @@ export default function App() {
         window.api.links.list("fileLinks").then(setFileLinks),
         loadReader(0),
         loadGithub(),
+        loadGit(),
+        loadClaude(),
         loadProcessStatuses(),
         loadYnab(),
         loadFinanceReviewLog(),
@@ -340,6 +383,39 @@ export default function App() {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadGithub, githubRefreshSeconds]);
+
+  // ---- alerts + tray, derived from state the widgets already poll ----
+  // No new polling: this reacts to github/processStatuses/docker changing,
+  // each of which has its own interval elsewhere in this file.
+  useEffect(() => {
+    const next = buildSnapshot(github, processStatuses, docker);
+    for (const alert of diffAlerts(prevSnapshot.current, next, notificationSettings, processConfigs)) {
+      void window.api.notifications.show(alert);
+    }
+    prevSnapshot.current = next;
+    void window.api.tray.update(summarize(next));
+  }, [github, processStatuses, docker, notificationSettings, processConfigs]);
+
+  // ---- commands pushed from main (tray menu, notification clicks) ----
+  useEffect(() => {
+    return window.api.onCommand((command) => {
+      if (command.type === "refreshAll") void refreshAll();
+      else if (command.type === "openTab") setActiveTab(command.tab as TabId);
+      else if (command.type === "captured" && command.target === "dailyNote") {
+        // Capture appended to today's note in main; re-read it so the widget
+        // isn't holding a stale copy it would later autosave over the top of.
+        // Only when we're actually showing today — if the user has navigated
+        // to another date, there's nothing stale to correct.
+        if (!dailyDate) void loadDaily();
+      }
+    });
+  }, [refreshAll, dailyDate, loadDaily]);
+
+  // ---- Git refresh, reactive to Settings edits ----
+  useEffect(() => {
+    const id = setInterval(loadGit, gitRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadGit, gitRefreshSeconds]);
 
   // ---- YNAB refresh, reactive to Settings edits ----
   useEffect(() => {
@@ -448,6 +524,9 @@ export default function App() {
           <div className="slot slot-github">
             <GitHubWidget data={github} />
           </div>
+          <div className="slot slot-git">
+            <GitStatusWidget data={gitStatus} />
+          </div>
           <div className="slot slot-services">
             <DockerWidget data={docker} onRefresh={loadDocker} />
           </div>
@@ -530,6 +609,31 @@ export default function App() {
         </main>
       )}
 
+      {activeTab === "claude" && (
+        <main className="grid grid-claude">
+          <div className="slot slot-claude-usage">
+            <ClaudeUsageWidget data={claudeUsage} />
+          </div>
+          <div className="slot slot-claude-projects">
+            <ClaudeBreakdown
+              title="By project (30d)"
+              rows={claudeUsage?.byProject ?? []}
+              emptyLabel="No usage in the last 30 days."
+            />
+          </div>
+          <div className="slot slot-claude-models">
+            <ClaudeBreakdown
+              title="By model (30d)"
+              rows={claudeUsage?.byModel ?? []}
+              emptyLabel="No usage in the last 30 days."
+            />
+          </div>
+          <div className="slot slot-claude-sessions">
+            <ClaudeSessionsWidget data={claudeSessions} />
+          </div>
+        </main>
+      )}
+
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -543,6 +647,10 @@ export default function App() {
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
+        onGitRefreshSecondsChange={(seconds) =>
+          setGitRefreshSeconds(seconds ?? DEFAULT_GIT_REFRESH_SECONDS)
+        }
+        onNotificationSettingsChange={setNotificationSettings}
         onYnabRefreshSecondsChange={setYnabRefreshSeconds}
         onTodoistShowTimeTrackingChange={setShowTimeTracking}
       />

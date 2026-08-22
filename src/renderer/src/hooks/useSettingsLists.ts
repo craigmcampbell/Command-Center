@@ -4,7 +4,12 @@
 // SettingsPage, which owns the array state locally.
 
 import { useCallback } from "react";
-import type { GitHubRepoConfig, ProcessConfig, VaultConfig } from "../../../shared/types";
+import type {
+  GitHubRepoConfig,
+  GitHubRepoInput,
+  ProcessConfig,
+  VaultConfig,
+} from "../../../shared/types";
 
 export function useVaultSettingsList(onChange: (items: VaultConfig[]) => void) {
   const add = useCallback(
@@ -37,14 +42,14 @@ export function useVaultSettingsList(onChange: (items: VaultConfig[]) => void) {
 
 export function useGithubRepoSettingsList(onChange: (items: GitHubRepoConfig[]) => void) {
   const add = useCallback(
-    async (label: string, owner: string, repo: string, branch: string) => {
-      onChange(await window.api.settings.githubRepos.add(label, owner, repo, branch));
+    async (input: GitHubRepoInput) => {
+      onChange(await window.api.settings.githubRepos.add(input));
     },
     [onChange]
   );
   const update = useCallback(
-    async (id: number, label: string, owner: string, repo: string, branch: string) => {
-      onChange(await window.api.settings.githubRepos.update(id, label, owner, repo, branch));
+    async (id: number, input: GitHubRepoInput) => {
+      onChange(await window.api.settings.githubRepos.update(id, input));
     },
     [onChange]
   );

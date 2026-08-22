@@ -5,6 +5,10 @@ export interface GrimoireConfig {
   vaultPath: string;
   dailyLogDir: string;
   missionsDir: string;
+  // Vault-relative path to the template seeded into a daily note that doesn't
+  // exist yet, e.g. "_System/templates/sanctum/daily template.md". Empty or
+  // unset means a new note starts blank.
+  dailyTemplatePath?: string;
 }
 
 // A quick-launch entry — a SillyTavern instance, a local app, a Claude Code
@@ -26,14 +30,26 @@ export interface GoogleCalendarConfig {
   clientSecret: string;
 }
 
+// One tracked repository, remote and/or local. A row serves whichever roles
+// its fields fill in: owner+repo puts it in the GitHub widget (CI + PRs),
+// localPath puts it in the Git widget (working-tree status), both puts it in
+// both. That's why owner/repo are optional — a local-only scratch repo with
+// no GitHub counterpart is still worth watching for uncommitted work.
 export interface GitHubRepoConfig {
   id: number;
   label: string;
-  owner: string;
-  repo: string;
+  owner?: string;
+  repo?: string;
   branch: string;
+  localPath?: string;
   sortOrder: number;
 }
+
+// What the Settings form supplies on add/update. An object rather than
+// positional args (matching ProcessConfig's CRUD) because most of the fields
+// are optional now and a positional list of maybe-undefined strings is easy
+// to get subtly wrong at a call site.
+export type GitHubRepoInput = Omit<GitHubRepoConfig, "id" | "sortOrder">;
 
 // The non-array part of GitHub settings, editable as one scalar section in
 // Settings. `repos` is its own DB table/CRUD surface (see GitHubRepoConfig).
@@ -107,6 +123,10 @@ export interface AppConfig {
   googleCalendar: GoogleCalendarConfig;
   reader: { apiToken: string };
   github?: GitHubConfig;
+  git?: { refreshSeconds?: number };
+  notifications?: NotificationSettings;
+  backup?: BackupSettings;
+  capture?: CaptureSettings;
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
@@ -129,6 +149,203 @@ export interface DockerResult {
   containers: DockerContainer[];
 }
 
+// Persisted window geometry. Main-process only — deliberately absent from
+// AppConfig and the preload API, since the renderer has no business with it.
+export interface WindowState {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  // Distinct states on macOS: the green title-bar button enters *fullscreen*,
+  // while maximize is the option-click (and the usual meaning elsewhere).
+  maximized?: boolean;
+  fullscreen?: boolean;
+}
+
+// Token counts split the way Claude Code's transcripts record them. The two
+// cache-write buckets are separate because they're priced differently (5-minute
+// TTL is 1.25x the input rate, 1-hour is 2x), and the 1-hour bucket dominates
+// in practice — collapsing them would materially skew cost.
+export interface ClaudeTokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+}
+
+export interface ClaudeUsageWindow {
+  costUsd: number;
+  requests: number;
+  tokens: ClaudeTokenTotals;
+}
+
+// One row of a by-project or by-model breakdown. `unpriced` marks a model we
+// have no rate for: its tokens are still counted and shown, but its cost is
+// excluded rather than silently counted as $0.
+export interface ClaudeUsageBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+  requests: number;
+  tokens: ClaudeTokenTotals;
+  unpriced?: boolean;
+}
+
+export interface ClaudeUsageDay {
+  date: string;
+  costUsd: number;
+}
+
+export interface ClaudeUsageResult {
+  ok: boolean;
+  reason?: string;
+  // The signed-in plan, used only to express API-equivalent usage as a
+  // multiple of the subscription price. `monthlyUsd` is absent for a plan we
+  // don't have a price for — in which case no multiple is shown.
+  plan?: { label: string; monthlyUsd?: number };
+  today: ClaudeUsageWindow;
+  last7: ClaudeUsageWindow;
+  last30: ClaudeUsageWindow;
+  days: ClaudeUsageDay[];
+  byProject: ClaudeUsageBucket[];
+  byModel: ClaudeUsageBucket[];
+  unpricedModels: string[];
+  scanMs: number;
+}
+
+// A resumable Claude Code session. `id` is the transcript's filename, which is
+// exactly what `claude -r <id>` takes.
+export interface ClaudeSession {
+  id: string;
+  cwd: string;
+  projectLabel: string;
+  title?: string;
+  lastPrompt?: string;
+  updatedAt: number;
+  requests: number;
+  costUsd: number;
+}
+
+export interface ClaudeSessionsResult {
+  ok: boolean;
+  reason?: string;
+  sessions: ClaudeSession[];
+}
+
+export interface BackupFile {
+  path: string;
+  name: string;
+  size: number;
+  createdAt: number;
+}
+
+export interface BackupSettings {
+  enabled?: boolean;
+  keep?: number;
+}
+
+// `canceled` distinguishes "the user dismissed the save dialog" from a real
+// failure — the UI must not show an error for it.
+export interface ExportResult extends ActionResult {
+  canceled?: boolean;
+  path?: string;
+}
+
+// Where a quick-capture line goes. Todoist is deliberately not a target.
+export type CaptureTarget = "dailyNote" | "scratchpad";
+
+export interface CaptureSettings {
+  accelerator?: string;
+  lastTarget?: CaptureTarget;
+}
+
+// `registered` is globalShortcut.register()'s return value, kept because it
+// returns false (rather than throwing) when another app already owns the
+// combo — a silent no-op otherwise.
+export interface CaptureHotkeyStatus {
+  accelerator: string;
+  registered: boolean;
+}
+
+export type AlertKind = "ci" | "process" | "docker";
+
+// One thing worth interrupting the user about. Produced by the renderer's
+// pure transition detector (renderer/src/lib/alerts.ts) and handed to main to
+// become an OS notification. `key` is the stable identity of the *thing* that
+// changed (repo label / process id / container name), not of the event.
+export interface AppAlert {
+  kind: AlertKind;
+  key: string;
+  title: string;
+  body: string;
+  tab?: string;
+}
+
+// What the tray renders, pushed up from the renderer whenever the underlying
+// widget state changes. Counts, not lists — the tray shows a tally and the
+// window shows detail.
+export interface TraySummary {
+  ciFailures: number;
+  processesDown: number;
+  containersExited: number;
+}
+
+export interface NotificationSettings {
+  enabled?: boolean;
+  ciFailure?: boolean;
+  processCrash?: boolean;
+  dockerExit?: boolean;
+}
+
+// Whether the OS will actually display notifications. `supported` is
+// Electron's static check; `lastFailure` is set when a notification we
+// actually tried to show emitted `failed` — the difference between "this
+// platform can't" and "macOS refused this one".
+export interface NotificationHealth {
+  supported: boolean;
+  lastFailure?: string;
+}
+
+// The one main→renderer message shape. Everything else in this app is
+// renderer→main invoke; this exists because the tray and notification clicks
+// originate in main and need to drive the UI.
+export type AppCommand =
+  | { type: "refreshAll" }
+  | { type: "openTab"; tab: string }
+  // Quick capture wrote to `target` behind the UI's back; the owning widget
+  // must drop its stale buffer and reload rather than save over it.
+  | { type: "captured"; target: CaptureTarget };
+
+// Working-tree state for one configured repo with a localPath. Each row
+// carries its own `ok`/`reason` — a bad path or a directory that isn't a repo
+// shouldn't blank the whole widget, same per-item fail-soft shape the rest of
+// the services use.
+export interface GitRepoStatus {
+  id: number;
+  label: string;
+  path: string;
+  ok: boolean;
+  reason?: string;
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+  lastCommit?: { hash: string; subject: string; relative: string };
+}
+
+// `reason` here is only for a global failure (no git binary at all); a repo
+// that individually failed reports it on its own row instead.
+export interface GitStatusResult {
+  ok: boolean;
+  reason?: string;
+  repos: GitRepoStatus[];
+}
+
 export interface DailyNoteResult {
   ok: boolean;
   file: string;
@@ -138,6 +355,11 @@ export interface DailyNoteResult {
   prevDate: string | null;
   nextDate: string | null;
   obsidianUri: string;
+  // The rendered daily template for this date, when the note doesn't exist
+  // yet and one is configured. Deliberately NOT folded into `content`: the
+  // editor must stay empty until the note is really created, or a file that
+  // isn't there looks exactly like one that is.
+  templateContent?: string;
   // true when the only thing wrong is that this day's file doesn't exist yet
   // — the vault and daily-log folder are both fine. The widget treats that as
   // an empty, editable note (saveDailyNote creates the file on first write)
@@ -636,6 +858,9 @@ export interface CommandCenterApi {
   openUrl: (url: string) => Promise<boolean>;
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
+    usage: () => Promise<ClaudeUsageResult>;
+    sessions: (limit?: number) => Promise<ClaudeSessionsResult>;
+    resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   forklift: {
     open: (dirPath: string) => Promise<ActionResult>;
@@ -679,6 +904,29 @@ export interface CommandCenterApi {
   github: {
     status: () => Promise<GitHubStatusResult>;
   };
+  git: {
+    status: () => Promise<GitStatusResult>;
+  };
+  notifications: {
+    show: (alert: AppAlert) => Promise<void>;
+    health: () => Promise<NotificationHealth>;
+  };
+  tray: {
+    update: (summary: TraySummary) => Promise<void>;
+  };
+  backup: {
+    export: () => Promise<ExportResult>;
+    list: () => Promise<BackupFile[]>;
+    runNow: () => Promise<ActionResult>;
+  };
+  capture: {
+    submit: (target: CaptureTarget, text: string) => Promise<ActionResult>;
+    cancel: () => Promise<void>;
+    hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
+  };
+  // Returns an unsubscribe. The raw IpcRendererEvent is never passed across
+  // the bridge — only the payload.
+  onCommand: (cb: (command: AppCommand) => void) => () => void;
   ynab: {
     accounts: () => Promise<YnabAccountsResult>;
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
@@ -769,6 +1017,18 @@ export interface CommandCenterApi {
     github: {
       update: (values: GitHubScalarConfig) => Promise<GitHubScalarConfig>;
     };
+    git: {
+      update: (values: { refreshSeconds?: number }) => Promise<{ refreshSeconds?: number }>;
+    };
+    notifications: {
+      update: (values: NotificationSettings) => Promise<NotificationSettings>;
+    };
+    backup: {
+      update: (values: BackupSettings) => Promise<BackupSettings>;
+    };
+    capture: {
+      update: (values: CaptureSettings) => Promise<CaptureSettings>;
+    };
     ynab: {
       update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;
     };
@@ -781,14 +1041,8 @@ export interface CommandCenterApi {
     };
     githubRepos: {
       list: () => Promise<GitHubRepoConfig[]>;
-      add: (label: string, owner: string, repo: string, branch: string) => Promise<GitHubRepoConfig[]>;
-      update: (
-        id: number,
-        label: string,
-        owner: string,
-        repo: string,
-        branch: string
-      ) => Promise<GitHubRepoConfig[]>;
+      add: (repo: GitHubRepoInput) => Promise<GitHubRepoConfig[]>;
+      update: (id: number, repo: GitHubRepoInput) => Promise<GitHubRepoConfig[]>;
       remove: (id: number) => Promise<GitHubRepoConfig[]>;
       reorder: (orderedIds: number[]) => Promise<GitHubRepoConfig[]>;
     };

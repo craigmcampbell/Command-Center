@@ -84,7 +84,75 @@ Three walled-off parts — this separation is the security model, keep it intact
     slicing itself.
   - `services/github.ts` — GitHub REST API for latest Actions run + open PR count
     per configured repo, plus a cross-repo review-requested search, given the
-    current `github` scalar settings + `github_repos` table combined.
+    current `github` scalar settings + `github_repos` table combined. Skips rows
+    with no `owner`/`repo` (see `git.ts` below) so a local-only repo never
+    produces an API call.
+  - `services/git.ts` — local working-tree status (`git status --porcelain=v2
+    --branch` + a one-line `git log`) for every `github_repos` row that has a
+    `localPath`. The counterpart to `github.ts`: that one asks the API about CI
+    and PRs, this one answers "do I have uncommitted work, and am I behind?"
+    from disk, for free. Parses porcelain **v2** deliberately — v1 is ambiguous
+    around renames and spaces in paths. A file that's both staged and further
+    edited counts toward `staged` *and* `unstaged`; those are independent
+    counters, not an either/or. Fails soft per repo (`ok: false` + reason on the
+    row) so one bad path doesn't blank the widget. Note it does **not** copy
+    `docker.ts`'s PATH widening: that exists because Docker Desktop installs
+    outside launchd's bare PATH, whereas `git` is at `/usr/bin/git` and resolves
+    fine from a GUI-launched app.
+  - `services/ynab.ts` — YNAB REST API (api.ynab.com/v1): account balances,
+    unapproved transactions, this month's scheduled transactions, categories,
+    and the approve/clear/categorise/memo mutations behind the Finances tab.
+    Fails soft like the other API services.
+  - `services/bills.ts` / `services/cards.ts` — manually-tracked recurring bills
+    and credit cards for the Finances tab. Plain SQLite CRUD, same shape as
+    `links.ts`. Deliberately independent of YNAB's own scheduled transactions:
+    not everything recurring is set up as a YNAB schedule (a bill paid from an
+    external account, say), so this is a parallel list rather than a mirror.
+    `bills.ts` also carries the additive-`ALTER TABLE`-in-a-try/catch migration
+    pattern that `settings.ts`'s `local_path` column later copied.
+  - `services/timeTracking.ts` — cumulative time logged against Todoist tasks,
+    for client billing, plus the monthly report. A row is only written once time
+    is actually logged, so there's no shadow row per Todoist task.
+    `task_content`/`project_name` are **snapshotted per entry** rather than
+    looked up live, so a monthly report still reads correctly after the upstream
+    task is completed or deleted. Only one timer runs at a time — starting one
+    auto-stops whichever was running.
+  - `services/claudeUsage.ts` + `services/claudePricing.ts` — token and cost
+    accounting for Claude Code, read from the transcripts it already writes to
+    `~/.claude/projects`. See "Claude Code usage" below — the three correctness
+    constraints there are easy to break and produce plausible-looking numbers
+    when broken.
+  - `services/windowState.ts` — remembers the dashboard window's size, position
+    and maximized/fullscreen state in a `window` settings blob. Uses
+    `getNormalBounds()`, **not** `getBounds()`: while maximized or fullscreen the
+    latter returns the expanded rectangle, so persisting it would make
+    un-maximizing later snap to a screen-sized window instead of whatever the
+    user actually had. Saved bounds are checked against the current displays
+    before use — a window restored onto a since-disconnected monitor is
+    invisible and reads as a failed launch. Saves are debounced (`resize` fires
+    continuously through a drag and each save is a synchronous SQLite write),
+    with a flush in `before-quit` since close hides rather than destroys and
+    there's no close event to save on.
+  - `services/dailyTemplate.ts` — renders an Obsidian template into the content
+    for a daily note that doesn't exist yet. See "Daily note template" below.
+  - `services/backup.ts` — daily rotating backups + manual export of the SQLite
+    file. See "Backups" below; the `db.backup()`-not-`fs.copyFile` detail there
+    is the important part.
+  - `services/capture.ts` + `services/captureWindow.ts` — global-hotkey quick
+    capture. See "Quick capture" below.
+  - `services/notifications.ts` — OS notifications, given an already-decided
+    alert (transition detection happens in the renderer, where the polled state
+    lives — see "Notifications + tray" below). Exists mainly to make failure
+    *visible*: it reports `Notification.isSupported()` and captures the `failed`
+    event, so Settings can say macOS rejected a notification instead of the app
+    silently appearing to work.
+  - `services/tray.ts` — the menubar status item: a summary line, Show /
+    Refresh all / Quit, plus a count badge via `setTitle` only when something is
+    actually wrong. Its icon comes from `trayIcon.ts` (embedded base64 template
+    PNGs) rather than from disk — see that file for why. No `click` handler:
+    with a context menu attached, macOS opens the menu on left-click, and a
+    click handler on top of that made one click both open the menu and raise
+    the window.
   - `services/notes.ts` — browses/reads/writes markdown files directly in
     configured Obsidian vaults (`settings.ts`'s `vaults` table, looked up by label
     via `listVaultSettings()`) for the Notes tab. All paths are resolved and
@@ -152,22 +220,38 @@ UI event → `window.api.x()` (preload, typed) → `ipcRenderer.invoke("channel"
 
 ## Tabs
 
-The dashboard is split into tabs (`App.tsx`'s `activeTab` state, `TABS` array) so
-lesser-used widgets don't crowd the main view. All widget data still loads and
-polls in the background regardless of which tab is active — only the JSX rendered
-under `<main>` is tab-gated, state lives in `App.tsx` same as always.
+The dashboard is split into tabs so lesser-used widgets don't crowd the main
+view. All widget data still loads and polls in the background regardless of
+which tab is active — only the JSX rendered under `<main>` is tab-gated, state
+lives in `App.tsx` same as always.
 
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
-  Missions, Local Apps, Learning.
-- **Development** — Services (Docker), Claude Code, Processes (managed local
-  processes), GitHub (CI status + PRs).
+  Missions, Local Apps, Learning, File Links.
+- **Development** — GitHub (CI + PRs), Git (local working-tree status),
+  Services (Docker), Claude Code, Processes (managed local processes).
 - **Reader** — latest Readwise Reader documents, paginated.
+- **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
+  and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
+  transactions with inline category/memo editing.
+- **Claude** — Claude Code token/cost usage (today, 7d, 30d, with a per-day bar
+  strip), by-project and by-model breakdowns, and recent sessions with Resume.
+  See "Claude Code usage" below.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
   five-touch-point widget pattern.
 
-Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
-(grid-template-columns/areas), and a new `{activeTab === "..." && <main>...}` block.
+**Tab order and labels are DB-backed**, not hardcoded: they live in the `tabs`
+table (`services/settings.ts`), and `TabBar` supports drag-to-reorder plus
+double-click-to-rename via `settings:tabs:reorder` / `settings:tabs:rename`.
+The set of tabs is still fixed in code — those handlers only reorder and
+relabel existing rows, they never add or remove one.
+
+Adding a new tab therefore means: an entry in `DEFAULT_TABS` in **both**
+`App.tsx` and `services/settings.ts` (they're separate constants that must stay
+in sync — `ensureTabDefaults()` seeds any missing row every boot, so a tab
+added to only one of them silently won't appear), a new `.grid-<name>` CSS
+block (grid-template-columns/areas), and a new
+`{activeTab === "..." && <main>...}` block.
 
 ## Current widgets
 
@@ -180,8 +264,10 @@ launcher (SillyTavern, Open WebUI, OpenCode, etc.) · Learning launcher (courses
 links) · File Links launcher (opens a local folder in ForkLift) · Claude Code
 launcher (opens in Warp) · Reader (latest Readwise Reader documents, paginated 15
 at a time) · GitHub (per-repo latest CI run + open PR count, cross-repo
-review-requested PRs, auto-refresh on `github.refreshSeconds`) · Managed Processes
-(start/stop/tail arbitrary local tools, see below).
+review-requested PRs, auto-refresh on `github.refreshSeconds`) · Git (local
+working-tree status per configured repo path — branch, ahead/behind, staged/
+unstaged/untracked/conflict counts, last commit; click to open in ForkLift) ·
+Managed Processes (start/stop/tail arbitrary local tools, see below).
 
 Local Apps, Learning, and File Links all render via the generic
 `LinkLauncherWidget` (`components/LinkLauncherWidget.tsx`) — a SQLite-backed
@@ -347,13 +433,254 @@ shortcut, which the markdown editor now uses. Anything bound here is
 effectively taken away from every editor in the app, so keep that in mind
 before adding more.
 
+## Claude Code usage
+
+The **Claude** tab reads `~/.claude/projects/**/*.jsonl` — the transcripts
+Claude Code writes anyway — and reports tokens and estimated cost by day,
+project and model, plus a list of recent sessions with a Resume action.
+Entirely local: no API token, no network. Resume reuses `launcher.ts`'s
+`openInTerminal(cwd, "claude -r <id>")`; the session id is the transcript's
+filename.
+
+**Three things are load-bearing correctness, not optimizations.** Each one
+produces believable-but-wrong numbers if broken, which is why the verification
+below checks them by size rather than by eye:
+
+- **Dedupe on `(requestId, message.id)`.** Resuming or forking a session copies
+  earlier messages into the new transcript, so the same request appears in
+  several files — 46.7% of usage records here are duplicates. Skipping this
+  roughly **doubles** every figure ($340 → $688 on the same window).
+- **Walk recursively.** Subagent turns live one level deeper, in
+  `<project>/<session-id>/subagents/agent-*.jsonl` (`isSidechain: true`). They
+  are real spend; a one-level scan silently understates cost. Those files are
+  attributed to the parent session named by their directory and are never
+  listed as sessions of their own.
+- **Resolve rates from each message's own date.** `claudePricing.ts` carries
+  intro pricing with a cutoff; Sonnet 5's intro period covers essentially all
+  existing history, and pricing it at standard rates overstated a real month by
+  ~26%.
+
+Two further details worth not "simplifying":
+
+- **Cache creation is split by TTL** (`ephemeral_5m` / `ephemeral_1h`) because
+  they're priced differently — 1.25× vs 2× the input rate — and the 1h bucket
+  dominates. Cache *reads* are ~99% of all tokens, so the cache split is
+  basically the whole cost story.
+- **An unknown model is not free.** Anything without a rate keeps its tokens
+  counted and renders as `unpriced` with no cost, rather than contributing $0
+  and quietly deflating the total. `<synthetic>` records legitimately carry
+  zero tokens; that's not the same thing.
+
+Performance: transcripts here are ~390MB across 43 files, but a full scan takes
+well under two seconds because `line.includes('"usage"')` skips the enormous
+attachment lines before `JSON.parse` runs. That's why there's no worker process
+and no persistent cache. Files are append-only, so results memoize per file on
+`(size, mtimeMs)`; a refresh re-parses only what changed (~1.4s cold, ~270ms
+warm). `fs.promises.glob` is deliberately not used — it needs Node 22 and
+Electron 33 ships Node 20.
+
+**Tokens lead; dollars are a value figure, not spend.** This is a deliberate
+reframe, not a styling choice — leading with cost on a subscription implies a
+bill that never existed. Token volume is what's actually consumed, so it's the
+headline; the dollar figure is labelled *API-equivalent* and expressed as a
+multiple of the plan price ("$357 in 30 days — about 18× a $20/mo Pro plan"),
+which is the one genuinely useful thing it says to a subscriber. Don't promote
+cost back to the headline.
+
+Keep the dollar figure rather than dropping it, though: it's what weights Opus
+against Sonnet. Raw token counts invert the picture — Opus used *fewer* tokens
+than Sonnet last month but represents more value, because its input rate is 5×.
+
+The plan is detected from `~/.claude.json`'s `oauthAccount.organizationType`,
+and the price used is printed inline so a stale entry in `PLAN_PRICES` is
+visible rather than silently skewing the multiple. An unrecognised plan is
+named but gets no multiple.
+
+**There is no local record of quota remaining**, so this cannot show how much
+of a subscription is used up — checked: `rateLimits` appears in transcripts
+only inside a 429 error payload, after the fact. Don't imply otherwise in the
+UI.
+
+## Daily note template
+
+Settings → Grimoire takes a vault-relative `dailyTemplatePath`. When a daily
+note doesn't exist yet, `readDailyNote` returns the rendered template in
+`templateContent` — **separately from `content`, which stays empty**. The
+template is applied at the moment of creation, not previewed:
+
+- **Typing** — `DailyNoteWidget`'s first keystroke into a missing note swaps the
+  buffer for `template + "\n" + typed` and marks the note no longer missing, so
+  the header stops saying "Start typing to create …" and the save status
+  appears. A `seeded` ref keyed by date stops a second copy being prepended if
+  the editor is cleared and typed into again (`data.missing` stays true until a
+  reload).
+- **Quick capture** — `captureToDailyNote` uses `templateContent` as its base
+  when the note is missing, so the captured line lands beneath the template.
+
+The first version returned the template *as* `content`, which pre-filled the
+editor. Don't go back to that: a file that doesn't exist then looks exactly
+like one that does — complete with a "Saved" label — and reads as some other
+day's note. `showStatus={!creating}` keeps that label off an uncreated note.
+
+**Applied on read, not in `saveDailyNote`.** Writing it there would mean
+guessing whether the incoming content already contains the template — the
+ambiguity that produces duplicated headings.
+
+Seeding on the first keystroke depends on `MarkdownEditor`'s external-sync
+effect shifting the caret when the new value *ends with* the old one: content
+was prepended, so holding the caret at its absolute offset would drop it inside
+the template instead of after what was just typed.
+
+**Templater blocks are stripped, `{{date}}` placeholders are filled.** This is
+the opposite of `services/notes.ts`'s `createNote`, which copies templates raw
+and lets Templater evaluate them — and both are correct for their case.
+Templater only processes files *it* creates, so a note written by the dashboard
+would keep a literal `<%* … %>` code block forever. The cost, accepted
+knowingly: anything the Templater JavaScript would have generated is absent.
+
+Placeholders resolve against **that note's own date**, not today, so an older
+empty day still renders coherently.
+
+Two details in `dailyTemplate.ts` worth not "fixing":
+
+- **`ww` is the ISO week** (Monday-start, zero-padded), verified against this
+  vault's own convention: `5 Logs/Weekly Notes/2026-W24.md` covers June 8-12
+  2026, which is exactly ISO week 24. Locale-based numbering drifts from that
+  at Sunday boundaries and would generate links to week notes that don't exist.
+- **`YYYY` is the calendar year, not the ISO week-year** (moment calls the
+  latter `GGGG`). So 2027-01-01 renders as `2027-W53` even though that date is
+  ISO week 53 of *2026*. It looks wrong; it's what Obsidian would produce for
+  the same template, which is the point.
+
+## Backups
+
+Everything the app owns is in one SQLite file — including every API token, in
+plaintext. `services/backup.ts` writes
+`userData/backups/command-center-YYYY-MM-DD.db` on launch, keeps the newest
+`backup.keep` (default 7), and Settings → Data offers a manual export via a
+save dialog.
+
+**Use `db.backup()`, never `fs.copyFile`.** The database runs in WAL mode
+(`db.ts:17`), so recent commits can still live in the `-wal` sidecar; a plain
+copy of the `.db` produces a backup that looks valid and silently omits them.
+`db.backup()` is SQLite's online backup API and accounts for both the WAL and
+concurrent writes.
+
+Two details that are easy to lose:
+
+- **One backup per calendar day**, guarded by the filename itself rather than
+  stored state — so ten launches in a day produce one file, and the guard
+  survives restarts for free. The stamp is local-time, not `toISOString()`,
+  which would file an evening backup under tomorrow.
+- **The copy is consolidated to a single file** afterwards
+  (`wal_checkpoint(TRUNCATE)` + `journal_mode = DELETE`). Without that step the
+  backup inherits WAL mode and drags `-wal`/`-shm` sidecars along, so an export
+  hands the user three files when they'll only think to copy one.
+
+The export card states that the file contains tokens in plaintext. Keep that
+warning — it's the difference between an informed export and a leak.
+
+## Quick capture
+
+A global hotkey (default `Cmd+Ctrl+Alt+Shift+Q`, the hyperkey combo) opens a
+small frameless panel from any app, appending a timestamped line to today's
+daily note (default) or the scratchpad. `services/capture.ts` composes the
+existing grimoire/scratchpad services; `services/captureWindow.ts` owns the
+window and the shortcut. The panel is a second renderer entry
+(`src/renderer/capture.html`, wired in `electron.vite.config.ts`).
+
+Three macOS specifics, each found by it going wrong:
+
+- **`type: "panel"` is required, and is not sufficient on its own.** As a plain
+  window the panel shows on top but the previously-active app keeps keyboard
+  focus, so everything typed goes *into that app* — the panel shows a caret and
+  silently drops input. As an NSPanel it can take key focus without activating
+  the app, but macOS still won't give it focus unless the app becomes active:
+  hence `app.focus({ steal: true })` in `toggleCaptureWindow`. Electron reports
+  `isFocused() === true` throughout, so this failure is invisible from inside.
+  Hidden windows stay hidden through the activation, so summoning the panel
+  does not drag the dashboard forward.
+- **`globalShortcut.register()` is not a validator on macOS.** It returns
+  `true` for a malformed string like `"NotAReal+Key+Q"` and for combos another
+  app already owns (verified with `Cmd+Space`, which Spotlight holds). So
+  `shared/accelerator.ts` validates the string itself — that catches a typo,
+  the failure a user typing into the field will actually hit. A genuine
+  conflict with another app is **not detectable**; the Settings copy says so
+  rather than implying a check exists. Don't "improve" this by trusting the
+  return value.
+- **The panel hides on blur and clears its buffer**, so a half-typed thought
+  never lingers invisibly.
+
+**Capture writes can clobber the UI's buffer.** Both targets are also edited by
+autosaving widgets holding the *entire* document in renderer memory, so an
+append behind their back would be overwritten by their next save. Main
+broadcasts `{ type: "captured", target }` over `app:command`; the owning widget
+calls `autosave.cancel(...)` and reloads. `cancel` (not `flush`) is the right
+one — flushing would write the pre-capture buffer over the captured line.
+
+## Notifications + tray
+
+Desktop notifications for three transitions — CI turning red, a managed process
+crashing, a Docker container stopping — plus a menubar tray that always shows
+current status. Toggled per-trigger in Settings → General → Notifications.
+
+**Detection lives in the renderer, in `renderer/src/lib/alerts.ts`.** That's
+where the polled state already is, so no new polling was added: an effect in
+`App.tsx` keyed on `[github, processStatuses, docker]` diffs the current
+snapshot against the previous one. The module is pure (no React, no IPC, no
+clock) so the rules can be tested directly. Main's only job is turning a
+decided alert into an OS notification.
+
+Two rules that matter, and are easy to regress:
+
+- **Edge-triggered, never level-triggered.** Alerts fire when something
+  *changes into* a bad state. Level-triggering would re-notify about the same
+  red build every poll — Docker's is every 15s.
+- **The first poll seeds the baseline and fires nothing**, so launching with CI
+  already red doesn't produce a burst about things you already knew. A key
+  absent from the previous snapshot is likewise skipped, so a newly-configured
+  repo that's already failing stays quiet.
+
+A deliberate process stop needs no special-casing: `services/processes.ts`
+records `null` when a child dies by signal, and a crash is `exitCode` non-null
+and non-zero — so SIGTERM stops can't reach the crash rule.
+
+**Close hides the window instead of destroying it** (`main/index.ts`'s `close`
+handler). Every poller lives in the renderer, so a destroyed window would mean
+no polling, no notifications, and a tray frozen at its last value. `quitting`
+distinguishes a real quit, which falls through to the existing `before-quit` →
+`stopAllProcesses()` → `app.exit()` path.
+
+**`app:command` is the only main→renderer channel** in the app; everything else
+is renderer→main `invoke`. It exists because the tray menu and notification
+clicks originate in main. The preload exposes a single subscription returning
+an unsubscribe — the raw `IpcRendererEvent` never crosses the bridge, since it
+carries `sender`.
+
+### macOS gotchas (all found the hard way)
+
+- **A menu bar manager can swallow the tray icon entirely.** This machine runs
+  [Ice](https://github.com/jordanbaird/Ice), which hides new status items into
+  a collapsed section by default (`AutoRehide`), re-hiding after 15s. `new
+  Tray()` succeeds, no error is raised, and nothing is visible. If the icon
+  seems missing, expand the hidden section before suspecting the code — this is
+  the most likely explanation for a "the tray doesn't work" report.
+- **Notifications need a LaunchServices launch.** Running the binary directly
+  (`Contents/MacOS/Command Center`) makes `show()` silently do nothing — no
+  banner and no `failed` event. Launch with `open path/to/Command Center.app`.
+  This bites when testing from a terminal.
+- **Test notifications against the packaged app, not `npm start`.** Dev runs
+  `node_modules`' Electron, identity `com.github.Electron`, so notifications
+  appear under the name "Electron" and register separately. Only the packaged,
+  ad-hoc-signed bundle posts as Command Center (see the packaging note below).
+
 ## Settings
 
 The gear icon in the header (`.refresh-control`, next to Refresh) opens
 `components/SettingsPage.tsx` — a full-screen overlay (same scrim+panel visual
 language as `CommandPalette`/`NoteBrowserModal`, closes via scrim-click/Escape/X)
-with a left section-nav (General, Grimoire, Integrations, Vaults, GitHub Repos,
-Processes) and a scrollable content pane. It's app-wide config management, not a
+with a left section-nav (General, Grimoire, Integrations, Vaults, Repositories,
+Processes, Data) and a scrollable content pane. It's app-wide config management, not a
 per-tab widget, so it skips the five-touch-point pattern — its data model is
 `services/settings.ts` end to end (see Architecture above), exposed through a
 `window.api.settings.*` namespace mirroring the `links`/`habits` CRUD shape.
@@ -427,8 +754,14 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   for one-time consent and caches tokens after that.
 - **GitHub widget setup**: put a personal access token (repo + read:org scope) and your
   review username into Settings → Integrations → GitHub, and list repos to track under
-  Settings → GitHub Repos. Without a token the widget fails soft with "No GitHub token
+  Settings → Repositories. Without a token the widget fails soft with "No GitHub token
   configured".
+- **Git widget setup**: give a row under Settings → Repositories a **local path**. That
+  section backs both widgets: `owner`/`repo` put a row in the GitHub widget, a local
+  path puts it in the Git widget, and either alone is valid — so a local-only scratch
+  repo with no GitHub counterpart is fine, as is a GitHub repo you haven't cloned.
+  Clicking a row opens it in ForkLift. Its poll interval is Settings → General → Git
+  (default 30s), deliberately separate from GitHub's 300s: local git costs no API quota.
 - **Notes tab setup**: add vault roots to browse under Settings → Vaults (a label +
   the vault's root folder path, each). Without any configured, the nav shows "No
   vaults configured"; with none yet pinned for a given vault, its group still shows
@@ -440,8 +773,29 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   the widget shows "No processes configured". Prefer an explicit args list over a
   shell string where possible (matches `docker.ts`'s `execFile`-over-`exec`
   preference elsewhere in this codebase).
-- **Packaged app is unsigned** (no Apple Developer cert configured). First launch will
-  be blocked by Gatekeeper as "unidentified developer" — right-click the app → Open once
-  to bypass, or `xattr -cr "Command Center.app"`. All settings live in the packaged
+- **Packaged app is ad-hoc signed, not Gatekeeper-trusted** (no Apple Developer cert
+  configured). First launch is still blocked as "unidentified developer" — right-click
+  the app → Open once to bypass, or `xattr -cr "Command Center.app"`.
+  `electron-builder.yml` sets `mac.identity: "-"` deliberately: leaving it unset means
+  "auto-discover a certificate", which finds none and **skips signing entirely**,
+  shipping the bundle with the linker's own signature whose identifier is the literal
+  string `Electron` and which doesn't cover Info.plist. macOS then treats the app's
+  identity as generic Electron — shared with dev-mode Electron and every other ad-hoc
+  Electron app on the machine — which breaks notification permissions. (Electron 42+
+  makes that fatal rather than flaky: macOS notifications moved to `UNNotification`,
+  which refuses to display for an unsigned app.) `hardenedRuntime: false` accompanies
+  it, since hardened runtime enforces library validation that an ad-hoc bundle fails at
+  launch without a `disable-library-validation` entitlement.
+
+  Signing is electron-builder's job, **not** the `package` script's — don't add a
+  manual `codesign` step. electron-builder signs the bundle inside-out (every helper,
+  framework, and `.dylib` in dependency order); a post-hoc `codesign --force --deep`
+  would overwrite that with a blunter signature, and Apple treats `--deep` as a
+  repair tool rather than a build step. What the script *does* add is
+  `npm run verify:signing`, chained onto `package`, because both regressions here are
+  silent: removing `mac.identity` makes electron-builder skip signing with only a
+  warning, and on a non-macOS host it skips unconditionally. The check asserts the
+  Identifier is `com.craig.command-center` and exits non-zero otherwise. Its path is
+  hardcoded to `dist/mac-arm64/` — update it if you ever build universal or x64. All settings live in the packaged
   app's SQLite DB at `~/Library/Application Support/Command Center/command-center.db`,
   editable via the Settings page — not a file to hand-edit.

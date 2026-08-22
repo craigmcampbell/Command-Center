@@ -95,7 +95,17 @@ export default function MarkdownEditor({
     // selection at position 0, so any content arriving from outside (a parent
     // re-render, a note reloaded from disk) would silently jump the caret to
     // the top of the note mid-edit. Clamped, since the new doc may be shorter.
-    const head = Math.min(view.state.selection.main.head, value.length);
+    //
+    // Special case: when the new value *ends with* the whole old one, content
+    // was prepended (the daily note applying its template around what you just
+    // typed). Holding the caret at its absolute offset would drop it into the
+    // inserted text; shifting it by the inserted length keeps it against the
+    // same character it was already on.
+    const prepended = current.length > 0 && value.endsWith(current);
+    const previousHead = view.state.selection.main.head;
+    const head = prepended
+      ? previousHead + (value.length - current.length)
+      : Math.min(previousHead, value.length);
     view.dispatch({
       changes: { from: 0, to: current.length, insert: value },
       selection: EditorSelection.cursor(head),

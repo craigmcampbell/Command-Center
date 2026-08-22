@@ -4,14 +4,23 @@
 // IPC handler defined in the main process.
 
 import { contextBridge, ipcRenderer } from "electron";
+import type { IpcRendererEvent } from "electron";
 import type {
+  AppAlert,
+  AppCommand,
+  BackupSettings,
+  CaptureSettings,
+  CaptureTarget,
   CommandCenterApi,
   GoogleCalendarConfig,
   GrimoireConfig,
   GitHubScalarConfig,
+  GitHubRepoInput,
   HabitFrequencyType,
   LinkListKind,
+  NotificationSettings,
   ProcessConfig,
+  TraySummary,
   YnabScalarConfig,
   YnabNewTransactionInput,
 } from "../shared/types";
@@ -66,6 +75,10 @@ const api: CommandCenterApi = {
 
   claude: {
     launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
+    usage: () => ipcRenderer.invoke("claude:usage"),
+    sessions: (limit?: number) => ipcRenderer.invoke("claude:sessions", limit),
+    resume: (sessionId: string, cwd: string) =>
+      ipcRenderer.invoke("claude:resume", sessionId, cwd),
   },
 
   forklift: {
@@ -122,6 +135,46 @@ const api: CommandCenterApi = {
 
   github: {
     status: () => ipcRenderer.invoke("github:status"),
+  },
+
+  git: {
+    status: () => ipcRenderer.invoke("git:status"),
+  },
+
+  notifications: {
+    show: (alert: AppAlert) => ipcRenderer.invoke("notifications:show", alert),
+    health: () => ipcRenderer.invoke("notifications:health"),
+  },
+
+  tray: {
+    update: (summary: TraySummary) => ipcRenderer.invoke("tray:update", summary),
+  },
+
+  backup: {
+    export: () => ipcRenderer.invoke("backup:export"),
+    list: () => ipcRenderer.invoke("backup:list"),
+    runNow: () => ipcRenderer.invoke("backup:runNow"),
+  },
+
+  capture: {
+    submit: (target: CaptureTarget, text: string) =>
+      ipcRenderer.invoke("capture:submit", target, text),
+    cancel: () => ipcRenderer.invoke("capture:cancel"),
+    hotkeyStatus: () => ipcRenderer.invoke("capture:hotkeyStatus"),
+  },
+
+  // The only main→renderer channel in the app. Deliberately a narrow
+  // subscription rather than exposing ipcRenderer: the raw IpcRendererEvent
+  // never crosses the bridge (it carries `sender`, which would hand the
+  // sandboxed renderer a way to reach back into main), and the returned
+  // unsubscribe keeps it safe to call from a useEffect without leaking a
+  // listener per remount.
+  onCommand: (cb: (command: AppCommand) => void) => {
+    const handler = (_event: IpcRendererEvent, command: AppCommand) => cb(command);
+    ipcRenderer.on("app:command", handler);
+    return () => {
+      ipcRenderer.removeListener("app:command", handler);
+    };
   },
 
   ynab: {
@@ -223,6 +276,20 @@ const api: CommandCenterApi = {
     github: {
       update: (values: GitHubScalarConfig) => ipcRenderer.invoke("settings:github:update", values),
     },
+    git: {
+      update: (values: { refreshSeconds?: number }) =>
+        ipcRenderer.invoke("settings:git:update", values),
+    },
+    notifications: {
+      update: (values: NotificationSettings) =>
+        ipcRenderer.invoke("settings:notifications:update", values),
+    },
+    backup: {
+      update: (values: BackupSettings) => ipcRenderer.invoke("settings:backup:update", values),
+    },
+    capture: {
+      update: (values: CaptureSettings) => ipcRenderer.invoke("settings:capture:update", values),
+    },
     ynab: {
       update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),
     },
@@ -236,10 +303,9 @@ const api: CommandCenterApi = {
     },
     githubRepos: {
       list: () => ipcRenderer.invoke("settings:githubRepos:list"),
-      add: (label: string, owner: string, repo: string, branch: string) =>
-        ipcRenderer.invoke("settings:githubRepos:add", label, owner, repo, branch),
-      update: (id: number, label: string, owner: string, repo: string, branch: string) =>
-        ipcRenderer.invoke("settings:githubRepos:update", id, label, owner, repo, branch),
+      add: (repo: GitHubRepoInput) => ipcRenderer.invoke("settings:githubRepos:add", repo),
+      update: (id: number, repo: GitHubRepoInput) =>
+        ipcRenderer.invoke("settings:githubRepos:update", id, repo),
       remove: (id: number) => ipcRenderer.invoke("settings:githubRepos:remove", id),
       reorder: (orderedIds: number[]) =>
         ipcRenderer.invoke("settings:githubRepos:reorder", orderedIds),

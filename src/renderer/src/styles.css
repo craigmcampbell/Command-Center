@@ -242,19 +242,23 @@ body {
   align-items: stretch;
 }
 
+/* Six columns rather than three: the tasks/daily-note row wants halves and the
+   missions/apps/learning row wants thirds, and 6 is the smallest track count
+   that expresses both. */
 .grid-home {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-template-areas:
-    "calendar calendar calendar"
-    "todoist todoist daily"
-    "missions apps learning"
-    "filelinks filelinks filelinks";
+    "calendar calendar calendar calendar calendar calendar"
+    "todoist todoist todoist daily daily daily"
+    "missions missions apps apps learning learning"
+    "filelinks filelinks filelinks filelinks filelinks filelinks";
 }
 
 .grid-dev {
   grid-template-columns: 2fr 1fr;
   grid-template-areas:
     "github github"
+    "git git"
     "services claude"
     "processes processes";
 }
@@ -323,6 +327,9 @@ body {
 .slot-processes {
   grid-area: processes;
 }
+.slot-git {
+  grid-area: git;
+}
 .slot-reader {
   grid-area: reader;
 }
@@ -372,6 +379,7 @@ body {
     grid-template-columns: 1fr;
     grid-template-areas:
       "github"
+      "git"
       "services"
       "claude"
       "processes";
@@ -1866,6 +1874,10 @@ body {
   background: var(--alert);
   box-shadow: 0 0 8px var(--alert);
 }
+.row .dot.warn {
+  background: var(--pending);
+  box-shadow: 0 0 8px var(--pending);
+}
 .row .name {
   font-family: var(--mono);
   color: var(--ink);
@@ -3190,6 +3202,25 @@ body {
   font-size: 12px;
   color: var(--ink-dim);
 }
+/* Per-trigger rows sit under their master toggle; they dim with it so the
+   disabled state reads as "off because the parent is off". */
+.settings-checkbox-nested {
+  margin-left: 18px;
+  margin-top: 6px;
+}
+.settings-checkbox-nested:has(input:disabled) {
+  opacity: 0.45;
+}
+.settings-card-warning {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--pending) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
 
 /* Vaults / GitHub Repos / Processes rows — same shape as .link-row but
    fields vary per section, so the row's main content is free-form. */
@@ -3743,4 +3774,352 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
+}
+
+/* ---- Git widget (Development tab) ---- */
+
+.git-row {
+  cursor: pointer;
+}
+.git-row:hover {
+  background: var(--panel-hover, rgba(255, 255, 255, 0.03));
+}
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.git-ab {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+/* Counts are deliberately colorless except conflicts — four tinted badges on
+   one row reads as an alarm, and most dirty repos are just work in progress. */
+.git-count {
+  flex-shrink: 0;
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: center;
+  color: var(--ink-dim);
+}
+.git-count.git-staged {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 40%, transparent);
+}
+.git-count.git-conflicted {
+  color: var(--alert);
+  border-color: color-mix(in srgb, var(--alert) 45%, transparent);
+}
+.git-last {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+/* ---- Quick capture panel (its own frameless window) ---- */
+
+/* The window is transparent so the panel can have rounded corners; the body
+   must not paint a background or the corners come back as square. */
+.capture-body {
+  background: transparent;
+  overflow: hidden;
+  /* The whole panel is draggable except the controls, so it can be nudged
+     out of the way without a title bar. */
+  -webkit-app-region: drag;
+}
+.capture-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.capture-input {
+  -webkit-app-region: no-drag;
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.capture-input::placeholder {
+  color: var(--ink-dim);
+}
+.capture-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.capture-targets {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+.capture-target {
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.capture-target.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--ink);
+}
+.capture-hint,
+.capture-error {
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.capture-error {
+  color: var(--alert);
+}
+
+/* ---- Settings → Data: backup list ---- */
+
+.settings-backup-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--panel-edge-soft);
+}
+.settings-backup-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.settings-backup-size {
+  flex-shrink: 0;
+}
+.settings-field-error {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--alert);
+}
+
+/* ---- Claude tab ---- */
+
+.grid-claude {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "claude-usage claude-usage"
+    "claude-projects claude-models"
+    "claude-sessions claude-sessions";
+}
+.slot-claude-usage {
+  grid-area: claude-usage;
+}
+.slot-claude-projects {
+  grid-area: claude-projects;
+}
+.slot-claude-models {
+  grid-area: claude-models;
+}
+.slot-claude-sessions {
+  grid-area: claude-sessions;
+}
+
+.claude-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.claude-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge-soft);
+  border-radius: 9px;
+}
+.claude-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.claude-stat-value {
+  font-family: var(--mono);
+  font-size: 22px;
+  color: var(--ink);
+}
+.claude-stat-sub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+
+/* One bar per day. Bars are stretched to fill, so the shape reads as a
+   trend even though the underlying values span three orders of magnitude. */
+.claude-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 56px;
+  padding: 0 2px;
+  margin-bottom: 10px;
+}
+.claude-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  background: var(--panel-edge-soft);
+}
+.claude-bar.has-value {
+  background: var(--accent);
+}
+
+.claude-tokenline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.claude-disclaimer {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.claude-scan {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.claude-breakdown-row .claude-cost,
+.claude-breakdown-row .status {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.claude-breakdown-row .claude-cost {
+  min-width: 62px;
+  text-align: right;
+  color: var(--ink);
+}
+.claude-breakdown-row .status {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+.claude-unpriced {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--pending);
+}
+
+.claude-session-row {
+  align-items: center;
+  gap: 12px;
+}
+.claude-session-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.claude-session-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.claude-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.claude-resume:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--ink);
+}
+.claude-resume:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.claude-value {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.claude-value strong {
+  color: var(--ink);
+  font-family: var(--mono);
+}
+
+/* Recent sessions, grouped by project — same visual language as
+   .todoist-group-title, reused rather than reinvented. */
+.claude-session-group + .claude-session-group {
+  margin-top: 4px;
+}
+.claude-session-group-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-top: 10px;
+  margin-bottom: 2px;
+  border-top: 1px solid var(--panel-edge-soft);
+}
+.claude-session-group:first-child .claude-session-group-title {
+  padding-top: 0;
+  border-top: none;
 }
