@@ -74,6 +74,7 @@ import { destroyTray, initTray, updateTray } from "./services/tray";
 import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
 import { capture } from "./services/capture";
 import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
+import { getOpenRouterUsage } from "./services/openrouter";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
 import {
   captureHotkeyStatus,
@@ -154,6 +155,8 @@ import {
   getYnabSettings,
   updateYnabSettings,
   toggleYnabAccountHidden,
+  getOpenRouterSettings,
+  updateOpenRouterSettings,
   listVaultSettings,
   addVault,
   updateVault,
@@ -191,6 +194,8 @@ import type {
   ProcessConfig,
   YnabScalarConfig,
   YnabNewTransactionInput,
+  OpenRouterScalarConfig,
+  OpenRouterPeriod,
 } from "../shared/types";
 
 initDatabase();
@@ -444,6 +449,12 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 // fields support (owner+repo → GitHub, localPath → here).
 ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
 
+// OpenRouter: usage by model + by API key name for the selected period, plus
+// remaining credit balance.
+ipcMain.handle("openrouter:usage", (_evt, period: OpenRouterPeriod) =>
+  getOpenRouterUsage(getOpenRouterSettings(), period)
+);
+
 // Transition detection happens in the renderer (that's where the polled state
 // lives); main's job is only to turn a decided alert into an OS notification.
 ipcMain.handle("notifications:show", (_evt, alert: AppAlert) => {
@@ -687,6 +698,9 @@ ipcMain.handle("settings:github:update", (_evt, values: GitHubScalarConfig) =>
 );
 ipcMain.handle("settings:ynab:update", (_evt, values: YnabScalarConfig) =>
   updateYnabSettings(values)
+);
+ipcMain.handle("settings:openrouter:update", (_evt, values: OpenRouterScalarConfig) =>
+  updateOpenRouterSettings(values)
 );
 
 ipcMain.handle("settings:vaults:list", () => listVaultSettings());
