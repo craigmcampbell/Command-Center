@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DailyNoteResult } from "../../../shared/types";
 import { useAutosave } from "../hooks/useAutosave";
 import MarkdownPane, { MarkdownPaneToolbar } from "./MarkdownPane";
@@ -26,11 +26,47 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
     window.api.grimoire.saveDailyNote(date, content)
   );
 
+  // Dates whose template has already been applied this session. Without this,
+  // clearing the editor back to empty and typing again would prepend a second
+  // copy of the template — `data.missing` can still be true at that point,
+  // since it only refreshes on a reload.
+  const seeded = useRef(new Set<string>());
+
   function handleContentChange(text: string) {
     if (!data) return;
-    onChange({ ...data, content: text });
-    autosave.schedule(data.date, text);
+
+    // First keystroke into a note that doesn't exist yet: this IS the moment
+    // of creation, so the template gets applied now, with what was just typed
+    // appended after it. Nothing is shown before this point — an empty editor
+    // is the honest representation of a file that isn't there.
+    let next = text;
+    if (data.missing && data.templateContent && !seeded.current.has(data.date)) {
+      seeded.current.add(data.date);
+      next = `${data.templateContent.replace(/\s+$/, "")}\n${text}`;
+    }
+
+    // Typing is what creates the file (the queued save writes it moments from
+    // now), so stop reporting the note as missing — otherwise the header keeps
+    // saying "Start typing to create …" at someone who is already typing, and
+    // the save status stays hidden so they never see it persist.
+    const created = data.missing
+      ? { ok: true, missing: false, reason: undefined }
+      : null;
+
+    onChange({ ...data, ...created, content: next });
+    autosave.schedule(data.date, next);
   }
+
+  // Quick capture appends to today's note from the main process. App.tsx
+  // re-reads the file; this drops any queued save first, because flushing it
+  // afterwards would write our pre-capture buffer over the captured line.
+  // The cancel is synchronous and the refetch is not, so ordering holds.
+  useEffect(() => {
+    return window.api.onCommand((command) => {
+      if (command.type !== "captured" || command.target !== "dailyNote") return;
+      if (data) autosave.cancel(data.date);
+    });
+  }, [autosave, data]);
 
   // A note that doesn't exist yet is editable anyway: saveDailyNote writes
   // unconditionally, so the first keystroke creates the file. Nothing here
@@ -51,6 +87,10 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
           mode={mode}
           onModeChange={setMode}
           saving={autosave.savingKey !== null}
+          // "Saved" beside a note that doesn't exist yet is a lie, and it's
+          // part of what made an empty day look like a real one. The
+          // "Start typing to create …" hint below says what's true instead.
+          showStatus={!creating}
           value={data.content}
           className="daily-note-toolbar"
         >

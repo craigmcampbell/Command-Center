@@ -4,7 +4,8 @@
 // it has to ask the main process to do those things. That separation is what
 // keeps an Electron app safe.
 
-import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
@@ -70,6 +71,16 @@ import { getGitHubStatus } from "./services/github";
 import { getGitStatuses } from "./services/git";
 import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
+import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
+import { capture } from "./services/capture";
+import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
+import {
+  captureHotkeyStatus,
+  destroyCaptureWindow,
+  hideCaptureWindow,
+  initCaptureWindow,
+  registerCaptureHotkey,
+} from "./services/captureWindow";
 import {
   getAccounts as getYnabAccounts,
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
@@ -134,6 +145,11 @@ import {
   getGitSettings,
   updateGitSettings,
   updateNotificationSettings,
+  getBackupSettings,
+  updateBackupSettings,
+  getCaptureSettings,
+  updateCaptureSettings,
+  DEFAULT_CAPTURE_ACCELERATOR,
   getYnabSettings,
   updateYnabSettings,
   toggleYnabAccountHidden,
@@ -158,8 +174,13 @@ import {
 import type {
   GoogleCalendarConfig,
   GrimoireConfig,
+  ActionResult,
   AppAlert,
   AppCommand,
+  BackupSettings,
+  CaptureSettings,
+  CaptureTarget,
+  ExportResult,
   GitHubScalarConfig,
   GitHubRepoInput,
   HabitFrequencyType,
@@ -231,9 +252,9 @@ function sendCommand(command: AppCommand): void {
 
 function createWindow(): void {
   const icon = nativeImage.createFromPath(appIconPath());
+  const { maximized, fullscreen, ...bounds } = restoreBounds();
   const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...bounds,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#12100e",
@@ -261,6 +282,11 @@ function createWindow(): void {
   }
 
   mainWindow = win;
+  // Fullscreen wins if both are somehow set — it's the more specific state,
+  // and maximizing into a fullscreen window would just fight itself.
+  if (fullscreen) win.setFullScreen(true);
+  else if (maximized) win.maximize();
+  trackWindow(win);
 
   // Close hides rather than destroys. Every poller in this app lives in the
   // renderer (App.tsx), so destroying the window would stop all polling —
@@ -422,6 +448,36 @@ ipcMain.handle("notifications:show", (_evt, alert: AppAlert) => {
 ipcMain.handle("notifications:health", () => getNotificationHealth());
 
 ipcMain.handle("tray:update", (_evt, summary: TraySummary) => updateTray(summary));
+
+ipcMain.handle("backup:export", async (): Promise<ExportResult> => {
+  const result = await dialog.showSaveDialog({
+    title: "Export database",
+    defaultPath: defaultExportName(),
+    filters: [{ name: "SQLite database", extensions: ["db"] }],
+  });
+  // A dismissed dialog is not a failure — the UI must stay silent for it.
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  const written = await exportDatabase(result.filePath);
+  return written.ok ? { ok: true, path: result.filePath } : written;
+});
+ipcMain.handle("backup:list", () => listBackups());
+ipcMain.handle("backup:runNow", async (): Promise<ActionResult> => {
+  const dest = path.join(backupsDir(), `manual-${Date.now()}.db`);
+  fs.mkdirSync(backupsDir(), { recursive: true });
+  return exportDatabase(dest);
+});
+
+ipcMain.handle("capture:submit", (_evt, target: CaptureTarget, text: string) => {
+  const result = capture(target, text);
+  // Both targets are also edited by autosaving widgets holding the whole
+  // buffer in memory; tell the renderer to drop its stale copy, or its next
+  // save will overwrite what we just appended.
+  if (result.ok) sendCommand({ type: "captured", target });
+  return result;
+});
+ipcMain.handle("capture:cancel", () => hideCaptureWindow());
+ipcMain.handle("capture:hotkeyStatus", () => captureHotkeyStatus());
 
 ipcMain.handle("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
@@ -591,6 +647,17 @@ ipcMain.handle("settings:git:update", (_evt, values: { refreshSeconds?: number }
 ipcMain.handle("settings:notifications:update", (_evt, values: NotificationSettings) =>
   updateNotificationSettings(values)
 );
+ipcMain.handle("settings:backup:update", (_evt, values: BackupSettings) =>
+  updateBackupSettings(values)
+);
+// Re-register immediately so a changed accelerator takes effect without a
+// restart — and so the Settings UI can report right away whether the new one
+// was actually claimable.
+ipcMain.handle("settings:capture:update", (_evt, values: CaptureSettings) => {
+  const saved = updateCaptureSettings(values);
+  if (saved.accelerator) registerCaptureHotkey(saved.accelerator);
+  return saved;
+});
 ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
   updateDockerSettings(values)
 );
@@ -656,6 +723,14 @@ ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderT
 app.whenReady().then(() => {
   setDockIcon();
   createWindow();
+
+  // Fire-and-forget: a backup must never delay startup or break it.
+  const backupSettings = getBackupSettings();
+  void runDailyBackup(backupSettings.enabled !== false, backupSettings.keep ?? 7);
+
+  initCaptureWindow();
+  registerCaptureHotkey(getCaptureSettings().accelerator ?? DEFAULT_CAPTURE_ACCELERATOR);
+
   initTray({
     onShow: showMainWindow,
     onRefresh: () => sendCommand({ type: "refreshAll" }),
@@ -688,5 +763,11 @@ app.on("before-quit", (event) => {
   quitting = true;
   event.preventDefault();
   destroyTray();
+  // Close hides rather than destroys, so there's no close event to save on;
+  // this is the last chance, and it also flushes any pending debounce.
+  flushWindowState();
+  // Also unregisters the global shortcut — leaving it claimed after quit
+  // would make the hotkey dead until the next launch.
+  destroyCaptureWindow();
   stopAllProcesses().finally(() => app.exit());
 });

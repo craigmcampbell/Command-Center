@@ -19,6 +19,9 @@ import type {
   GoogleCalendarConfig,
   GitHubScalarConfig,
   GitHubRepoConfig,
+  BackupSettings,
+  CaptureSettings,
+  WindowState,
   GitHubRepoInput,
   NotificationSettings,
   VaultConfig,
@@ -32,6 +35,10 @@ import type {
 // below). If a new tab is ever added to App.tsx's TabId union, add it here
 // too so it gets seeded a row (and therefore shows up in the tab bar) on the
 // next boot instead of silently missing from the DB-backed order.
+// The hyperkey combo (Caps Lock remapped to all four modifiers) — chosen
+// because virtually nothing else claims it. See services/capture.ts.
+export const DEFAULT_CAPTURE_ACCELERATOR = "Cmd+Ctrl+Alt+Shift+Q";
+
 const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "development", label: "Development" },
@@ -188,6 +195,33 @@ export function getNotificationSettings(): NotificationSettings {
 export function updateNotificationSettings(values: NotificationSettings): NotificationSettings {
   setRaw("notifications", values);
   return values;
+}
+
+export function getBackupSettings(): BackupSettings {
+  return getRaw("backup") ?? { enabled: true, keep: 7 };
+}
+export function updateBackupSettings(values: BackupSettings): BackupSettings {
+  setRaw("backup", values);
+  return values;
+}
+
+// The default is the hyperkey combo a Caps-Lock remapper emits, which almost
+// nothing else claims. Editable because hotkey ownership is machine-specific.
+export function getCaptureSettings(): CaptureSettings {
+  return getRaw("capture") ?? { accelerator: DEFAULT_CAPTURE_ACCELERATOR };
+}
+export function updateCaptureSettings(values: CaptureSettings): CaptureSettings {
+  setRaw("capture", values);
+  return values;
+}
+
+// Not part of getAllSettings(): window geometry is main's concern, and
+// exposing it to the renderer would invite it to fight the window manager.
+export function getWindowSettings(): WindowState {
+  return getRaw("window") ?? {};
+}
+export function updateWindowSettings(values: WindowState): void {
+  setRaw("window", values);
 }
 
 export function getAppSettings(): { refreshMinutes?: number } {
@@ -531,6 +565,8 @@ export function getAllSettings(): AppConfig {
     github: { ...githubScalar, repos },
     git: getGitSettings(),
     notifications: getNotificationSettings(),
+    backup: getBackupSettings(),
+    capture: getCaptureSettings(),
     vaults: listVaultSettings(),
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
@@ -586,6 +622,8 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
     processCrash: true,
     dockerExit: true,
   });
+  seedRawIfEmpty("backup", { enabled: true, keep: 7 });
+  seedRawIfEmpty("capture", { accelerator: DEFAULT_CAPTURE_ACCELERATOR });
   seedRawIfEmpty("app", pick("app") ?? {});
   seedRawIfEmpty("todoist", pick("todoist") ?? { apiToken: "" });
   seedRawIfEmpty("googleCalendar", pick("googleCalendar") ?? { clientId: "", clientSecret: "" });

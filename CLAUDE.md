@@ -99,6 +99,42 @@ Three walled-off parts — this separation is the security model, keep it intact
     `docker.ts`'s PATH widening: that exists because Docker Desktop installs
     outside launchd's bare PATH, whereas `git` is at `/usr/bin/git` and resolves
     fine from a GUI-launched app.
+  - `services/ynab.ts` — YNAB REST API (api.ynab.com/v1): account balances,
+    unapproved transactions, this month's scheduled transactions, categories,
+    and the approve/clear/categorise/memo mutations behind the Finances tab.
+    Fails soft like the other API services.
+  - `services/bills.ts` / `services/cards.ts` — manually-tracked recurring bills
+    and credit cards for the Finances tab. Plain SQLite CRUD, same shape as
+    `links.ts`. Deliberately independent of YNAB's own scheduled transactions:
+    not everything recurring is set up as a YNAB schedule (a bill paid from an
+    external account, say), so this is a parallel list rather than a mirror.
+    `bills.ts` also carries the additive-`ALTER TABLE`-in-a-try/catch migration
+    pattern that `settings.ts`'s `local_path` column later copied.
+  - `services/timeTracking.ts` — cumulative time logged against Todoist tasks,
+    for client billing, plus the monthly report. A row is only written once time
+    is actually logged, so there's no shadow row per Todoist task.
+    `task_content`/`project_name` are **snapshotted per entry** rather than
+    looked up live, so a monthly report still reads correctly after the upstream
+    task is completed or deleted. Only one timer runs at a time — starting one
+    auto-stops whichever was running.
+  - `services/windowState.ts` — remembers the dashboard window's size, position
+    and maximized/fullscreen state in a `window` settings blob. Uses
+    `getNormalBounds()`, **not** `getBounds()`: while maximized or fullscreen the
+    latter returns the expanded rectangle, so persisting it would make
+    un-maximizing later snap to a screen-sized window instead of whatever the
+    user actually had. Saved bounds are checked against the current displays
+    before use — a window restored onto a since-disconnected monitor is
+    invisible and reads as a failed launch. Saves are debounced (`resize` fires
+    continuously through a drag and each save is a synchronous SQLite write),
+    with a flush in `before-quit` since close hides rather than destroys and
+    there's no close event to save on.
+  - `services/dailyTemplate.ts` — renders an Obsidian template into the content
+    for a daily note that doesn't exist yet. See "Daily note template" below.
+  - `services/backup.ts` — daily rotating backups + manual export of the SQLite
+    file. See "Backups" below; the `db.backup()`-not-`fs.copyFile` detail there
+    is the important part.
+  - `services/capture.ts` + `services/captureWindow.ts` — global-hotkey quick
+    capture. See "Quick capture" below.
   - `services/notifications.ts` — OS notifications, given an already-decided
     alert (transition detection happens in the renderer, where the polled state
     lives — see "Notifications + tray" below). Exists mainly to make failure
@@ -179,23 +215,35 @@ UI event → `window.api.x()` (preload, typed) → `ipcRenderer.invoke("channel"
 
 ## Tabs
 
-The dashboard is split into tabs (`App.tsx`'s `activeTab` state, `TABS` array) so
-lesser-used widgets don't crowd the main view. All widget data still loads and
-polls in the background regardless of which tab is active — only the JSX rendered
-under `<main>` is tab-gated, state lives in `App.tsx` same as always.
+The dashboard is split into tabs so lesser-used widgets don't crowd the main
+view. All widget data still loads and polls in the background regardless of
+which tab is active — only the JSX rendered under `<main>` is tab-gated, state
+lives in `App.tsx` same as always.
 
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
-  Missions, Local Apps, Learning.
+  Missions, Local Apps, Learning, File Links.
 - **Development** — GitHub (CI + PRs), Git (local working-tree status),
-  Services (Docker), Claude Code, Processes (managed local
-  processes), GitHub (CI status + PRs).
+  Services (Docker), Claude Code, Processes (managed local processes).
 - **Reader** — latest Readwise Reader documents, paginated.
+- **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
+  and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
+  transactions with inline category/memo editing.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
   five-touch-point widget pattern.
 
-Add a new tab by adding an entry to `TABS`, a new `.grid-<name>` CSS block
-(grid-template-columns/areas), and a new `{activeTab === "..." && <main>...}` block.
+**Tab order and labels are DB-backed**, not hardcoded: they live in the `tabs`
+table (`services/settings.ts`), and `TabBar` supports drag-to-reorder plus
+double-click-to-rename via `settings:tabs:reorder` / `settings:tabs:rename`.
+The set of tabs is still fixed in code — those handlers only reorder and
+relabel existing rows, they never add or remove one.
+
+Adding a new tab therefore means: an entry in `DEFAULT_TABS` in **both**
+`App.tsx` and `services/settings.ts` (they're separate constants that must stay
+in sync — `ensureTabDefaults()` seeds any missing row every boot, so a tab
+added to only one of them silently won't appear), a new `.grid-<name>` CSS
+block (grid-template-columns/areas), and a new
+`{activeTab === "..." && <main>...}` block.
 
 ## Current widgets
 
@@ -377,6 +425,123 @@ shortcut, which the markdown editor now uses. Anything bound here is
 effectively taken away from every editor in the app, so keep that in mind
 before adding more.
 
+## Daily note template
+
+Settings → Grimoire takes a vault-relative `dailyTemplatePath`. When a daily
+note doesn't exist yet, `readDailyNote` returns the rendered template in
+`templateContent` — **separately from `content`, which stays empty**. The
+template is applied at the moment of creation, not previewed:
+
+- **Typing** — `DailyNoteWidget`'s first keystroke into a missing note swaps the
+  buffer for `template + "\n" + typed` and marks the note no longer missing, so
+  the header stops saying "Start typing to create …" and the save status
+  appears. A `seeded` ref keyed by date stops a second copy being prepended if
+  the editor is cleared and typed into again (`data.missing` stays true until a
+  reload).
+- **Quick capture** — `captureToDailyNote` uses `templateContent` as its base
+  when the note is missing, so the captured line lands beneath the template.
+
+The first version returned the template *as* `content`, which pre-filled the
+editor. Don't go back to that: a file that doesn't exist then looks exactly
+like one that does — complete with a "Saved" label — and reads as some other
+day's note. `showStatus={!creating}` keeps that label off an uncreated note.
+
+**Applied on read, not in `saveDailyNote`.** Writing it there would mean
+guessing whether the incoming content already contains the template — the
+ambiguity that produces duplicated headings.
+
+Seeding on the first keystroke depends on `MarkdownEditor`'s external-sync
+effect shifting the caret when the new value *ends with* the old one: content
+was prepended, so holding the caret at its absolute offset would drop it inside
+the template instead of after what was just typed.
+
+**Templater blocks are stripped, `{{date}}` placeholders are filled.** This is
+the opposite of `services/notes.ts`'s `createNote`, which copies templates raw
+and lets Templater evaluate them — and both are correct for their case.
+Templater only processes files *it* creates, so a note written by the dashboard
+would keep a literal `<%* … %>` code block forever. The cost, accepted
+knowingly: anything the Templater JavaScript would have generated is absent.
+
+Placeholders resolve against **that note's own date**, not today, so an older
+empty day still renders coherently.
+
+Two details in `dailyTemplate.ts` worth not "fixing":
+
+- **`ww` is the ISO week** (Monday-start, zero-padded), verified against this
+  vault's own convention: `5 Logs/Weekly Notes/2026-W24.md` covers June 8-12
+  2026, which is exactly ISO week 24. Locale-based numbering drifts from that
+  at Sunday boundaries and would generate links to week notes that don't exist.
+- **`YYYY` is the calendar year, not the ISO week-year** (moment calls the
+  latter `GGGG`). So 2027-01-01 renders as `2027-W53` even though that date is
+  ISO week 53 of *2026*. It looks wrong; it's what Obsidian would produce for
+  the same template, which is the point.
+
+## Backups
+
+Everything the app owns is in one SQLite file — including every API token, in
+plaintext. `services/backup.ts` writes
+`userData/backups/command-center-YYYY-MM-DD.db` on launch, keeps the newest
+`backup.keep` (default 7), and Settings → Data offers a manual export via a
+save dialog.
+
+**Use `db.backup()`, never `fs.copyFile`.** The database runs in WAL mode
+(`db.ts:17`), so recent commits can still live in the `-wal` sidecar; a plain
+copy of the `.db` produces a backup that looks valid and silently omits them.
+`db.backup()` is SQLite's online backup API and accounts for both the WAL and
+concurrent writes.
+
+Two details that are easy to lose:
+
+- **One backup per calendar day**, guarded by the filename itself rather than
+  stored state — so ten launches in a day produce one file, and the guard
+  survives restarts for free. The stamp is local-time, not `toISOString()`,
+  which would file an evening backup under tomorrow.
+- **The copy is consolidated to a single file** afterwards
+  (`wal_checkpoint(TRUNCATE)` + `journal_mode = DELETE`). Without that step the
+  backup inherits WAL mode and drags `-wal`/`-shm` sidecars along, so an export
+  hands the user three files when they'll only think to copy one.
+
+The export card states that the file contains tokens in plaintext. Keep that
+warning — it's the difference between an informed export and a leak.
+
+## Quick capture
+
+A global hotkey (default `Cmd+Ctrl+Alt+Shift+Q`, the hyperkey combo) opens a
+small frameless panel from any app, appending a timestamped line to today's
+daily note (default) or the scratchpad. `services/capture.ts` composes the
+existing grimoire/scratchpad services; `services/captureWindow.ts` owns the
+window and the shortcut. The panel is a second renderer entry
+(`src/renderer/capture.html`, wired in `electron.vite.config.ts`).
+
+Three macOS specifics, each found by it going wrong:
+
+- **`type: "panel"` is required, and is not sufficient on its own.** As a plain
+  window the panel shows on top but the previously-active app keeps keyboard
+  focus, so everything typed goes *into that app* — the panel shows a caret and
+  silently drops input. As an NSPanel it can take key focus without activating
+  the app, but macOS still won't give it focus unless the app becomes active:
+  hence `app.focus({ steal: true })` in `toggleCaptureWindow`. Electron reports
+  `isFocused() === true` throughout, so this failure is invisible from inside.
+  Hidden windows stay hidden through the activation, so summoning the panel
+  does not drag the dashboard forward.
+- **`globalShortcut.register()` is not a validator on macOS.** It returns
+  `true` for a malformed string like `"NotAReal+Key+Q"` and for combos another
+  app already owns (verified with `Cmd+Space`, which Spotlight holds). So
+  `shared/accelerator.ts` validates the string itself — that catches a typo,
+  the failure a user typing into the field will actually hit. A genuine
+  conflict with another app is **not detectable**; the Settings copy says so
+  rather than implying a check exists. Don't "improve" this by trusting the
+  return value.
+- **The panel hides on blur and clears its buffer**, so a half-typed thought
+  never lingers invisibly.
+
+**Capture writes can clobber the UI's buffer.** Both targets are also edited by
+autosaving widgets holding the *entire* document in renderer memory, so an
+append behind their back would be overwritten by their next save. Main
+broadcasts `{ type: "captured", target }` over `app:command`; the owning widget
+calls `autosave.cancel(...)` and reloads. `cancel` (not `flush`) is the right
+one — flushing would write the pre-capture buffer over the captured line.
+
 ## Notifications + tray
 
 Desktop notifications for three transitions — CI turning red, a managed process
@@ -439,7 +604,7 @@ The gear icon in the header (`.refresh-control`, next to Refresh) opens
 `components/SettingsPage.tsx` — a full-screen overlay (same scrim+panel visual
 language as `CommandPalette`/`NoteBrowserModal`, closes via scrim-click/Escape/X)
 with a left section-nav (General, Grimoire, Integrations, Vaults, Repositories,
-Processes) and a scrollable content pane. It's app-wide config management, not a
+Processes, Data) and a scrollable content pane. It's app-wide config management, not a
 per-tab widget, so it skips the five-touch-point pattern — its data model is
 `services/settings.ts` end to end (see Architecture above), exposed through a
 `window.api.settings.*` namespace mirroring the `links`/`habits` CRUD shape.

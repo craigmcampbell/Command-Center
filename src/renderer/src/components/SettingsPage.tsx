@@ -26,12 +26,18 @@ import type {
   AppConfig,
   GitHubRepoConfig,
   GitHubRepoInput,
+  BackupFile,
+  BackupSettings,
+  CaptureHotkeyStatus,
+  CaptureSettings,
+  GrimoireConfig,
   NotificationHealth,
   NotificationSettings,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
 } from "../../../shared/types";
+import { validateAccelerator } from "../../../shared/accelerator";
 import {
   useGithubRepoSettingsList,
   useProcessSettingsList,
@@ -48,7 +54,14 @@ import {
   IconX,
 } from "./icons";
 
-type SectionId = "general" | "grimoire" | "integrations" | "vaults" | "githubRepos" | "processes";
+type SectionId =
+  | "general"
+  | "grimoire"
+  | "integrations"
+  | "vaults"
+  | "githubRepos"
+  | "processes"
+  | "data";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "General" },
@@ -57,6 +70,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "vaults", label: "Vaults" },
   { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
+  { id: "data", label: "Data" },
 ];
 
 interface SettingsPageProps {
@@ -355,31 +369,222 @@ function NotificationsCard({
   );
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function CaptureCard({
+  value,
+  onSaved,
+}: {
+  value: CaptureSettings;
+  onSaved: (v: CaptureSettings) => void;
+}) {
+  const current = value.accelerator ?? "";
+  const [accelerator, setAccelerator] = useState(current);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
+
+  useEffect(() => setAccelerator(current), [current]);
+  useEffect(() => {
+    void window.api.capture.hotkeyStatus().then(setStatus);
+  }, []);
+
+  const dirty = accelerator !== current;
+  const validationError = accelerator.trim() ? validateAccelerator(accelerator) : null;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    if (validationError) return;
+    setSaving(true);
+    const result = await window.api.settings.capture.update({ ...value, accelerator });
+    setStatus(await window.api.capture.hotkeyStatus());
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Quick capture</h3>
+      <p className="settings-card-hint">
+        A global hotkey that opens a small capture panel from any app, writing to today's daily
+        note or the scratchpad. Uses Electron accelerator syntax, e.g.{" "}
+        <code>Cmd+Ctrl+Alt+Shift+Q</code>.
+      </p>
+
+      {status && !status.registered && status.accelerator && (
+        <p className="settings-card-warning">
+          Couldn’t register <code>{status.accelerator}</code>. Pick a different combination.
+        </p>
+      )}
+
+      <div className="settings-field-row">
+        <label>Hotkey</label>
+        <input
+          className="settings-input"
+          value={accelerator}
+          onChange={(e) => setAccelerator(e.target.value)}
+          placeholder="Cmd+Ctrl+Alt+Shift+Q"
+        />
+      </div>
+      {validationError && <p className="settings-field-error">{validationError}</p>}
+
+      {/* macOS gives no usable signal here: globalShortcut.register() returns
+          true even for a combo another app already owns, so promising conflict
+          detection would be a lie. Say what to do instead. */}
+      <p className="settings-card-hint">
+        If the hotkey does nothing, another app has likely claimed it — launchers and macro tools
+        take precedence, and macOS gives no way to detect that. Try a different combination.
+      </p>
+
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving || !!validationError}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DataCard({
+  value,
+  onSaved,
+}: {
+  value: BackupSettings;
+  onSaved: (v: BackupSettings) => void;
+}) {
+  const norm = (v: BackupSettings) => ({ enabled: v.enabled !== false, keep: v.keep ?? 7 });
+  const [draft, setDraft] = useState(norm(value));
+  const [saving, setSaving] = useState(false);
+  const [backups, setBackups] = useState<BackupFile[]>([]);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+
+  useEffect(() => setDraft(norm(value)), [value]);
+  const refreshList = () => void window.api.backup.list().then(setBackups);
+  useEffect(refreshList, []);
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(norm(value));
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.backup.update(draft);
+    setSaving(false);
+    onSaved(result);
+  }
+
+  async function handleExport() {
+    setExportMsg(null);
+    const result = await window.api.backup.export();
+    // A dismissed save dialog is not a failure — say nothing at all.
+    if (result.canceled) return;
+    setExportMsg(result.ok ? `Exported to ${result.path}` : `Export failed: ${result.reason}`);
+  }
+
+  return (
+    <>
+      <form className="settings-card" onSubmit={handleSave}>
+        <h3>Backups</h3>
+        <p className="settings-card-hint">
+          Everything this app stores lives in a single SQLite file — notes, habits, finances, time
+          entries, and settings. A copy is written automatically once per day.
+        </p>
+
+        <label className="settings-checkbox-label">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+          />
+          Back up automatically on launch
+        </label>
+        <div className="settings-field-row">
+          <label>Keep</label>
+          <input
+            className="settings-input"
+            type="number"
+            min={1}
+            value={draft.keep}
+            disabled={!draft.enabled}
+            onChange={(e) => setDraft({ ...draft, keep: Number(e.target.value) || 7 })}
+          />
+        </div>
+
+        {backups.length > 0 && (
+          <ul className="settings-backup-list">
+            {backups.map((b) => (
+              <li key={b.path}>
+                <span className="settings-backup-name">{b.name}</span>
+                <span className="settings-backup-size">{formatBytes(b.size)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="settings-card-footer">
+          <button type="submit" disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+
+      <div className="settings-card">
+        <h3>Export database</h3>
+        <p className="settings-card-hint">
+          Writes a complete copy wherever you choose — for moving to another machine, or keeping a
+          copy somewhere else.
+        </p>
+        <p className="settings-card-warning">
+          The exported file contains your API tokens (Todoist, GitHub, Readwise, YNAB, Google) in
+          plaintext, exactly as they are stored here. Treat it like a password file, and think
+          twice before putting it in a synced or shared folder.
+        </p>
+        {exportMsg && <p className="settings-card-hint">{exportMsg}</p>}
+        <div className="settings-card-footer">
+          <button type="button" onClick={handleExport}>
+            Export database…
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function GrimoireCard({
   value,
   onSaved,
 }: {
-  value: { vaultPath: string; dailyLogDir: string; missionsDir: string };
-  onSaved: (v: { vaultPath: string; dailyLogDir: string; missionsDir: string }) => void;
+  value: GrimoireConfig;
+  onSaved: (v: GrimoireConfig) => void;
 }) {
   const [vaultPath, setVaultPath] = useState(value.vaultPath);
   const [dailyLogDir, setDailyLogDir] = useState(value.dailyLogDir);
   const [missionsDir, setMissionsDir] = useState(value.missionsDir);
+  const [dailyTemplatePath, setDailyTemplatePath] = useState(value.dailyTemplatePath ?? "");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setVaultPath(value.vaultPath);
     setDailyLogDir(value.dailyLogDir);
     setMissionsDir(value.missionsDir);
-  }, [value.vaultPath, value.dailyLogDir, value.missionsDir]);
+    setDailyTemplatePath(value.dailyTemplatePath ?? "");
+  }, [value.vaultPath, value.dailyLogDir, value.missionsDir, value.dailyTemplatePath]);
   const dirty =
     vaultPath !== value.vaultPath ||
     dailyLogDir !== value.dailyLogDir ||
-    missionsDir !== value.missionsDir;
+    missionsDir !== value.missionsDir ||
+    dailyTemplatePath !== (value.dailyTemplatePath ?? "");
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const result = await window.api.settings.grimoire.update({ vaultPath, dailyLogDir, missionsDir });
+    const result = await window.api.settings.grimoire.update({
+      vaultPath,
+      dailyLogDir,
+      missionsDir,
+      dailyTemplatePath: dailyTemplatePath.trim() || undefined,
+    });
     setSaving(false);
     onSaved(result);
   }
@@ -417,6 +622,20 @@ function GrimoireCard({
           placeholder="3 Missions"
         />
       </div>
+      <div className="settings-field-row">
+        <label>Daily template</label>
+        <input
+          className="settings-input"
+          value={dailyTemplatePath}
+          onChange={(e) => setDailyTemplatePath(e.target.value)}
+          placeholder="_System/templates/daily template.md (optional)"
+        />
+      </div>
+      <p className="settings-card-hint">
+        Vault-relative template seeded into a daily note that doesn’t exist yet. <code>
+        {"{{date}}"}</code> placeholders are filled in for that note’s date; Templater{" "}
+        <code>{"<% … %>"}</code> blocks are removed, since nothing here can execute them.
+      </p>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -1444,7 +1663,18 @@ export default function SettingsPage({
                       onNotificationSettingsChange(v);
                     }}
                   />
+                  <CaptureCard
+                    value={data.capture ?? {}}
+                    onSaved={(v) => setData((prev) => (prev ? { ...prev, capture: v } : prev))}
+                  />
                 </>
+              )}
+
+              {section === "data" && (
+                <DataCard
+                  value={data.backup ?? {}}
+                  onSaved={(v) => setData((prev) => (prev ? { ...prev, backup: v } : prev))}
+                />
               )}
 
               {section === "grimoire" && (

@@ -5,6 +5,10 @@ export interface GrimoireConfig {
   vaultPath: string;
   dailyLogDir: string;
   missionsDir: string;
+  // Vault-relative path to the template seeded into a daily note that doesn't
+  // exist yet, e.g. "_System/templates/sanctum/daily template.md". Empty or
+  // unset means a new note starts blank.
+  dailyTemplatePath?: string;
 }
 
 // A quick-launch entry — a SillyTavern instance, a local app, a Claude Code
@@ -121,6 +125,8 @@ export interface AppConfig {
   github?: GitHubConfig;
   git?: { refreshSeconds?: number };
   notifications?: NotificationSettings;
+  backup?: BackupSettings;
+  capture?: CaptureSettings;
   vaults?: VaultConfig[];
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
@@ -141,6 +147,54 @@ export interface DockerResult {
   ok: boolean;
   reason?: string;
   containers: DockerContainer[];
+}
+
+// Persisted window geometry. Main-process only — deliberately absent from
+// AppConfig and the preload API, since the renderer has no business with it.
+export interface WindowState {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  // Distinct states on macOS: the green title-bar button enters *fullscreen*,
+  // while maximize is the option-click (and the usual meaning elsewhere).
+  maximized?: boolean;
+  fullscreen?: boolean;
+}
+
+export interface BackupFile {
+  path: string;
+  name: string;
+  size: number;
+  createdAt: number;
+}
+
+export interface BackupSettings {
+  enabled?: boolean;
+  keep?: number;
+}
+
+// `canceled` distinguishes "the user dismissed the save dialog" from a real
+// failure — the UI must not show an error for it.
+export interface ExportResult extends ActionResult {
+  canceled?: boolean;
+  path?: string;
+}
+
+// Where a quick-capture line goes. Todoist is deliberately not a target.
+export type CaptureTarget = "dailyNote" | "scratchpad";
+
+export interface CaptureSettings {
+  accelerator?: string;
+  lastTarget?: CaptureTarget;
+}
+
+// `registered` is globalShortcut.register()'s return value, kept because it
+// returns false (rather than throwing) when another app already owns the
+// combo — a silent no-op otherwise.
+export interface CaptureHotkeyStatus {
+  accelerator: string;
+  registered: boolean;
 }
 
 export type AlertKind = "ci" | "process" | "docker";
@@ -187,7 +241,10 @@ export interface NotificationHealth {
 // originate in main and need to drive the UI.
 export type AppCommand =
   | { type: "refreshAll" }
-  | { type: "openTab"; tab: string };
+  | { type: "openTab"; tab: string }
+  // Quick capture wrote to `target` behind the UI's back; the owning widget
+  // must drop its stale buffer and reload rather than save over it.
+  | { type: "captured"; target: CaptureTarget };
 
 // Working-tree state for one configured repo with a localPath. Each row
 // carries its own `ok`/`reason` — a bad path or a directory that isn't a repo
@@ -227,6 +284,11 @@ export interface DailyNoteResult {
   prevDate: string | null;
   nextDate: string | null;
   obsidianUri: string;
+  // The rendered daily template for this date, when the note doesn't exist
+  // yet and one is configured. Deliberately NOT folded into `content`: the
+  // editor must stay empty until the note is really created, or a file that
+  // isn't there looks exactly like one that is.
+  templateContent?: string;
   // true when the only thing wrong is that this day's file doesn't exist yet
   // — the vault and daily-log folder are both fine. The widget treats that as
   // an empty, editable note (saveDailyNote creates the file on first write)
@@ -778,6 +840,16 @@ export interface CommandCenterApi {
   tray: {
     update: (summary: TraySummary) => Promise<void>;
   };
+  backup: {
+    export: () => Promise<ExportResult>;
+    list: () => Promise<BackupFile[]>;
+    runNow: () => Promise<ActionResult>;
+  };
+  capture: {
+    submit: (target: CaptureTarget, text: string) => Promise<ActionResult>;
+    cancel: () => Promise<void>;
+    hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
+  };
   // Returns an unsubscribe. The raw IpcRendererEvent is never passed across
   // the bridge — only the payload.
   onCommand: (cb: (command: AppCommand) => void) => () => void;
@@ -876,6 +948,12 @@ export interface CommandCenterApi {
     };
     notifications: {
       update: (values: NotificationSettings) => Promise<NotificationSettings>;
+    };
+    backup: {
+      update: (values: BackupSettings) => Promise<BackupSettings>;
+    };
+    capture: {
+      update: (values: CaptureSettings) => Promise<CaptureSettings>;
     };
     ynab: {
       update: (values: YnabScalarConfig) => Promise<YnabScalarConfig>;

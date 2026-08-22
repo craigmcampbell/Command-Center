@@ -12,7 +12,13 @@ export default defineConfig({
     root: "src/renderer",
     build: {
       rollupOptions: {
-        input: "src/renderer/index.html",
+        // Two windows, two entries: the dashboard and the frameless
+        // quick-capture panel. Named inputs (rather than a bare string) so
+        // each emits its own html next to the other in out/renderer.
+        input: {
+          index: "src/renderer/index.html",
+          capture: "src/renderer/capture.html",
+        },
       },
     },
     plugins: [react()],

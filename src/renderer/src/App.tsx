@@ -381,8 +381,15 @@ export default function App() {
     return window.api.onCommand((command) => {
       if (command.type === "refreshAll") void refreshAll();
       else if (command.type === "openTab") setActiveTab(command.tab as TabId);
+      else if (command.type === "captured" && command.target === "dailyNote") {
+        // Capture appended to today's note in main; re-read it so the widget
+        // isn't holding a stale copy it would later autosave over the top of.
+        // Only when we're actually showing today — if the user has navigated
+        // to another date, there's nothing stale to correct.
+        if (!dailyDate) void loadDaily();
+      }
     });
-  }, [refreshAll]);
+  }, [refreshAll, dailyDate, loadDaily]);
 
   // ---- Git refresh, reactive to Settings edits ----
   useEffect(() => {

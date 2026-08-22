@@ -8,6 +8,9 @@ import type { IpcRendererEvent } from "electron";
 import type {
   AppAlert,
   AppCommand,
+  BackupSettings,
+  CaptureSettings,
+  CaptureTarget,
   CommandCenterApi,
   GoogleCalendarConfig,
   GrimoireConfig,
@@ -143,6 +146,19 @@ const api: CommandCenterApi = {
     update: (summary: TraySummary) => ipcRenderer.invoke("tray:update", summary),
   },
 
+  backup: {
+    export: () => ipcRenderer.invoke("backup:export"),
+    list: () => ipcRenderer.invoke("backup:list"),
+    runNow: () => ipcRenderer.invoke("backup:runNow"),
+  },
+
+  capture: {
+    submit: (target: CaptureTarget, text: string) =>
+      ipcRenderer.invoke("capture:submit", target, text),
+    cancel: () => ipcRenderer.invoke("capture:cancel"),
+    hotkeyStatus: () => ipcRenderer.invoke("capture:hotkeyStatus"),
+  },
+
   // The only main→renderer channel in the app. Deliberately a narrow
   // subscription rather than exposing ipcRenderer: the raw IpcRendererEvent
   // never crosses the bridge (it carries `sender`, which would hand the
@@ -263,6 +279,12 @@ const api: CommandCenterApi = {
     notifications: {
       update: (values: NotificationSettings) =>
         ipcRenderer.invoke("settings:notifications:update", values),
+    },
+    backup: {
+      update: (values: BackupSettings) => ipcRenderer.invoke("settings:backup:update", values),
+    },
+    capture: {
+      update: (values: CaptureSettings) => ipcRenderer.invoke("settings:capture:update", values),
     },
     ynab: {
       update: (values: YnabScalarConfig) => ipcRenderer.invoke("settings:ynab:update", values),
