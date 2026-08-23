@@ -294,6 +294,7 @@ function NotificationsCard({
     ciFailure: v.ciFailure !== false,
     processCrash: v.processCrash !== false,
     dockerExit: v.dockerExit !== false,
+    overspending: v.overspending !== false,
   });
   const [draft, setDraft] = useState(norm(value));
   const [saving, setSaving] = useState(false);
@@ -318,6 +319,7 @@ function NotificationsCard({
     { key: "ciFailure", label: "CI turns red" },
     { key: "processCrash", label: "A managed process crashes" },
     { key: "dockerExit", label: "A Docker container stops" },
+    { key: "overspending", label: "A budget category becomes overspent" },
   ];
 
   return (

@@ -192,6 +192,7 @@ export function getNotificationSettings(): NotificationSettings {
       ciFailure: true,
       processCrash: true,
       dockerExit: true,
+      overspending: true,
     }
   );
 }
@@ -633,6 +634,7 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
     ciFailure: true,
     processCrash: true,
     dockerExit: true,
+    overspending: true,
   });
   seedRawIfEmpty("backup", { enabled: true, keep: 7 });
   seedRawIfEmpty("capture", { accelerator: DEFAULT_CAPTURE_ACCELERATOR });

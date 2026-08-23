@@ -22,6 +22,8 @@ import type {
   YnabUnapprovedResult,
   YnabScheduledResult,
   YnabCategoriesResult,
+  YnabPayeesResult,
+  YnabMonthResult,
   NoteContent,
   BillItem,
   CardItem,
@@ -35,6 +37,7 @@ import GitStatusWidget from "./components/GitStatusWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import BillsWidget from "./components/BillsWidget";
+import BudgetHealthWidget from "./components/BudgetHealthWidget";
 import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
@@ -162,6 +165,8 @@ export default function App() {
   const [ynabUnapproved, setYnabUnapproved] = useState<YnabUnapprovedResult | null>(null);
   const [ynabScheduled, setYnabScheduled] = useState<YnabScheduledResult | null>(null);
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
+  const [ynabPayees, setYnabPayees] = useState<YnabPayeesResult | null>(null);
+  const [budgetHealth, setBudgetHealth] = useState<YnabMonthResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
   const [bills, setBills] = useState<BillItem[]>([]);
   const [cards, setCards] = useState<CardItem[]>([]);
@@ -203,6 +208,8 @@ export default function App() {
       loadYnabUnapproved(),
       window.api.ynab.scheduledTransactions().then(setYnabScheduled),
       window.api.ynab.categories().then(setYnabCategories),
+      window.api.ynab.payees().then(setYnabPayees),
+      window.api.ynab.currentMonth().then(setBudgetHealth),
     ]);
   }, [loadYnabUnapproved]);
   const loadFinanceReviewLog = useCallback(async () => {
@@ -426,13 +433,13 @@ export default function App() {
   // No new polling: this reacts to github/processStatuses/docker changing,
   // each of which has its own interval elsewhere in this file.
   useEffect(() => {
-    const next = buildSnapshot(github, processStatuses, docker);
+    const next = buildSnapshot(github, processStatuses, docker, budgetHealth);
     for (const alert of diffAlerts(prevSnapshot.current, next, notificationSettings, processConfigs)) {
       void window.api.notifications.show(alert);
     }
     prevSnapshot.current = next;
     void window.api.tray.update(summarize(next));
-  }, [github, processStatuses, docker, notificationSettings, processConfigs]);
+  }, [github, processStatuses, docker, budgetHealth, notificationSettings, processConfigs]);
 
   // ---- commands pushed from main (tray menu, notification clicks) ----
   useEffect(() => {
@@ -631,7 +638,13 @@ export default function App() {
             />
           </div>
           <div className="slot slot-ynab-bills">
-            <BillsWidget bills={bills} onChange={setBills} cards={cards} onCardsChange={setCards} />
+            <BillsWidget
+              bills={bills}
+              onChange={setBills}
+              cards={cards}
+              onCardsChange={setCards}
+              ynabAccounts={ynabAccounts}
+            />
           </div>
           <div className="slot slot-ynab-financelog">
             <FinanceReviewLogWidget data={financeReviewLog} onChange={setFinanceReviewLog} />
@@ -640,9 +653,13 @@ export default function App() {
             <YnabUnapprovedWidget
               data={ynabUnapproved}
               categories={ynabCategories}
+              payees={ynabPayees}
               accounts={ynabAccounts}
               onRefresh={loadYnabUnapproved}
             />
+          </div>
+          <div className="slot slot-ynab-budgethealth">
+            <BudgetHealthWidget data={budgetHealth} />
           </div>
         </main>
       )}

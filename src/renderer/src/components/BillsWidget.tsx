@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
-import type { BillItem, CardItem } from "../../../shared/types";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
+import type { BillItem, CardItem, YnabAccount, YnabAccountsResult } from "../../../shared/types";
 import Panel from "./Panel";
 import { IconCheck, IconNote, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
 
@@ -9,6 +9,7 @@ interface BillsWidgetProps {
   onChange: (bills: BillItem[]) => void;
   cards: CardItem[];
   onCardsChange: (cards: CardItem[]) => void;
+  ynabAccounts: YnabAccountsResult | null;
 }
 
 type Tab = "bills" | "cards";
@@ -293,21 +294,31 @@ function isValidPositiveNumber(text: string): boolean {
 // to any particular issuer's rate tiers.
 const HIGH_APR_THRESHOLD = 7;
 
+// Utilization above this is colored red (--alert), same "carry too much of a
+// balance" signal as HIGH_APR_THRESHOLD, not a credit-score-modeling figure.
+const UTILIZATION_WARN_THRESHOLD = 30;
+
 function CardFields({
   name,
   creditLimit,
   apr,
+  ynabAccountId,
+  ynabAccountOptions,
   onNameChange,
   onCreditLimitChange,
   onAprChange,
+  onYnabAccountIdChange,
   onKeyDown,
 }: {
   name: string;
   creditLimit: string;
   apr: string;
+  ynabAccountId: string;
+  ynabAccountOptions: YnabAccount[];
   onNameChange: (v: string) => void;
   onCreditLimitChange: (v: string) => void;
   onAprChange: (v: string) => void;
+  onYnabAccountIdChange: (v: string) => void;
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
 }) {
   return (
@@ -346,28 +357,45 @@ function CardFields({
           placeholder="APR %"
         />
       </td>
+      <td className="card-col-balance">
+        <select
+          className="settings-input card-table-input"
+          value={ynabAccountId}
+          onChange={(e) => onYnabAccountIdChange(e.target.value)}
+        >
+          <option value="">Not linked</option>
+          {ynabAccountOptions.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+      </td>
     </>
   );
 }
 
 function CardEditRow({
   item,
+  ynabAccountOptions,
   onSave,
   onCancel,
 }: {
   item: CardItem;
-  onSave: (name: string, creditLimit: number, apr: number) => void;
+  ynabAccountOptions: YnabAccount[];
+  onSave: (name: string, creditLimit: number, apr: number, ynabAccountId: string | null) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(item.name);
   const [creditLimit, setCreditLimit] = useState(String(item.creditLimit));
   const [apr, setApr] = useState(String(item.apr));
+  const [ynabAccountId, setYnabAccountId] = useState(item.ynabAccountId ?? "");
 
   const valid = name.trim() !== "" && isValidPositiveNumber(creditLimit) && isValidPositiveNumber(apr);
 
   function handleSave() {
     if (!valid) return;
-    onSave(name.trim(), Number(creditLimit), Number(apr));
+    onSave(name.trim(), Number(creditLimit), Number(apr), ynabAccountId || null);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -385,9 +413,12 @@ function CardEditRow({
         name={name}
         creditLimit={creditLimit}
         apr={apr}
+        ynabAccountId={ynabAccountId}
+        ynabAccountOptions={ynabAccountOptions}
         onNameChange={setName}
         onCreditLimitChange={setCreditLimit}
         onAprChange={setApr}
+        onYnabAccountIdChange={setYnabAccountId}
         onKeyDown={handleKeyDown}
       />
       <td className="card-col-actions">
@@ -406,11 +437,13 @@ function CardEditRow({
 
 function CardRow({
   item,
+  ynabAccountOptions,
   onSave,
   onDelete,
 }: {
   item: CardItem;
-  onSave: (name: string, creditLimit: number, apr: number) => void;
+  ynabAccountOptions: YnabAccount[];
+  onSave: (name: string, creditLimit: number, apr: number, ynabAccountId: string | null) => void;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -419,12 +452,40 @@ function CardRow({
     return (
       <CardEditRow
         item={item}
-        onSave={(name, creditLimit, apr) => {
-          onSave(name, creditLimit, apr);
+        ynabAccountOptions={ynabAccountOptions}
+        onSave={(name, creditLimit, apr, ynabAccountId) => {
+          onSave(name, creditLimit, apr, ynabAccountId);
           setEditing(false);
         }}
         onCancel={() => setEditing(false)}
       />
+    );
+  }
+
+  // A stale link (account closed upstream, or the YNAB fetch failed) fails
+  // soft rather than throwing on an undefined lookup.
+  const linkedAccount = item.ynabAccountId
+    ? ynabAccountOptions.find((a) => a.id === item.ynabAccountId)
+    : undefined;
+
+  let balanceCell: ReactNode;
+  if (!item.ynabAccountId) {
+    balanceCell = <span className="muted">—</span>;
+  } else if (!linkedAccount) {
+    balanceCell = <span className="muted">Link unavailable</span>;
+  } else {
+    // A YNAB credit-card balance is negative when money is owed.
+    const liveBalance = Math.abs(linkedAccount.balance);
+    const utilizationPct = item.creditLimit > 0 ? (liveBalance / item.creditLimit) * 100 : null;
+    balanceCell = (
+      <>
+        <span className={utilizationPct != null && utilizationPct > UTILIZATION_WARN_THRESHOLD ? "ynab-balance negative" : "ynab-balance"}>
+          {formatCurrency(liveBalance)}
+        </span>
+        {utilizationPct != null && (
+          <span className="card-utilization">{Math.round(utilizationPct)}%</span>
+        )}
+      </>
     );
   }
 
@@ -435,6 +496,7 @@ function CardRow({
       <td className={`card-col-apr ${item.apr > HIGH_APR_THRESHOLD ? "apr-high" : "apr-low"}`}>
         {formatApr(item.apr)}
       </td>
+      <td className="card-col-balance">{balanceCell}</td>
       <td className="card-col-actions">
         <span className="row-actions">
           <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
@@ -449,19 +511,27 @@ function CardRow({
   );
 }
 
-function CardAddRow({ onAdd }: { onAdd: (name: string, creditLimit: number, apr: number) => void }) {
+function CardAddRow({
+  ynabAccountOptions,
+  onAdd,
+}: {
+  ynabAccountOptions: YnabAccount[];
+  onAdd: (name: string, creditLimit: number, apr: number, ynabAccountId: string | null) => void;
+}) {
   const [name, setName] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
   const [apr, setApr] = useState("");
+  const [ynabAccountId, setYnabAccountId] = useState("");
 
   const valid = name.trim() !== "" && isValidPositiveNumber(creditLimit) && isValidPositiveNumber(apr);
 
   function handleAdd() {
     if (!valid) return;
-    onAdd(name.trim(), Number(creditLimit), Number(apr));
+    onAdd(name.trim(), Number(creditLimit), Number(apr), ynabAccountId || null);
     setName("");
     setCreditLimit("");
     setApr("");
+    setYnabAccountId("");
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -477,9 +547,12 @@ function CardAddRow({ onAdd }: { onAdd: (name: string, creditLimit: number, apr:
         name={name}
         creditLimit={creditLimit}
         apr={apr}
+        ynabAccountId={ynabAccountId}
+        ynabAccountOptions={ynabAccountOptions}
         onNameChange={setName}
         onCreditLimitChange={setCreditLimit}
         onAprChange={setApr}
+        onYnabAccountIdChange={setYnabAccountId}
         onKeyDown={handleKeyDown}
       />
       <td className="card-col-actions">
@@ -494,15 +567,30 @@ function CardAddRow({ onAdd }: { onAdd: (name: string, creditLimit: number, apr:
 function CardsBody({
   cards,
   onCardsChange,
+  ynabAccounts,
 }: {
   cards: CardItem[];
   onCardsChange: (cards: CardItem[]) => void;
+  ynabAccounts: YnabAccountsResult | null;
 }) {
-  async function handleAdd(name: string, creditLimit: number, apr: number) {
-    onCardsChange(await window.api.cards.add(name, creditLimit, apr));
+  const ynabAccountOptions = ynabAccounts?.ok ? ynabAccounts.accounts : [];
+
+  async function handleAdd(
+    name: string,
+    creditLimit: number,
+    apr: number,
+    ynabAccountId: string | null
+  ) {
+    onCardsChange(await window.api.cards.add(name, creditLimit, apr, ynabAccountId));
   }
-  async function handleSave(id: number, name: string, creditLimit: number, apr: number) {
-    onCardsChange(await window.api.cards.update(id, name, creditLimit, apr));
+  async function handleSave(
+    id: number,
+    name: string,
+    creditLimit: number,
+    apr: number,
+    ynabAccountId: string | null
+  ) {
+    onCardsChange(await window.api.cards.update(id, name, creditLimit, apr, ynabAccountId));
   }
   async function handleDelete(id: number) {
     onCardsChange(await window.api.cards.remove(id));
@@ -513,15 +601,16 @@ function CardsBody({
       <thead>
         <tr>
           <th className="card-col-name">Name</th>
-          <th className="card-col-limit">Credit Limit</th>
+          <th className="card-col-limit">Limit</th>
           <th className="card-col-apr">APR</th>
+          <th className="card-col-balance">Balance</th>
           <th className="card-col-actions" aria-label="Actions" />
         </tr>
       </thead>
       <tbody>
         {cards.length === 0 && (
           <tr>
-            <td colSpan={4} className="muted">
+            <td colSpan={5} className="muted">
               No cards added yet.
             </td>
           </tr>
@@ -530,17 +619,26 @@ function CardsBody({
           <CardRow
             key={item.id}
             item={item}
-            onSave={(name, creditLimit, apr) => handleSave(item.id, name, creditLimit, apr)}
+            ynabAccountOptions={ynabAccountOptions}
+            onSave={(name, creditLimit, apr, ynabAccountId) =>
+              handleSave(item.id, name, creditLimit, apr, ynabAccountId)
+            }
             onDelete={() => handleDelete(item.id)}
           />
         ))}
-        <CardAddRow onAdd={handleAdd} />
+        <CardAddRow ynabAccountOptions={ynabAccountOptions} onAdd={handleAdd} />
       </tbody>
     </table>
   );
 }
 
-export default function BillsWidget({ bills, onChange, cards, onCardsChange }: BillsWidgetProps) {
+export default function BillsWidget({
+  bills,
+  onChange,
+  cards,
+  onCardsChange,
+  ynabAccounts,
+}: BillsWidgetProps) {
   const [tab, setTab] = useState<Tab>("bills");
 
   const headerRight = (
@@ -569,7 +667,7 @@ export default function BillsWidget({ bills, onChange, cards, onCardsChange }: B
       {tab === "bills" ? (
         <BillsBody bills={bills} onChange={onChange} />
       ) : (
-        <CardsBody cards={cards} onCardsChange={onCardsChange} />
+        <CardsBody cards={cards} onCardsChange={onCardsChange} ynabAccounts={ynabAccounts} />
       )}
     </Panel>
   );

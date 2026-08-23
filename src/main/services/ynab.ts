@@ -6,7 +6,9 @@
 import type {
   YnabAccountsResult,
   YnabCategoriesResult,
+  YnabMonthResult,
   YnabNewTransactionInput,
+  YnabPayeesResult,
   YnabScalarConfig,
   YnabScheduledResult,
   YnabUnapprovedResult,
@@ -224,7 +226,11 @@ export async function createTransaction(
           account_id: input.accountId,
           date: input.date,
           amount: Math.round(input.amount * 1000),
-          payee_name: input.payeeName || undefined,
+          // payee_id and payee_name are alternatives, not both-at-once — a
+          // picked payee wins; a typed name with no id lets YNAB mint a new
+          // payee the way it always has.
+          payee_id: input.payeeId || undefined,
+          payee_name: input.payeeId ? undefined : input.payeeName || undefined,
           category_id: input.categoryId || undefined,
           memo: input.memo || undefined,
         },
@@ -273,4 +279,89 @@ export async function getCategories(config: YnabScalarConfig): Promise<YnabCateg
     );
 
   return { ok: true, categories };
+}
+
+// Deleted payees and transfer payees (moves between the budget's own
+// accounts, named like "Transfer : Checking") are dropped — neither is a
+// meaningful thing to autocomplete into a transaction's payee field.
+export async function getPayees(config: YnabScalarConfig): Promise<YnabPayeesResult> {
+  const { token, planId } = config;
+  if (!token || !planId) {
+    return { ok: false, reason: "No YNAB token configured", payees: [] };
+  }
+
+  let res: Response;
+  try {
+    res = await ynabFetch(`${API_ROOT}/plans/${planId}/payees`, token);
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB", payees: [] };
+  }
+  if (!res.ok) {
+    return { ok: false, reason: await ynabErrorReason(res), payees: [] };
+  }
+
+  const data = await res.json();
+  const payees = (data.data?.payees ?? [])
+    .filter((p: any) => !p.deleted && !p.transfer_account_id)
+    .map((p: any) => ({ id: p.id, name: p.name }))
+    .sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+  return { ok: true, payees };
+}
+
+// Budget-month totals plus per-category budgeted/activity/balance for the
+// current calendar month. Reuses getCategories as the allowlist of
+// assignable category ids rather than re-deriving the hidden/deleted/
+// internal filter a second time — /months/current's categories[] is flat,
+// unlike /categories' grouped shape, so this maps category_group_name
+// straight across instead of nesting.
+export async function getCurrentMonth(config: YnabScalarConfig): Promise<YnabMonthResult> {
+  const { token, planId } = config;
+  if (!token || !planId) {
+    return { ok: false, reason: "No YNAB token configured", toBeBudgeted: 0, ageOfMoney: null, categories: [] };
+  }
+
+  let res: Response;
+  try {
+    res = await ynabFetch(`${API_ROOT}/plans/${planId}/months/current`, token);
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB", toBeBudgeted: 0, ageOfMoney: null, categories: [] };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      reason: await ynabErrorReason(res),
+      toBeBudgeted: 0,
+      ageOfMoney: null,
+      categories: [],
+    };
+  }
+
+  const allowed = await getCategories(config);
+  const allowedIds = new Set(allowed.ok ? allowed.categories.map((c) => c.id) : []);
+
+  const data = await res.json();
+  const month = data.data?.month ?? {};
+  // Belt and suspenders: allowedIds already excludes hidden/deleted/internal
+  // (getCategories filters at the group level too, which this endpoint's
+  // flat category list doesn't expose), and the month category's own
+  // hidden/deleted/internal fields are checked directly as well so a
+  // category can't leak through via either path alone.
+  const categories = (month.categories ?? [])
+    .filter((c: any) => allowedIds.has(c.id) && !c.hidden && !c.deleted && !c.internal)
+    .map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      groupName: c.category_group_name,
+      budgeted: milliunitsToDollars(c.budgeted),
+      activity: milliunitsToDollars(c.activity),
+      balance: milliunitsToDollars(c.balance),
+    }));
+
+  return {
+    ok: true,
+    toBeBudgeted: milliunitsToDollars(month.to_be_budgeted ?? 0),
+    ageOfMoney: month.age_of_money ?? null,
+    categories,
+  };
 }
