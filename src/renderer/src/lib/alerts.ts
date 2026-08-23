@@ -14,12 +14,14 @@ import type {
   ProcessConfig,
   ProcessStatus,
   TraySummary,
+  YnabMonthResult,
 } from "../../../shared/types";
 
 export interface AlertSnapshot {
   ci: Record<string, string | null>;
   processes: Record<string, number | null>;
   containers: Record<string, string>;
+  categories: Record<string, { name: string; balance: number }>;
 }
 
 // GitHub reports several flavours of "broken". `cancelled` and `skipped` are
@@ -39,10 +41,15 @@ function isCrash(exitCode: number | null | undefined): boolean {
   return exitCode != null && exitCode !== 0;
 }
 
+function isOverspent(balance: number | undefined): boolean {
+  return balance != null && balance < 0;
+}
+
 export function buildSnapshot(
   github: GitHubStatusResult | null,
   processStatuses: ProcessStatus[],
-  docker: DockerResult | null
+  docker: DockerResult | null,
+  budgetHealth: YnabMonthResult | null
 ): AlertSnapshot {
   const ci: Record<string, string | null> = {};
   if (github?.ok) {
@@ -66,7 +73,14 @@ export function buildSnapshot(
     for (const c of docker.containers) containers[c.name] = c.state;
   }
 
-  return { ci, processes, containers };
+  const categories: Record<string, { name: string; balance: number }> = {};
+  if (budgetHealth?.ok) {
+    for (const c of budgetHealth.categories) {
+      categories[c.id] = { name: c.name, balance: c.balance };
+    }
+  }
+
+  return { ci, processes, containers, categories };
 }
 
 export function diffAlerts(
@@ -125,6 +139,23 @@ export function diffAlerts(
           title: "Container stopped",
           body: `${name} exited`,
           tab: "development",
+        });
+      }
+    }
+  }
+
+  if (settings.overspending !== false) {
+    for (const [id, cat] of Object.entries(next.categories)) {
+      // A category absent from prev is newly seen (or budget health just
+      // started loading), not newly overspent.
+      if (!(id in prev.categories)) continue;
+      if (isOverspent(cat.balance) && !isOverspent(prev.categories[id].balance)) {
+        alerts.push({
+          kind: "overspend",
+          key: id,
+          title: "Category overspent",
+          body: `${cat.name} is $${Math.abs(cat.balance).toFixed(2)} over`,
+          tab: "finances",
         });
       }
     }

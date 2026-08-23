@@ -88,6 +88,8 @@ import {
   getUnapprovedTransactions as getYnabUnapprovedTransactions,
   getScheduledTransactionsThisMonth as getYnabScheduledTransactions,
   getCategories as getYnabCategories,
+  getPayees as getYnabPayees,
+  getCurrentMonth as getYnabCurrentMonth,
   approveTransaction as approveYnabTransaction,
   clearTransaction as clearYnabTransaction,
   setTransactionCategory as setYnabTransactionCategory,
@@ -511,6 +513,8 @@ ipcMain.handle("ynab:scheduledTransactions", () =>
   getYnabScheduledTransactions(getYnabSettings())
 );
 ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
+ipcMain.handle("ynab:payees", () => getYnabPayees(getYnabSettings()));
+ipcMain.handle("ynab:currentMonth", () => getYnabCurrentMonth(getYnabSettings()));
 ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
   approveYnabTransaction(getYnabSettings(), transactionId)
 );
@@ -550,13 +554,21 @@ ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(
 // Cards: manually-tracked credit cards (name, credit limit, APR), shown
 // alongside Bills in the Finances tab.
 ipcMain.handle("cards:list", () => listCards());
-ipcMain.handle("cards:add", (_evt, name: string, creditLimit: number, apr: number) =>
-  addCard(name, creditLimit, apr)
+ipcMain.handle(
+  "cards:add",
+  (_evt, name: string, creditLimit: number, apr: number, ynabAccountId: string | null) =>
+    addCard(name, creditLimit, apr, ynabAccountId)
 );
 ipcMain.handle(
   "cards:update",
-  (_evt, id: number, name: string, creditLimit: number, apr: number) =>
-    updateCard(id, name, creditLimit, apr)
+  (
+    _evt,
+    id: number,
+    name: string,
+    creditLimit: number,
+    apr: number,
+    ynabAccountId: string | null
+  ) => updateCard(id, name, creditLimit, apr, ynabAccountId)
 );
 ipcMain.handle("cards:remove", (_evt, id: number) => removeCard(id));
 

@@ -6,6 +6,8 @@ import type {
   YnabAccountsResult,
   YnabCategoriesResult,
   YnabCategory,
+  YnabPayee,
+  YnabPayeesResult,
   YnabTransaction,
   YnabUnapprovedResult,
 } from "../../../shared/types";
@@ -15,6 +17,7 @@ import { IconCheck, IconChevronRight, IconExternal, IconPlus, IconX } from "./ic
 interface YnabUnapprovedWidgetProps {
   data: YnabUnapprovedResult | null;
   categories: YnabCategoriesResult | null;
+  payees: YnabPayeesResult | null;
   accounts: YnabAccountsResult | null;
   onRefresh: () => Promise<void>;
 }
@@ -172,6 +175,103 @@ function CategoryPicker({
   );
 }
 
+// A payee combobox that still allows free text — unlike CategoryPicker, an
+// unmatched typed name is a valid outcome (YNAB mints a new payee), not an
+// error state, so onChange fires on every keystroke rather than only on
+// selecting a list item.
+function PayeePicker({
+  payeeName,
+  payeeId,
+  payees,
+  onChange,
+  disabled,
+}: {
+  payeeName: string;
+  payeeId: string | null;
+  payees: YnabPayee[];
+  onChange: (name: string, id: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  function openDropdown() {
+    const r = inputRef.current?.getBoundingClientRect();
+    if (r) setRect({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 240) });
+    setOpen(true);
+  }
+
+  // Same portal + outside-click/scroll-close mechanics as CategoryPicker —
+  // rendered outside the panel's scrolling body, so a fixed-position rect
+  // has to be invalidated by closing rather than tracked through a scroll.
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (inputRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    function handleScroll() {
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [open]);
+
+  function handleSelect(p: YnabPayee) {
+    setOpen(false);
+    onChange(p.name, p.id);
+  }
+
+  const q = payeeName.trim().toLowerCase();
+  const filtered = q ? payees.filter((p) => p.name.toLowerCase().includes(q)) : payees;
+
+  return (
+    <div className="ynab-category-picker">
+      <input
+        ref={inputRef}
+        className="settings-input"
+        placeholder="Payee"
+        value={payeeName}
+        onFocus={openDropdown}
+        onChange={(e) => {
+          onChange(e.target.value, null);
+          if (!open) openDropdown();
+        }}
+        disabled={disabled}
+      />
+      {open &&
+        rect &&
+        filtered.length > 0 &&
+        createPortal(
+          <div
+            className="ynab-category-dropdown"
+            ref={dropdownRef}
+            style={{ top: rect.top, left: rect.left, width: rect.width }}
+          >
+            {filtered.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`ynab-category-option ${p.id === payeeId ? "selected" : ""}`}
+                onClick={() => handleSelect(p)}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+}
+
 function MemoCell({
   transaction,
   onRefresh,
@@ -293,17 +393,20 @@ function TransactionRow({
 function NewTransactionForm({
   accounts,
   groupedCategories,
+  payees,
   onCreated,
   onCancel,
 }: {
   accounts: YnabAccount[];
   groupedCategories: [string, YnabCategory[]][];
+  payees: YnabPayee[];
   onCreated: () => Promise<void>;
   onCancel: () => void;
 }) {
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [date, setDate] = useState(todayIso());
   const [payeeName, setPayeeName] = useState("");
+  const [payeeId, setPayeeId] = useState<string | null>(null);
   const [outflow, setOutflow] = useState(true);
   const [amountText, setAmountText] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -327,6 +430,7 @@ function NewTransactionForm({
       date,
       amount: signedAmount,
       payeeName: payeeName.trim() || undefined,
+      payeeId: payeeId ?? undefined,
       categoryId: categoryId ?? undefined,
       memo: memo.trim() || undefined,
     });
@@ -357,11 +461,14 @@ function NewTransactionForm({
         value={date}
         onChange={(e) => setDate(e.target.value)}
       />
-      <input
-        className="settings-input"
-        placeholder="Payee"
-        value={payeeName}
-        onChange={(e) => setPayeeName(e.target.value)}
+      <PayeePicker
+        payeeName={payeeName}
+        payeeId={payeeId}
+        payees={payees}
+        onChange={(name, id) => {
+          setPayeeName(name);
+          setPayeeId(id);
+        }}
       />
       <div className="ynab-amount-group">
         <button
@@ -423,6 +530,7 @@ function NewTransactionForm({
 export default function YnabUnapprovedWidget({
   data,
   categories,
+  payees,
   accounts,
   onRefresh,
 }: YnabUnapprovedWidgetProps) {
@@ -440,6 +548,7 @@ export default function YnabUnapprovedWidget({
 
   const groupedCategories = categories?.ok ? groupCategoriesByGroup(categories.categories) : [];
   const accountList = accounts?.ok ? accounts.accounts : [];
+  const payeeList = payees?.ok ? payees.payees : [];
 
   const headerRight = (
     <div className="ynab-header-actions">
@@ -515,6 +624,7 @@ export default function YnabUnapprovedWidget({
         <NewTransactionForm
           accounts={accountList}
           groupedCategories={groupedCategories}
+          payees={payeeList}
           onCreated={async () => {
             setAdding(false);
             await onRefresh();

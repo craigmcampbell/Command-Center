@@ -188,6 +188,8 @@ const api: CommandCenterApi = {
     unapprovedTransactions: () => ipcRenderer.invoke("ynab:unapprovedTransactions"),
     scheduledTransactions: () => ipcRenderer.invoke("ynab:scheduledTransactions"),
     categories: () => ipcRenderer.invoke("ynab:categories"),
+    payees: () => ipcRenderer.invoke("ynab:payees"),
+    currentMonth: () => ipcRenderer.invoke("ynab:currentMonth"),
     approveTransaction: (transactionId: string) =>
       ipcRenderer.invoke("ynab:approveTransaction", transactionId),
     clearTransaction: (transactionId: string) =>
@@ -214,10 +216,15 @@ const api: CommandCenterApi = {
 
   cards: {
     list: () => ipcRenderer.invoke("cards:list"),
-    add: (name: string, creditLimit: number, apr: number) =>
-      ipcRenderer.invoke("cards:add", name, creditLimit, apr),
-    update: (id: number, name: string, creditLimit: number, apr: number) =>
-      ipcRenderer.invoke("cards:update", id, name, creditLimit, apr),
+    add: (name: string, creditLimit: number, apr: number, ynabAccountId: string | null) =>
+      ipcRenderer.invoke("cards:add", name, creditLimit, apr, ynabAccountId),
+    update: (
+      id: number,
+      name: string,
+      creditLimit: number,
+      apr: number,
+      ynabAccountId: string | null
+    ) => ipcRenderer.invoke("cards:update", id, name, creditLimit, apr, ynabAccountId),
     remove: (id: number) => ipcRenderer.invoke("cards:remove", id),
   },
 

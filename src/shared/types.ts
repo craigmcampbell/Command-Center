@@ -315,7 +315,7 @@ export interface CaptureHotkeyStatus {
   registered: boolean;
 }
 
-export type AlertKind = "ci" | "process" | "docker";
+export type AlertKind = "ci" | "process" | "docker" | "overspend";
 
 // One thing worth interrupting the user about. Produced by the renderer's
 // pure transition detector (renderer/src/lib/alerts.ts) and handed to main to
@@ -343,6 +343,7 @@ export interface NotificationSettings {
   ciFailure?: boolean;
   processCrash?: boolean;
   dockerExit?: boolean;
+  overspending?: boolean;
 }
 
 // Whether the OS will actually display notifications. `supported` is
@@ -729,6 +730,44 @@ export interface YnabCategoriesResult {
   categories: YnabCategory[];
 }
 
+// A payee YNAB already knows about — surfaced so the new-transaction form can
+// offer autocomplete instead of always minting a new payee from free text.
+// Transfer payees (moves between YNAB accounts) are filtered out server-side:
+// picking one wouldn't do what a normal payee pick does.
+export interface YnabPayee {
+  id: string;
+  name: string;
+}
+
+export interface YnabPayeesResult {
+  ok: boolean;
+  reason?: string;
+  payees: YnabPayee[];
+}
+
+// A single assignable category's numbers for the current budget month —
+// mirrors YnabCategory's own hidden/deleted/internal filtering (getCategories
+// is reused as the allowlist) so the two never drift on what counts as a
+// real category.
+export interface YnabMonthCategory {
+  id: string;
+  name: string;
+  groupName: string;
+  budgeted: number;
+  activity: number;
+  balance: number;
+}
+
+export interface YnabMonthResult {
+  ok: boolean;
+  reason?: string;
+  toBeBudgeted: number;
+  // Day count, not a dollar figure — null early in a budget's life before
+  // YNAB has enough history to compute it.
+  ageOfMoney: number | null;
+  categories: YnabMonthCategory[];
+}
+
 // A manually-tracked recurring bill — independent of YNAB's own scheduled
 // transactions, since not everything recurring is set up as a YNAB
 // schedule. dueDay is a plain day-of-month (1-31), not a real date: these
@@ -744,20 +783,27 @@ export interface BillItem {
 // A manually-tracked credit card — shown in the Finances tab's Cards
 // sub-tab alongside Bills. creditLimit and apr are plain numbers (dollars,
 // percent), not YNAB-sourced.
+// ynabAccountId optionally links this card to a real YNAB account for a live
+// balance/utilization display — creditLimit and apr stay manually-tracked
+// regardless of linking, since YNAB has no concept of either.
 export interface CardItem {
   id: number;
   name: string;
   creditLimit: number;
   apr: number;
+  ynabAccountId: string | null;
 }
 
 // Input for manually adding a transaction — amount is dollars, signed
-// (negative = outflow), converted to milliunits server-side.
+// (negative = outflow), converted to milliunits server-side. payeeId wins
+// over payeeName when a payee was picked from the autocomplete list; a typed
+// name with no id falls back to YNAB minting a new payee.
 export interface YnabNewTransactionInput {
   accountId: string;
   date: string;
   amount: number;
   payeeName?: string;
+  payeeId?: string;
   categoryId?: string;
   memo?: string;
 }
@@ -982,6 +1028,8 @@ export interface CommandCenterApi {
     unapprovedTransactions: () => Promise<YnabUnapprovedResult>;
     scheduledTransactions: () => Promise<YnabScheduledResult>;
     categories: () => Promise<YnabCategoriesResult>;
+    payees: () => Promise<YnabPayeesResult>;
+    currentMonth: () => Promise<YnabMonthResult>;
     approveTransaction: (transactionId: string) => Promise<ActionResult>;
     clearTransaction: (transactionId: string) => Promise<ActionResult>;
     setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
@@ -998,8 +1046,19 @@ export interface CommandCenterApi {
   };
   cards: {
     list: () => Promise<CardItem[]>;
-    add: (name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
-    update: (id: number, name: string, creditLimit: number, apr: number) => Promise<CardItem[]>;
+    add: (
+      name: string,
+      creditLimit: number,
+      apr: number,
+      ynabAccountId: string | null
+    ) => Promise<CardItem[]>;
+    update: (
+      id: number,
+      name: string,
+      creditLimit: number,
+      apr: number,
+      ynabAccountId: string | null
+    ) => Promise<CardItem[]>;
     remove: (id: number) => Promise<CardItem[]>;
   };
   notes: {
