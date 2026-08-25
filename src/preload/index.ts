@@ -117,22 +117,35 @@ const api: CommandCenterApi = {
   },
 
   habits: {
-    list: () => ipcRenderer.invoke("habits:list"),
-    add: (name: string, frequencyType: HabitFrequencyType, targetCount?: number) =>
-      ipcRenderer.invoke("habits:add", name, frequencyType, targetCount),
+    list: (includeArchived?: boolean) => ipcRenderer.invoke("habits:list", includeArchived),
+    add: (
+      name: string,
+      frequencyType: HabitFrequencyType,
+      targetCount?: number,
+      category?: string | null
+    ) => ipcRenderer.invoke("habits:add", name, frequencyType, targetCount, category),
     update: (
       id: number,
       name: string,
       frequencyType: HabitFrequencyType,
-      targetCount?: number
-    ) => ipcRenderer.invoke("habits:update", id, name, frequencyType, targetCount),
+      targetCount?: number,
+      category?: string | null
+    ) => ipcRenderer.invoke("habits:update", id, name, frequencyType, targetCount, category),
     remove: (id: number) => ipcRenderer.invoke("habits:remove", id),
+    archive: (id: number) => ipcRenderer.invoke("habits:archive", id),
+    restore: (id: number) => ipcRenderer.invoke("habits:restore", id),
     reorder: (orderedIds: number[]) => ipcRenderer.invoke("habits:reorder", orderedIds),
     getWeek: (weekStart?: string) => ipcRenderer.invoke("habits:getWeek", weekStart),
     toggle: (habitId: number, date: string) =>
       ipcRenderer.invoke("habits:toggle", habitId, date),
+    setCompletionNote: (habitId: number, date: string, note: string | null) =>
+      ipcRenderer.invoke("habits:setCompletionNote", habitId, date, note),
     trends: (habitId?: number, weeks?: number) =>
       ipcRenderer.invoke("habits:trends", habitId, weeks),
+    streaks: (habitId?: number) => ipcRenderer.invoke("habits:streaks", habitId),
+    categories: () => ipcRenderer.invoke("habits:categories"),
+    heatmap: (habitId: number, fromDate?: string, toDate?: string) =>
+      ipcRenderer.invoke("habits:heatmap", habitId, fromDate, toDate),
   },
 
   github: {

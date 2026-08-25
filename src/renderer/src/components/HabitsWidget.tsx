@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -17,19 +17,25 @@ import { CSS } from "@dnd-kit/utilities";
 import type {
   Habit,
   HabitFrequencyType,
-  HabitTrendResult,
+  HabitStreak,
   HabitWeekEntry,
   HabitWeekView,
 } from "../../../shared/types";
+import { useHabits } from "../hooks/useHabits";
 import Panel from "./Panel";
 import HabitTrendChart from "./HabitTrendChart";
+import HabitHeatmap from "./HabitHeatmap";
 import {
+  IconArchive,
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconFlame,
   IconGrip,
   IconPencil,
   IconPlus,
+  IconRefresh,
+  IconSkip,
   IconTrash,
   IconX,
 } from "./icons";
@@ -43,15 +49,6 @@ function formatWeekRange(weekStart: string, weekEnd: string): string {
   return `${startStr} – ${endStr}`;
 }
 
-function shiftWeek(weekStart: string, delta: number): string {
-  const d = new Date(weekStart + "T12:00:00");
-  d.setDate(d.getDate() + delta * 7);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 function frequencyLabel(type: HabitFrequencyType, target: number): string {
   switch (type) {
     case "daily":
@@ -63,14 +60,17 @@ function frequencyLabel(type: HabitFrequencyType, target: number): string {
   }
 }
 
-function reorderTrends(
-  trends: HabitTrendResult[],
-  habits: HabitWeekEntry[]
-): HabitTrendResult[] {
-  const byId = new Map(trends.map((t) => [t.habit.id, t]));
-  return habits
-    .map((h) => byId.get(h.habit.id))
-    .filter((t): t is HabitTrendResult => t != null);
+function visibleHabits(habits: HabitWeekEntry[], categoryFilter: string | null): HabitWeekEntry[] {
+  return categoryFilter ? habits.filter((h) => h.habit.category === categoryFilter) : habits;
+}
+
+/** Re-inserts a reordered filtered subset back into its original slots
+ *  within the full list, so dragging while a category filter is active
+ *  doesn't silently reorder habits outside the filter. */
+function mergeReordered(full: HabitWeekEntry[], reorderedSubset: HabitWeekEntry[]): HabitWeekEntry[] {
+  const subsetIds = new Set(reorderedSubset.map((h) => h.habit.id));
+  const queue = [...reorderedSubset];
+  return full.map((h) => (subsetIds.has(h.habit.id) ? queue.shift()! : h));
 }
 
 interface EditState {
@@ -78,24 +78,29 @@ interface EditState {
   name: string;
   frequencyType: HabitFrequencyType;
   targetCount: number;
+  category: string;
 }
 
 interface SortableHabitRowProps {
   entry: HabitWeekEntry;
   days: HabitWeekView["days"];
   todayIso: string;
+  streak?: HabitStreak;
   onToggle: (habitId: number, date: string) => void;
+  onNote: (habitId: number, date: string, existingNote: string | undefined) => void;
   onEdit: (habit: Habit) => void;
-  onRemove: (habit: Habit) => void;
+  onArchive: (habit: Habit) => void;
 }
 
 function SortableHabitRow({
   entry,
   days,
   todayIso,
+  streak,
   onToggle,
+  onNote,
   onEdit,
-  onRemove,
+  onArchive,
 }: SortableHabitRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: entry.habit.id,
@@ -125,23 +130,37 @@ function SortableHabitRow({
       </td>
       <td className="habits-col-name">
         <span className="habit-name">{entry.habit.name}</span>
+        {streak && streak.current > 0 && (
+          <span className="habit-streak-badge" title={`Longest streak: ${streak.longest}`}>
+            <IconFlame size={10} />
+            {streak.current}
+          </span>
+        )}
         <span className="habit-freq-tag">
           {frequencyLabel(entry.habit.frequencyType, entry.habit.targetCount)}
         </span>
+        {entry.habit.category && <span className="habit-category-tag">{entry.habit.category}</span>}
       </td>
       {days.map((day) => {
-        const done = entry.completions[day.date];
+        const status = entry.completions[day.date];
+        const note = entry.notes[day.date];
         const isToday = day.date === todayIso;
         return (
           <td key={day.date} className={`habits-col-day ${isToday ? "today" : ""}`}>
             <button
               type="button"
-              className={`habit-check ${done ? "done" : ""}`}
+              className={`habit-check ${status ?? ""} ${note ? "has-note" : ""}`}
               onClick={() => onToggle(entry.habit.id, day.date)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onNote(entry.habit.id, day.date, note);
+              }}
               aria-label={`${entry.habit.name} on ${day.label}`}
-              aria-pressed={done}
+              aria-pressed={status === "done"}
+              title={note ?? "Right-click to add a note"}
             >
-              {done && <IconCheck size={11} />}
+              {status === "done" && <IconCheck size={11} />}
+              {status === "skipped" && <IconSkip size={9} />}
             </button>
           </td>
         );
@@ -165,10 +184,10 @@ function SortableHabitRow({
           <button
             type="button"
             className="row-action danger"
-            onClick={() => onRemove(entry.habit)}
-            title="Delete habit"
+            onClick={() => onArchive(entry.habit)}
+            title="Archive habit"
           >
-            <IconTrash />
+            <IconArchive />
           </button>
         </div>
       </td>
@@ -177,44 +196,61 @@ function SortableHabitRow({
 }
 
 export default function HabitsWidget() {
-  const [week, setWeek] = useState<HabitWeekView | null>(null);
-  const [trends, setTrends] = useState<HabitTrendResult[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const {
+    week,
+    trends,
+    streaks,
+    categories,
+    archivedHabits,
+    loaded,
+    heatmapHabitId,
+    heatmapData,
+    navigate,
+    goToday,
+    toggle,
+    setNote,
+    reorderLocal,
+    persistReorder,
+    add,
+    update,
+    archive,
+    restore,
+    remove,
+    loadArchived,
+    setHeatmapHabitId,
+  } = useHabits();
+
   const [newName, setNewName] = useState("");
   const [newFreq, setNewFreq] = useState<HabitFrequencyType>("daily");
   const [newTarget, setNewTarget] = useState(3);
+  const [newCategory, setNewCategory] = useState("");
   const [editing, setEditing] = useState<EditState | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const load = useCallback(async (weekStart?: string) => {
-    const [weekData, trendData] = await Promise.all([
-      window.api.habits.getWeek(weekStart),
-      window.api.habits.trends(),
-    ]);
-    setWeek(weekData);
-    setTrends(trendData as HabitTrendResult[]);
-    setLoaded(true);
-  }, []);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (week && week.habits.length > 0 && heatmapHabitId == null) {
+      void setHeatmapHabitId(week.habits[0].habit.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week]);
 
-  async function navigate(delta: number) {
-    if (!week) return;
-    await load(shiftWeek(week.weekStart, delta));
-  }
-
-  async function goToday() {
-    await load();
+  function toggleArchivedSection() {
+    const next = !showArchived;
+    setShowArchived(next);
+    if (next && archivedHabits === null) void loadArchived();
   }
 
   async function handleToggle(habitId: number, date: string) {
-    const updated = await window.api.habits.toggle(habitId, date);
-    setWeek(updated);
-    const trendData = await window.api.habits.trends();
-    setTrends(trendData as HabitTrendResult[]);
+    await toggle(habitId, date);
+  }
+
+  async function handleNote(habitId: number, date: string, existingNote: string | undefined) {
+    const next = window.prompt("Note for this day:", existingNote ?? "");
+    if (next === null) return;
+    await setNote(habitId, date, next.trim() || null);
   }
 
   async function handleDragEnd(e: DragEndEvent) {
@@ -222,46 +258,68 @@ export default function HabitsWidget() {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
 
-    const oldIndex = week.habits.findIndex((h) => h.habit.id === active.id);
-    const newIndex = week.habits.findIndex((h) => h.habit.id === over.id);
+    const visible = visibleHabits(week.habits, categoryFilter);
+    const oldIndex = visible.findIndex((h) => h.habit.id === active.id);
+    const newIndex = visible.findIndex((h) => h.habit.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
 
-    const reorderedHabits = arrayMove(week.habits, oldIndex, newIndex);
-    setWeek({ ...week, habits: reorderedHabits });
-    setTrends(reorderTrends(trends, reorderedHabits));
-    await window.api.habits.reorder(reorderedHabits.map((h) => h.habit.id));
+    const reorderedVisible = arrayMove(visible, oldIndex, newIndex);
+    const reorderedFull = categoryFilter
+      ? mergeReordered(week.habits, reorderedVisible)
+      : reorderedVisible;
+
+    reorderLocal(reorderedFull);
+    await persistReorder(reorderedFull.map((h) => h.habit.id));
   }
 
   async function handleAdd() {
     if (!newName.trim()) return;
-    await window.api.habits.add(
+    await add(
       newName,
       newFreq,
-      newFreq === "times_per_week" ? newTarget : undefined
+      newFreq === "times_per_week" ? newTarget : undefined,
+      newCategory.trim() || null
     );
     setNewName("");
     setNewFreq("daily");
     setNewTarget(3);
+    setNewCategory("");
     setShowAdd(false);
-    await load(week?.weekStart);
   }
 
   async function handleUpdate() {
     if (!editing || !editing.name.trim()) return;
-    await window.api.habits.update(
+    await update(
       editing.id,
       editing.name,
       editing.frequencyType,
-      editing.frequencyType === "times_per_week" ? editing.targetCount : undefined
+      editing.frequencyType === "times_per_week" ? editing.targetCount : undefined,
+      editing.category.trim() || null
     );
     setEditing(null);
-    await load(week?.weekStart);
   }
 
-  async function handleRemove(habit: Habit) {
-    await window.api.habits.remove(habit.id);
+  async function handleArchive(habit: Habit) {
+    if (
+      !window.confirm(
+        `Archive "${habit.name}"? It'll disappear from the week grid but its history is kept.`
+      )
+    )
+      return;
     if (editing?.id === habit.id) setEditing(null);
-    await load(week?.weekStart);
+    await archive(habit.id);
+  }
+
+  async function handleRestore(habit: Habit) {
+    await restore(habit.id);
+  }
+
+  async function handleDeletePermanently(habit: Habit) {
+    if (
+      !window.confirm(`Permanently delete "${habit.name}" and all its history? This can't be undone.`)
+    )
+      return;
+    await remove(habit.id);
   }
 
   function startEdit(habit: Habit) {
@@ -270,6 +328,7 @@ export default function HabitsWidget() {
       name: habit.name,
       frequencyType: habit.frequencyType,
       targetCount: habit.targetCount,
+      category: habit.category ?? "",
     });
     setShowAdd(false);
   }
@@ -290,12 +349,28 @@ export default function HabitsWidget() {
     return `${y}-${m}-${day}`;
   })();
 
+  const rows = visibleHabits(week.habits, categoryFilter);
+
   return (
     <div className="habits-layout">
       <Panel
         title="This Week"
         headerRight={
           <div className="habits-week-nav">
+            {categories.length > 0 && (
+              <select
+                className="habits-category-filter"
+                value={categoryFilter ?? ""}
+                onChange={(e) => setCategoryFilter(e.target.value || null)}
+              >
+                <option value="">All categories</option>
+                {categories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            )}
             <button type="button" className="daily-nav-btn" onClick={() => navigate(-1)} title="Previous week">
               <IconChevronLeft />
             </button>
@@ -311,6 +386,8 @@ export default function HabitsWidget() {
       >
         {week.habits.length === 0 && !showAdd ? (
           <p className="muted">No habits yet. Add one to get started.</p>
+        ) : rows.length === 0 ? (
+          <p className="muted">No habits in this category.</p>
         ) : (
           <div className="habits-grid-wrap">
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -332,19 +409,21 @@ export default function HabitsWidget() {
                   </tr>
                 </thead>
                 <SortableContext
-                  items={week.habits.map((h) => h.habit.id)}
+                  items={rows.map((h) => h.habit.id)}
                   strategy={verticalListSortingStrategy}
                 >
                   <tbody>
-                    {week.habits.map((entry) => (
+                    {rows.map((entry) => (
                       <SortableHabitRow
                         key={entry.habit.id}
                         entry={entry}
                         days={week.days}
                         todayIso={todayIso}
+                        streak={streaks.get(entry.habit.id)}
                         onToggle={handleToggle}
+                        onNote={handleNote}
                         onEdit={startEdit}
-                        onRemove={handleRemove}
+                        onArchive={handleArchive}
                       />
                     ))}
                   </tbody>
@@ -387,6 +466,12 @@ export default function HabitsWidget() {
                 className="habit-target-input"
               />
             )}
+            <input
+              value={editing.category}
+              onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+              placeholder="Category (optional)"
+              list="habit-categories"
+            />
             <button type="button" className="habit-form-btn save" onClick={handleUpdate}>
               Save
             </button>
@@ -423,6 +508,12 @@ export default function HabitsWidget() {
                 className="habit-target-input"
               />
             )}
+            <input
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+              placeholder="Category (optional)"
+              list="habit-categories"
+            />
             <button type="button" className="habit-form-btn save" onClick={handleAdd} disabled={!newName.trim()}>
               <IconPlus size={12} />
               Add
@@ -437,17 +528,91 @@ export default function HabitsWidget() {
             Add habit
           </button>
         )}
+
+        <datalist id="habit-categories">
+          {categories.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
       </Panel>
 
       {trends.length > 0 && (
         <Panel title="Trends — last 12 weeks">
           <div className="habit-trends-grid">
             {trends.map((t) => (
-              <HabitTrendChart key={t.habit.id} trend={t} />
+              <HabitTrendChart key={t.habit.id} trend={t} streak={streaks.get(t.habit.id)} />
             ))}
           </div>
         </Panel>
       )}
+
+      {week.habits.length > 0 && (
+        <Panel
+          title="Year in Review"
+          headerRight={
+            <select
+              value={heatmapHabitId ?? ""}
+              onChange={(e) => void setHeatmapHabitId(e.target.value ? Number(e.target.value) : null)}
+            >
+              {week.habits.map((h) => (
+                <option key={h.habit.id} value={h.habit.id}>
+                  {h.habit.name}
+                </option>
+              ))}
+            </select>
+          }
+        >
+          {heatmapData ? (
+            <HabitHeatmap data={heatmapData} />
+          ) : (
+            <p className="muted">Pick a habit to see its year at a glance.</p>
+          )}
+        </Panel>
+      )}
+
+      <Panel
+        title="Archived"
+        headerRight={
+          <button type="button" className="daily-nav-btn" onClick={toggleArchivedSection}>
+            {showArchived ? "Hide" : "Show"}
+          </button>
+        }
+      >
+        {!showArchived ? (
+          <p className="muted">Paused habits keep their history here.</p>
+        ) : archivedHabits === null ? (
+          <p className="muted">Loading…</p>
+        ) : archivedHabits.length === 0 ? (
+          <p className="muted">No archived habits.</p>
+        ) : (
+          <ul className="habit-archived-list">
+            {archivedHabits.map((h) => (
+              <li key={h.id} className="habit-archived-row">
+                <span className="habit-name">{h.name}</span>
+                <span className="habit-freq-tag">{frequencyLabel(h.frequencyType, h.targetCount)}</span>
+                <div className="habits-row-actions habit-archived-actions">
+                  <button
+                    type="button"
+                    className="row-action"
+                    onClick={() => handleRestore(h)}
+                    title="Restore"
+                  >
+                    <IconRefresh size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="row-action danger"
+                    onClick={() => handleDeletePermanently(h)}
+                    title="Delete permanently"
+                  >
+                    <IconTrash />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 }

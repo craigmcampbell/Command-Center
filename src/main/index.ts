@@ -55,11 +55,17 @@ import {
   addHabit,
   updateHabit,
   removeHabit,
+  setHabitArchived,
+  getHabitCategories,
   reorderHabits,
   getWeekView,
   toggleCompletion,
+  setCompletionNote,
   getHabitTrends,
   getAllHabitTrends,
+  getHabitStreak,
+  getAllHabitStreaks,
+  getHabitHeatmap,
 } from "./services/habits";
 import {
   listReaderDocuments,
@@ -616,11 +622,16 @@ ipcMain.handle("scratchpad:clear", () => {
 });
 
 // Habit tracker: SQLite-backed habits + per-day completions.
-ipcMain.handle("habits:list", () => listHabits());
+ipcMain.handle("habits:list", (_evt, includeArchived?: boolean) => listHabits(includeArchived));
 ipcMain.handle(
   "habits:add",
-  (_evt, name: string, frequencyType: HabitFrequencyType, targetCount?: number) =>
-    addHabit(name, frequencyType, targetCount)
+  (
+    _evt,
+    name: string,
+    frequencyType: HabitFrequencyType,
+    targetCount?: number,
+    category?: string | null
+  ) => addHabit(name, frequencyType, targetCount, category)
 );
 ipcMain.handle(
   "habits:update",
@@ -629,19 +640,37 @@ ipcMain.handle(
     id: number,
     name: string,
     frequencyType: HabitFrequencyType,
-    targetCount?: number
-  ) => updateHabit(id, name, frequencyType, targetCount)
+    targetCount?: number,
+    category?: string | null
+  ) => updateHabit(id, name, frequencyType, targetCount, category)
 );
 ipcMain.handle("habits:remove", (_evt, id: number) => removeHabit(id));
+ipcMain.handle("habits:archive", (_evt, id: number) => setHabitArchived(id, true));
+ipcMain.handle("habits:restore", (_evt, id: number) => setHabitArchived(id, false));
+ipcMain.handle("habits:categories", () => getHabitCategories());
 ipcMain.handle("habits:reorder", (_evt, orderedIds: number[]) => reorderHabits(orderedIds));
 ipcMain.handle("habits:getWeek", (_evt, weekStart?: string) => getWeekView(weekStart));
 ipcMain.handle("habits:toggle", (_evt, habitId: number, date: string) =>
   toggleCompletion(habitId, date)
 );
+ipcMain.handle(
+  "habits:setCompletionNote",
+  (_evt, habitId: number, date: string, note: string | null) =>
+    setCompletionNote(habitId, date, note)
+);
 ipcMain.handle("habits:trends", (_evt, habitId?: number, weeks?: number) => {
   if (habitId != null) return getHabitTrends(habitId, weeks ?? 12);
   return getAllHabitTrends(weeks ?? 12);
 });
+ipcMain.handle("habits:streaks", (_evt, habitId?: number) => {
+  if (habitId != null) return getHabitStreak(habitId);
+  return getAllHabitStreaks();
+});
+ipcMain.handle(
+  "habits:heatmap",
+  (_evt, habitId: number, fromDate?: string, toDate?: string) =>
+    getHabitHeatmap(habitId, fromDate, toDate)
+);
 
 // Managed local processes (Development tab): start/stop/tail arbitrary
 // long-running tools configured in Settings. Not a terminal — no

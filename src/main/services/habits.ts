@@ -1,10 +1,14 @@
-// Habit tracker — habits + per-day completions in SQLite. Weekly views and
-// trend data are computed from completions at read time.
+// Habit tracker — habits + per-day completions in SQLite. Weekly views,
+// trend data, streaks, and the year heatmap are all computed from
+// completions at read time; nothing is cached in the schema.
 
 import { getDatabase } from "./db";
 import type {
   Habit,
+  HabitCompletionStatus,
   HabitFrequencyType,
+  HabitHeatmapResult,
+  HabitStreak,
   HabitTrendResult,
   HabitWeekView,
 } from "../../shared/types";
@@ -30,6 +34,34 @@ export function initHabits(): void {
   )`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_date
     ON habit_completions(habit_id, completed_date)`);
+
+  // Additive migrations for columns added after these tables first shipped —
+  // CREATE TABLE IF NOT EXISTS alone won't backfill them on an existing
+  // install. Each ALTER TABLE is independent and safe to re-run every boot:
+  // SQLite errors on a duplicate column, which just means a prior boot
+  // already added it. Matches the pattern in services/bills.ts.
+  try {
+    db.exec(`ALTER TABLE habits ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // already migrated
+  }
+  try {
+    db.exec(`ALTER TABLE habits ADD COLUMN category TEXT`);
+  } catch {
+    // already migrated
+  }
+  try {
+    db.exec(
+      `ALTER TABLE habit_completions ADD COLUMN status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('done','skipped'))`
+    );
+  } catch {
+    // already migrated
+  }
+  try {
+    db.exec(`ALTER TABLE habit_completions ADD COLUMN note TEXT`);
+  } catch {
+    // already migrated
+  }
 }
 
 function parseLocalDate(iso: string): Date {
@@ -42,6 +74,18 @@ function formatLocalDate(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+/** Every date from `fromDate` to `toDate` inclusive, ascending. */
+function dateRangeDays(fromDate: string, toDate: string): string[] {
+  const days: string[] = [];
+  const cursor = parseLocalDate(fromDate);
+  const end = parseLocalDate(toDate);
+  while (cursor <= end) {
+    days.push(formatLocalDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
 }
 
 /** Monday of the week containing `date` (local time). */
@@ -83,6 +127,8 @@ function rowToHabit(row: {
   target_count: number;
   sort_order: number;
   created_at: number;
+  archived: number;
+  category: string | null;
 }): Habit {
   return {
     id: row.id,
@@ -91,28 +137,40 @@ function rowToHabit(row: {
     targetCount: row.target_count,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
+    archived: !!row.archived,
+    category: row.category,
   };
 }
 
-function listHabitRows(): Habit[] {
+const HABIT_COLUMNS = `id, name, frequency_type, target_count, sort_order, created_at, archived, category`;
+
+function listHabitRows(includeArchived = false): Habit[] {
+  const where = includeArchived ? "" : "WHERE archived = 0";
   return (
     getDatabase()
       .prepare(
-        `SELECT id, name, frequency_type, target_count, sort_order, created_at
-         FROM habits ORDER BY sort_order ASC, id ASC`
+        `SELECT ${HABIT_COLUMNS} FROM habits ${where} ORDER BY sort_order ASC, id ASC`
       )
       .all() as Parameters<typeof rowToHabit>[0][]
   ).map(rowToHabit);
 }
 
-export function listHabits(): Habit[] {
-  return listHabitRows();
+function getHabitRow(id: number): Habit | undefined {
+  const row = getDatabase()
+    .prepare(`SELECT ${HABIT_COLUMNS} FROM habits WHERE id = ?`)
+    .get(id) as Parameters<typeof rowToHabit>[0] | undefined;
+  return row ? rowToHabit(row) : undefined;
+}
+
+export function listHabits(includeArchived = false): Habit[] {
+  return listHabitRows(includeArchived);
 }
 
 export function addHabit(
   name: string,
   frequencyType: HabitFrequencyType,
-  targetCount = 1
+  targetCount = 1,
+  category?: string | null
 ): Habit[] {
   const db = getDatabase();
   const trimmed = name.trim();
@@ -125,8 +183,8 @@ export function addHabit(
     .get() as { maxOrder: number };
 
   db.prepare(
-    `INSERT INTO habits (name, frequency_type, target_count, sort_order) VALUES (?, ?, ?, ?)`
-  ).run(trimmed, frequencyType, count, maxOrder + 1);
+    `INSERT INTO habits (name, frequency_type, target_count, sort_order, category) VALUES (?, ?, ?, ?, ?)`
+  ).run(trimmed, frequencyType, count, maxOrder + 1, category?.trim() || null);
 
   return listHabitRows();
 }
@@ -135,7 +193,8 @@ export function updateHabit(
   id: number,
   name: string,
   frequencyType: HabitFrequencyType,
-  targetCount = 1
+  targetCount = 1,
+  category?: string | null
 ): Habit[] {
   const trimmed = name.trim();
   if (!trimmed) return listHabitRows();
@@ -144,16 +203,35 @@ export function updateHabit(
     frequencyType === "times_per_week" ? Math.max(1, Math.min(7, targetCount)) : 1;
   getDatabase()
     .prepare(
-      `UPDATE habits SET name = ?, frequency_type = ?, target_count = ? WHERE id = ?`
+      `UPDATE habits SET name = ?, frequency_type = ?, target_count = ?, category = ? WHERE id = ?`
     )
-    .run(trimmed, frequencyType, count, id);
+    .run(trimmed, frequencyType, count, category?.trim() || null, id);
 
   return listHabitRows();
 }
 
+/** Permanently deletes a habit and (via cascade) all its completions. Only
+ *  reachable from the archived-habits UI — archiving is the everyday path. */
 export function removeHabit(id: number): Habit[] {
   getDatabase().prepare(`DELETE FROM habits WHERE id = ?`).run(id);
   return listHabitRows();
+}
+
+export function setHabitArchived(id: number, archived: boolean): Habit[] {
+  getDatabase()
+    .prepare(`UPDATE habits SET archived = ? WHERE id = ?`)
+    .run(archived ? 1 : 0, id);
+  return listHabitRows();
+}
+
+export function getHabitCategories(): string[] {
+  return (
+    getDatabase()
+      .prepare(
+        `SELECT DISTINCT category FROM habits WHERE category IS NOT NULL AND category != '' ORDER BY category ASC`
+      )
+      .all() as { category: string }[]
+  ).map((r) => r.category);
 }
 
 export function reorderHabits(orderedIds: number[]): Habit[] {
@@ -168,26 +246,31 @@ export function reorderHabits(orderedIds: number[]): Habit[] {
 function completionsForWeek(
   habitIds: number[],
   weekDates: string[]
-): Map<number, Set<string>> {
-  const map = new Map<number, Set<string>>();
+): Map<number, Map<string, { status: HabitCompletionStatus; note: string | null }>> {
+  const map = new Map<number, Map<string, { status: HabitCompletionStatus; note: string | null }>>();
   if (habitIds.length === 0) return map;
 
   const placeholders = habitIds.map(() => "?").join(", ");
   const datePlaceholders = weekDates.map(() => "?").join(", ");
   const rows = getDatabase()
     .prepare(
-      `SELECT habit_id, completed_date FROM habit_completions
+      `SELECT habit_id, completed_date, status, note FROM habit_completions
        WHERE habit_id IN (${placeholders}) AND completed_date IN (${datePlaceholders})`
     )
-    .all(...habitIds, ...weekDates) as { habit_id: number; completed_date: string }[];
+    .all(...habitIds, ...weekDates) as {
+    habit_id: number;
+    completed_date: string;
+    status: HabitCompletionStatus;
+    note: string | null;
+  }[];
 
   for (const row of rows) {
-    let set = map.get(row.habit_id);
-    if (!set) {
-      set = new Set();
-      map.set(row.habit_id, set);
+    let inner = map.get(row.habit_id);
+    if (!inner) {
+      inner = new Map();
+      map.set(row.habit_id, inner);
     }
-    set.add(row.completed_date);
+    inner.set(row.completed_date, { status: row.status, note: row.note });
   }
   return map;
 }
@@ -209,16 +292,21 @@ export function getWeekView(weekStart?: string): HabitWeekView {
       label: parseLocalDate(date).toLocaleDateString("en-US", { weekday: "short" }),
     })),
     habits: habits.map((habit) => {
-      const done = completionMap.get(habit.id) ?? new Set<string>();
-      const completions: Record<string, boolean> = {};
+      const entries = completionMap.get(habit.id) ?? new Map();
+      const completions: Record<string, HabitCompletionStatus | undefined> = {};
+      const notes: Record<string, string> = {};
+      let weekCount = 0;
       for (const date of dates) {
-        completions[date] = done.has(date);
+        const entry = entries.get(date);
+        completions[date] = entry?.status;
+        if (entry?.status === "done") weekCount += 1;
+        if (entry?.note) notes[date] = entry.note;
       }
-      const weekCount = done.size;
       const target = weekTarget(habit);
       return {
         habit,
         completions,
+        notes,
         weekCount,
         weekTarget: target,
         goalMet: goalMet(habit, weekCount),
@@ -227,36 +315,44 @@ export function getWeekView(weekStart?: string): HabitWeekView {
   };
 }
 
+/** Cycles a day's status: no row -> done -> skipped -> no row. */
 export function toggleCompletion(habitId: number, date: string): HabitWeekView {
   const db = getDatabase();
   const existing = db
-    .prepare(`SELECT id FROM habit_completions WHERE habit_id = ? AND completed_date = ?`)
-    .get(habitId, date) as { id: number } | undefined;
+    .prepare(`SELECT id, status FROM habit_completions WHERE habit_id = ? AND completed_date = ?`)
+    .get(habitId, date) as { id: number; status: HabitCompletionStatus } | undefined;
 
-  if (existing) {
-    db.prepare(`DELETE FROM habit_completions WHERE id = ?`).run(existing.id);
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO habit_completions (habit_id, completed_date, status) VALUES (?, ?, 'done')`
+    ).run(habitId, date);
+  } else if (existing.status === "done") {
+    db.prepare(`UPDATE habit_completions SET status = 'skipped' WHERE id = ?`).run(existing.id);
   } else {
-    db.prepare(`INSERT INTO habit_completions (habit_id, completed_date) VALUES (?, ?)`).run(
-      habitId,
-      date
-    );
+    db.prepare(`DELETE FROM habit_completions WHERE id = ?`).run(existing.id);
   }
 
   const weekStart = getWeekStart(parseLocalDate(date));
   return getWeekView(weekStart);
 }
 
+/** Sets or clears the note on an existing completion. No-op if the day has
+ *  no completion row yet — a note only makes sense on a done/skipped day. */
+export function setCompletionNote(
+  habitId: number,
+  date: string,
+  note: string | null
+): HabitWeekView {
+  getDatabase()
+    .prepare(`UPDATE habit_completions SET note = ? WHERE habit_id = ? AND completed_date = ?`)
+    .run(note?.trim() || null, habitId, date);
+  return getWeekView(getWeekStart(parseLocalDate(date)));
+}
+
 export function getHabitTrends(habitId: number, numWeeks = 12): HabitTrendResult | null {
-  const row = getDatabase()
-    .prepare(
-      `SELECT id, name, frequency_type, target_count, sort_order, created_at
-       FROM habits WHERE id = ?`
-    )
-    .get(habitId) as Parameters<typeof rowToHabit>[0] | undefined;
+  const habit = getHabitRow(habitId);
+  if (!habit) return null;
 
-  if (!row) return null;
-
-  const habit = rowToHabit(row);
   const currentWeekStart = getWeekStart();
   const weeks: HabitTrendResult["weeks"] = [];
 
@@ -269,7 +365,7 @@ export function getHabitTrends(habitId: number, numWeeks = 12): HabitTrendResult
     const { count } = getDatabase()
       .prepare(
         `SELECT COUNT(*) as count FROM habit_completions
-         WHERE habit_id = ? AND completed_date IN (${dates.map(() => "?").join(", ")})`
+         WHERE habit_id = ? AND status = 'done' AND completed_date IN (${dates.map(() => "?").join(", ")})`
       )
       .get(habitId, ...dates) as { count: number };
 
@@ -296,4 +392,175 @@ export function getAllHabitTrends(numWeeks = 12): HabitTrendResult[] {
   return listHabitRows()
     .map((h) => getHabitTrends(h.id, numWeeks))
     .filter((t): t is HabitTrendResult => t !== null);
+}
+
+/** Raw completion history for a habit, ascending by date. Shared by the
+ *  streak calculator and the heatmap — both want the full per-day record
+ *  rather than `getHabitTrends`'s per-week aggregation. */
+export function listCompletions(
+  habitId: number,
+  fromDate?: string,
+  toDate?: string
+): { date: string; status: HabitCompletionStatus }[] {
+  const db = getDatabase();
+  if (fromDate && toDate) {
+    return db
+      .prepare(
+        `SELECT completed_date as date, status FROM habit_completions
+         WHERE habit_id = ? AND completed_date BETWEEN ? AND ? ORDER BY completed_date ASC`
+      )
+      .all(habitId, fromDate, toDate) as { date: string; status: HabitCompletionStatus }[];
+  }
+  return db
+    .prepare(
+      `SELECT completed_date as date, status FROM habit_completions
+       WHERE habit_id = ? ORDER BY completed_date ASC`
+    )
+    .all(habitId) as { date: string; status: HabitCompletionStatus }[];
+}
+
+/** Daily-frequency streak: walk day by day. `done` continues/increments the
+ *  run, `skipped` is neutral (neither breaks nor increments it), a day with
+ *  no row breaks it. Today having no row yet is never itself a break —
+ *  evaluation of the current streak starts at yesterday in that case. */
+function dailyStreak(habit: Habit, completions: Map<string, HabitCompletionStatus>): HabitStreak {
+  const today = formatLocalDate(new Date());
+  const createdDate = formatLocalDate(new Date(habit.createdAt * 1000));
+  const start = createdDate < today ? createdDate : today;
+  const days = dateRangeDays(start, today);
+
+  let longest = 0;
+  let running = 0;
+  for (const day of days) {
+    const status = completions.get(day);
+    if (status === "done") {
+      running += 1;
+      longest = Math.max(longest, running);
+    } else if (status !== "skipped") {
+      running = 0;
+    }
+  }
+
+  let current = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    const day = days[i];
+    const status = completions.get(day);
+    if (day === today && status === undefined) continue;
+    if (status === "done") {
+      current += 1;
+    } else if (status === "skipped") {
+      continue;
+    } else {
+      break;
+    }
+  }
+
+  return { habitId: habit.id, current, longest };
+}
+
+/** Weekly/times-per-week streak: consecutive weeks where the done-only count
+ *  met the habit's weekly target — the same definition `getWeekView` uses
+ *  for `goalMet`. The current, still-in-progress week never counts as a
+ *  break just for not having met goal yet; it's included only if it already
+ *  has. */
+function weeklyStreak(habit: Habit, completions: Map<string, HabitCompletionStatus>): HabitStreak {
+  const target = weekTarget(habit);
+  const currentWeekStart = getWeekStart();
+  const createdWeekStart = getWeekStart(new Date(habit.createdAt * 1000));
+
+  const weekStarts: string[] = [];
+  const cursor = parseLocalDate(createdWeekStart);
+  const currentStart = parseLocalDate(currentWeekStart);
+  while (cursor <= currentStart) {
+    weekStarts.push(formatLocalDate(cursor));
+    cursor.setDate(cursor.getDate() + 7);
+  }
+
+  const metCache = new Map<string, boolean>();
+  function weekMet(weekStart: string): boolean {
+    let met = metCache.get(weekStart);
+    if (met !== undefined) return met;
+    let count = 0;
+    for (const d of getWeekDates(weekStart)) {
+      if (completions.get(d) === "done") count += 1;
+    }
+    met = count >= target;
+    metCache.set(weekStart, met);
+    return met;
+  }
+
+  const elapsedWeeks = weekStarts.filter((ws) => ws !== currentWeekStart);
+  let longest = 0;
+  let running = 0;
+  for (const ws of elapsedWeeks) {
+    if (weekMet(ws)) {
+      running += 1;
+      longest = Math.max(longest, running);
+    } else {
+      running = 0;
+    }
+  }
+  if (weekMet(currentWeekStart)) {
+    running += 1;
+    longest = Math.max(longest, running);
+  }
+
+  const currentWeekMet = weekMet(currentWeekStart);
+  let current = currentWeekMet ? 1 : 0;
+  for (let i = elapsedWeeks.length - 1; i >= 0; i--) {
+    if (weekMet(elapsedWeeks[i])) {
+      current += 1;
+    } else {
+      break;
+    }
+  }
+
+  return { habitId: habit.id, current, longest };
+}
+
+export function getHabitStreak(habitId: number): HabitStreak | null {
+  const habit = getHabitRow(habitId);
+  if (!habit) return null;
+  const completions = new Map(listCompletions(habitId).map((c) => [c.date, c.status]));
+  return habit.frequencyType === "daily"
+    ? dailyStreak(habit, completions)
+    : weeklyStreak(habit, completions);
+}
+
+/** Streaks for active (non-archived) habits only. */
+export function getAllHabitStreaks(): HabitStreak[] {
+  return listHabitRows()
+    .map((h) => getHabitStreak(h.id))
+    .filter((s): s is HabitStreak => s !== null);
+}
+
+export function getHabitHeatmap(
+  habitId: number,
+  fromDate?: string,
+  toDate?: string
+): HabitHeatmapResult | null {
+  const habit = getHabitRow(habitId);
+  if (!habit) return null;
+
+  const to = toDate ?? formatLocalDate(new Date());
+  const from =
+    fromDate ??
+    (() => {
+      const d = parseLocalDate(to);
+      d.setDate(d.getDate() - 364);
+      return formatLocalDate(d);
+    })();
+
+  const completions = new Map(listCompletions(habitId, from, to).map((c) => [c.date, c.status]));
+
+  let totalDone = 0;
+  let totalSkipped = 0;
+  const days = dateRangeDays(from, to).map((date) => {
+    const status = completions.get(date) ?? null;
+    if (status === "done") totalDone += 1;
+    else if (status === "skipped") totalSkipped += 1;
+    return { date, status };
+  });
+
+  return { habit, days, totalDone, totalSkipped };
 }

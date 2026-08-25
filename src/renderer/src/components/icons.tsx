@@ -172,6 +172,22 @@ export function IconArchive({ size = 13, className }: IconProps) {
   );
 }
 
+export function IconSkip({ size = 11, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+export function IconFlame({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M12 2.5c1 3 -3 4.5 -3 8a3 3 0 0 0 6 0c0-1.2-.6-1.9-1-2.5.9.3 3 1.7 3 5a5 5 0 0 1-10 0c0-4.5 3-6.5 5-10.5Z" />
+    </svg>
+  );
+}
+
 export function IconGear({ size = 15, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>

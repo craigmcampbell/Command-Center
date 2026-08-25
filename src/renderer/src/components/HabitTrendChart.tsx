@@ -1,10 +1,12 @@
-import type { HabitTrendResult } from "../../../shared/types";
+import type { HabitStreak, HabitTrendResult } from "../../../shared/types";
+import { IconFlame } from "./icons";
 
 interface HabitTrendChartProps {
   trend: HabitTrendResult;
+  streak?: HabitStreak;
 }
 
-export default function HabitTrendChart({ trend }: HabitTrendChartProps) {
+export default function HabitTrendChart({ trend, streak }: HabitTrendChartProps) {
   const { habit, weeks } = trend;
   const barMaxHeight = 48;
 
@@ -22,6 +24,15 @@ export default function HabitTrendChart({ trend }: HabitTrendChartProps) {
       <div className="habit-trend-head">
         <span className="habit-trend-name">{habit.name}</span>
         <span className="habit-trend-meta">
+          {streak && streak.current > 0 && (
+            <span
+              className="habit-streak-badge"
+              title={`Longest streak: ${streak.longest}`}
+            >
+              <IconFlame size={10} />
+              {streak.current}
+            </span>
+          )}
           {freqLabel} · {metWeeks}/{weeks.length} weeks
         </span>
       </div>
