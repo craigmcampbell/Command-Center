@@ -596,6 +596,60 @@ body {
   box-shadow: 0 0 8px rgba(95, 184, 166, 0.25);
 }
 
+.habit-check.skipped {
+  border-color: var(--ink-dim);
+  background: rgba(212, 163, 90, 0.14);
+  color: #d4a35a;
+}
+
+.habit-check.has-note {
+  position: relative;
+}
+
+.habit-check.has-note::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.habit-streak-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #d4a35a;
+}
+
+.habit-category-tag {
+  display: inline-block;
+  margin-top: 2px;
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-glow);
+}
+
+.habits-category-filter {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
 .habit-progress {
   display: inline-flex;
   align-items: center;
@@ -808,6 +862,73 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.habit-archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.habit-archived-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--panel-edge-soft);
+}
+
+.habit-archived-row:last-child {
+  border-bottom: none;
+}
+
+.habit-archived-actions {
+  margin-left: auto;
+  opacity: 1;
+}
+
+.habit-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.habit-heatmap-grid {
+  display: grid;
+  grid-template-rows: repeat(7, 11px);
+  grid-auto-flow: column;
+  grid-auto-columns: 11px;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.habit-heatmap-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2.5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-edge-soft);
+}
+
+.habit-heatmap-cell.done {
+  background: var(--live);
+  border-color: var(--live);
+  opacity: 0.85;
+}
+
+.habit-heatmap-cell.skipped {
+  background: #d4a35a;
+  border-color: #d4a35a;
+  opacity: 0.6;
+}
+
+.habit-heatmap-summary {
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 .scratchpad-toolbar {

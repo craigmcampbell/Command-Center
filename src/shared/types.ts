@@ -560,6 +560,7 @@ export interface ReaderResult {
 }
 
 export type HabitFrequencyType = "daily" | "weekly" | "times_per_week";
+export type HabitCompletionStatus = "done" | "skipped";
 
 export interface Habit {
   id: number;
@@ -568,6 +569,8 @@ export interface Habit {
   targetCount: number;
   sortOrder: number;
   createdAt: number;
+  archived: boolean;
+  category: string | null;
 }
 
 export interface HabitWeekDay {
@@ -577,7 +580,8 @@ export interface HabitWeekDay {
 
 export interface HabitWeekEntry {
   habit: Habit;
-  completions: Record<string, boolean>;
+  completions: Record<string, HabitCompletionStatus | undefined>;
+  notes: Record<string, string>;
   weekCount: number;
   weekTarget: number;
   goalMet: boolean;
@@ -602,6 +606,24 @@ export interface HabitTrendWeek {
 export interface HabitTrendResult {
   habit: Habit;
   weeks: HabitTrendWeek[];
+}
+
+export interface HabitStreak {
+  habitId: number;
+  current: number;
+  longest: number;
+}
+
+export interface HabitHeatmapDay {
+  date: string;
+  status: HabitCompletionStatus | null;
+}
+
+export interface HabitHeatmapResult {
+  habit: Habit;
+  days: HabitHeatmapDay[];
+  totalDone: number;
+  totalSkipped: number;
 }
 
 // GitHub Actions run status for one workflow run, on any branch (not just
@@ -980,19 +1002,31 @@ export interface CommandCenterApi {
     clear: () => Promise<void>;
   };
   habits: {
-    list: () => Promise<Habit[]>;
-    add: (name: string, frequencyType: HabitFrequencyType, targetCount?: number) => Promise<Habit[]>;
+    list: (includeArchived?: boolean) => Promise<Habit[]>;
+    add: (
+      name: string,
+      frequencyType: HabitFrequencyType,
+      targetCount?: number,
+      category?: string | null
+    ) => Promise<Habit[]>;
     update: (
       id: number,
       name: string,
       frequencyType: HabitFrequencyType,
-      targetCount?: number
+      targetCount?: number,
+      category?: string | null
     ) => Promise<Habit[]>;
     remove: (id: number) => Promise<Habit[]>;
+    archive: (id: number) => Promise<Habit[]>;
+    restore: (id: number) => Promise<Habit[]>;
     reorder: (orderedIds: number[]) => Promise<Habit[]>;
     getWeek: (weekStart?: string) => Promise<HabitWeekView>;
     toggle: (habitId: number, date: string) => Promise<HabitWeekView>;
+    setCompletionNote: (habitId: number, date: string, note: string | null) => Promise<HabitWeekView>;
     trends: (habitId?: number, weeks?: number) => Promise<HabitTrendResult | HabitTrendResult[]>;
+    streaks: (habitId?: number) => Promise<HabitStreak | HabitStreak[]>;
+    categories: () => Promise<string[]>;
+    heatmap: (habitId: number, fromDate?: string, toDate?: string) => Promise<HabitHeatmapResult | null>;
   };
   github: {
     status: () => Promise<GitHubStatusResult>;
