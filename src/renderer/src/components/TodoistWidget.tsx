@@ -35,7 +35,7 @@ interface TodoistWidgetProps {
 }
 
 function dueLabel(dateStr: string | null, overdue: boolean): string {
-  if (!dateStr) return "";
+  if (!dateStr) return "No due date";
   const today = todayLocalDateString();
   if (dateStr === today) return "Today";
   if (overdue) {
