@@ -30,6 +30,16 @@ function totalTokens(t: OpenRouterUsageBucket["tokens"]): number {
   return t.prompt + t.completion + t.reasoning;
 }
 
+// "daily" is pinned to the most recent completed UTC day OpenRouter actually
+// has data for (see services/openrouter.ts), not necessarily today — so the
+// panel title says which day, rather than implying it's live.
+function formatDailyDate(dateStr: string): string {
+  return new Date(`${dateStr}T12:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function PeriodToggle({
   period,
   onChange,
@@ -118,8 +128,13 @@ export default function OpenRouterUsageWidget({ data, period, onPeriodChange }: 
     );
   }
 
+  const title =
+    data?.ok && period === "daily" && data.date
+      ? `OpenRouter usage — ${formatDailyDate(data.date)}`
+      : "OpenRouter usage";
+
   return (
-    <Panel title="OpenRouter usage" headerRight={<PeriodToggle period={period} onChange={onPeriodChange} />}>
+    <Panel title={title} headerRight={<PeriodToggle period={period} onChange={onPeriodChange} />}>
       {body}
     </Panel>
   );

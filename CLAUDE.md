@@ -267,7 +267,9 @@ at a time) · GitHub (per-repo latest CI run + open PR count, cross-repo
 review-requested PRs, auto-refresh on `github.refreshSeconds`) · Git (local
 working-tree status per configured repo path — branch, ahead/behind, staged/
 unstaged/untracked/conflict counts, last commit; click to open in ForkLift) ·
-Managed Processes (start/stop/tail arbitrary local tools, see below).
+Managed Processes (start/stop/tail arbitrary local tools, see below) · Now
+Playing banner (track/artist/album + artwork while Spotify is actively
+playing, see below).
 
 Local Apps, Learning, and File Links all render via the generic
 `LinkLauncherWidget` (`components/LinkLauncherWidget.tsx`) — a SQLite-backed
@@ -412,6 +414,33 @@ tail you're actively watching does. A process that's never been started this
 session has no entry in `processStatuses`; the widget falls back to an empty
 "stopped" status for it, using `processConfigs` as the source of truth for
 what rows exist at all.
+
+## Now Playing banner
+
+A fixed strip across the bottom of the window, visible on every tab, showing
+the currently-playing track's title/artist/album and artwork — but only while
+Spotify is actually playing something. Reads the local **Spotify.app directly
+via AppleScript** (`services/spotify.ts`), not the Spotify Web API — no OAuth,
+no client ID/secret to register, consistent with `services/forklift.ts`'s
+"shell out to a local macOS app" pattern. `artwork url of current track` is a
+Spotify CDN URL usable directly as an `<img src>`; it's absent for some local
+files not synced to Spotify's CDN, which `NowPlayingBanner.tsx` handles by
+simply omitting the artwork rather than showing a broken-image icon.
+
+The AppleScript returns one of three sentinel states — not running, running
+but paused/stopped, or playing — collapsing any transient failure (e.g.
+Spotify quitting mid-query) into "not running" rather than surfacing an
+error. Fields are joined with the ASCII unit separator (`\x1F`) rather than a
+comma, since a track/artist/album name could plausibly contain one.
+
+Polls on a **hardcoded 4s interval** in `App.tsx`, deliberately not
+Settings-configurable like Docker/GitHub/Git's intervals: those trade off
+against a real constraint (API rate limits, daemon query cost) that doesn't
+exist for a local `osascript` call, so there's nothing to tune. The one real
+piece of config — whether to run this poller at all — is a
+`spotify.enabled` toggle in Settings → General, off by choice of a user who
+doesn't use Spotify; disabling it clears `nowPlaying` and stops the interval
+entirely, not just the display.
 
 ## Command Palette
 

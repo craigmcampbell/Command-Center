@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import type { BillItem, CardItem, YnabAccount, YnabAccountsResult } from "../../../shared/types";
 import Panel from "./Panel";
+import Select from "./Select";
 import { IconCheck, IconNote, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
 
 interface BillsWidgetProps {
@@ -358,18 +359,15 @@ function CardFields({
         />
       </td>
       <td className="card-col-balance">
-        <select
-          className="settings-input card-table-input"
+        <Select
+          className="card-table-input"
           value={ynabAccountId}
-          onChange={(e) => onYnabAccountIdChange(e.target.value)}
-        >
-          <option value="">Not linked</option>
-          {ynabAccountOptions.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
+          onChange={onYnabAccountIdChange}
+          options={[
+            { value: "", label: "Not linked" },
+            ...ynabAccountOptions.map((a) => ({ value: a.id, label: a.name })),
+          ]}
+        />
       </td>
     </>
   );

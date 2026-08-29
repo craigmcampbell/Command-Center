@@ -12,6 +12,7 @@ import type {
   YnabUnapprovedResult,
 } from "../../../shared/types";
 import Panel from "./Panel";
+import Select from "./Select";
 import { IconCheck, IconChevronRight, IconExternal, IconPlus, IconX } from "./icons";
 
 interface YnabUnapprovedWidgetProps {
@@ -145,12 +146,12 @@ function CategoryPicker({
         rect &&
         createPortal(
           <div
-            className="ynab-category-dropdown"
+            className="dropdown-menu"
             ref={dropdownRef}
             style={{ top: rect.top, left: rect.left, width: rect.width }}
           >
             {filtered.length === 0 ? (
-              <div className="ynab-category-empty">No matches</div>
+              <div className="dropdown-empty">No matches</div>
             ) : (
               filtered.map(([group, cats]) => (
                 <div key={group} className="ynab-category-group">
@@ -159,7 +160,7 @@ function CategoryPicker({
                     <button
                       key={c.id}
                       type="button"
-                      className={`ynab-category-option ${c.id === categoryId ? "selected" : ""}`}
+                      className={`dropdown-option ${c.id === categoryId ? "selected" : ""}`}
                       onClick={() => handleSelect(c)}
                     >
                       {c.name}
@@ -251,7 +252,7 @@ function PayeePicker({
         filtered.length > 0 &&
         createPortal(
           <div
-            className="ynab-category-dropdown"
+            className="dropdown-menu"
             ref={dropdownRef}
             style={{ top: rect.top, left: rect.left, width: rect.width }}
           >
@@ -259,7 +260,7 @@ function PayeePicker({
               <button
                 key={p.id}
                 type="button"
-                className={`ynab-category-option ${p.id === payeeId ? "selected" : ""}`}
+                className={`dropdown-option ${p.id === payeeId ? "selected" : ""}`}
                 onClick={() => handleSelect(p)}
               >
                 {p.name}
@@ -444,17 +445,11 @@ function NewTransactionForm({
 
   return (
     <form className="ynab-add-form" onSubmit={handleSubmit}>
-      <select
-        className="settings-input"
+      <Select
         value={accountId}
-        onChange={(e) => setAccountId(e.target.value)}
-      >
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </select>
+        onChange={setAccountId}
+        options={accounts.map((a) => ({ value: a.id, label: a.name }))}
+      />
       <input
         type="date"
         className="settings-input"

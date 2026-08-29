@@ -10,6 +10,7 @@ import type {
   TodoistResult,
 } from "../../../shared/types";
 import Panel from "./Panel";
+import Select from "./Select";
 import TimeReportModal from "./TimeReportModal";
 import { formatDuration, todayLocalDateString } from "../lib/time";
 import { renderMarkdown } from "../lib/markdown";
@@ -102,19 +103,14 @@ function AddTaskForm({
         onChange={(e) => setText(e.target.value)}
       />
       {projects.length > 0 && (
-        <select
+        <Select
           className="todoist-add-project"
           value={projectId}
           disabled={submitting}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={setProjectId}
           title="Project"
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          options={projects.map((p) => ({ value: p.id, label: p.name }))}
+        />
       )}
       <button type="submit" disabled={!text.trim() || submitting} aria-label="Add task">
         <IconPlus />

@@ -426,7 +426,6 @@ export default function NotesWidget({
                 mode={mode}
                 onModeChange={setMode}
                 saving={autosave.savingKey === activeItem.id}
-                value={contents[activeItem.id] ?? ""}
                 showStatus={!activeError}
                 className="notes-toolbar"
               />

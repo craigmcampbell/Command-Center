@@ -23,6 +23,7 @@ import type {
 } from "../../../shared/types";
 import { useHabits } from "../hooks/useHabits";
 import Panel from "./Panel";
+import Select from "./Select";
 import HabitTrendChart from "./HabitTrendChart";
 import HabitHeatmap from "./HabitHeatmap";
 import {
@@ -59,6 +60,13 @@ function frequencyLabel(type: HabitFrequencyType, target: number): string {
       return `${target}×/week`;
   }
 }
+
+// Shared by the edit-habit and add-habit frequency selects below.
+const FREQUENCY_OPTIONS: { value: HabitFrequencyType; label: string }[] = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "times_per_week", label: "Times per week" },
+];
 
 function visibleHabits(habits: HabitWeekEntry[], categoryFilter: string | null): HabitWeekEntry[] {
   return categoryFilter ? habits.filter((h) => h.habit.category === categoryFilter) : habits;
@@ -358,18 +366,15 @@ export default function HabitsWidget() {
         headerRight={
           <div className="habits-week-nav">
             {categories.length > 0 && (
-              <select
+              <Select
                 className="habits-category-filter"
                 value={categoryFilter ?? ""}
-                onChange={(e) => setCategoryFilter(e.target.value || null)}
-              >
-                <option value="">All categories</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setCategoryFilter(v || null)}
+                options={[
+                  { value: "", label: "All categories" },
+                  ...categories.map((c) => ({ value: c, label: c })),
+                ]}
+              />
             )}
             <button type="button" className="daily-nav-btn" onClick={() => navigate(-1)} title="Previous week">
               <IconChevronLeft />
@@ -441,19 +446,11 @@ export default function HabitsWidget() {
               placeholder="Habit name"
               autoFocus
             />
-            <select
+            <Select
               value={editing.frequencyType}
-              onChange={(e) =>
-                setEditing({
-                  ...editing,
-                  frequencyType: e.target.value as HabitFrequencyType,
-                })
-              }
-            >
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="times_per_week">Times per week</option>
-            </select>
+              onChange={(v) => setEditing({ ...editing, frequencyType: v as HabitFrequencyType })}
+              options={FREQUENCY_OPTIONS}
+            />
             {editing.frequencyType === "times_per_week" && (
               <input
                 type="number"
@@ -490,14 +487,11 @@ export default function HabitsWidget() {
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleAdd()}
             />
-            <select
+            <Select
               value={newFreq}
-              onChange={(e) => setNewFreq(e.target.value as HabitFrequencyType)}
-            >
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="times_per_week">Times per week</option>
-            </select>
+              onChange={(v) => setNewFreq(v as HabitFrequencyType)}
+              options={FREQUENCY_OPTIONS}
+            />
             {newFreq === "times_per_week" && (
               <input
                 type="number"
@@ -550,16 +544,11 @@ export default function HabitsWidget() {
         <Panel
           title="Year in Review"
           headerRight={
-            <select
-              value={heatmapHabitId ?? ""}
-              onChange={(e) => void setHeatmapHabitId(e.target.value ? Number(e.target.value) : null)}
-            >
-              {week.habits.map((h) => (
-                <option key={h.habit.id} value={h.habit.id}>
-                  {h.habit.name}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={heatmapHabitId !== null ? String(heatmapHabitId) : ""}
+              onChange={(v) => void setHeatmapHabitId(v ? Number(v) : null)}
+              options={week.habits.map((h) => ({ value: String(h.habit.id), label: h.habit.name }))}
+            />
           }
         >
           {heatmapData ? (

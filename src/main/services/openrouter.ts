@@ -6,10 +6,15 @@
 // Two things about OpenRouter's API shape this all depends on:
 //
 //  1. /activity is capped at the last 30 completed UTC days — no parameter
-//     or pagination gets more history than that. One call, with no filters,
+//     or pagination gets more history than that, and critically, the UTC day
+//     in progress is never included at all. One call, with no filters,
 //     already returns the full 30-day window, so daily/weekly/30d periods
 //     are all sliced client-side from a single fetch rather than refetched
-//     per period.
+//     per period. "daily" is pinned to the most recent date present in that
+//     data rather than the caller's local calendar date — the two rarely
+//     match (activity is bucketed by UTC day, "today" isn't there yet), and
+//     filtering by local-today left this view empty for most of the day for
+//     anyone west of UTC and permanently empty for anyone at/east of UTC.
 //  2. Activity rows carry no key identifier — only a `model`. Grouping by
 //     key means calling /activity once per key (filtered by its hash) and
 //     merging the results client-side, labeled with that key's name from
@@ -125,10 +130,8 @@ async function refreshCache(managementApiKey: string): Promise<CacheSlot> {
   return slot;
 }
 
-function periodDays(period: OpenRouterPeriod): number {
-  if (period === "daily") return 1;
-  if (period === "weekly") return 7;
-  return 30;
+function periodDays(period: "weekly" | "30d"): number {
+  return period === "weekly" ? 7 : 30;
 }
 
 function daysAgo(n: number): string {
@@ -136,6 +139,21 @@ function daysAgo(n: number): string {
   d.setDate(d.getDate() - n);
   const pad = (x: number) => String(x).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// /activity never includes the UTC day in progress — only "completed" ones
+// (see the file header). The caller's local calendar date is a bad proxy for
+// that: filtering to local-"today" left this view empty for most of the day
+// everywhere, and permanently empty for anyone at or east of UTC, since by
+// the time their local date's matching UTC day finishes, their local date has
+// already moved on past it. Pinning "daily" to whatever the most recent date
+// in the data actually is sidesteps the mismatch entirely.
+function mostRecentActivityDate(rows: ActivityRow[]): string | null {
+  let max: string | null = null;
+  for (const row of rows) {
+    if (max === null || row.date > max) max = row.date;
+  }
+  return max;
 }
 
 function bucket(map: Map<string, OpenRouterUsageBucket>, key: string, label: string): OpenRouterUsageBucket {
@@ -165,8 +183,15 @@ export async function getOpenRouterUsage(
     return failResult(period, (err as Error).message || "Couldn't reach OpenRouter");
   }
 
-  const from = daysAgo(periodDays(period) - 1);
-  const inWindow = (row: ActivityRow) => row.date >= from;
+  let inWindow: (row: ActivityRow) => boolean;
+  let dailyDate: string | undefined;
+  if (period === "daily") {
+    dailyDate = mostRecentActivityDate(slot.activity) ?? daysAgo(0);
+    inWindow = (row) => row.date === dailyDate;
+  } else {
+    const from = daysAgo(periodDays(period) - 1);
+    inWindow = (row) => row.date >= from;
+  }
 
   const totals = { costUsd: 0, requests: 0, tokens: emptyTokens() };
   const byModel = new Map<string, OpenRouterUsageBucket>();
@@ -198,6 +223,7 @@ export async function getOpenRouterUsage(
   return {
     ok: true,
     period,
+    date: dailyDate,
     costUsd: totals.costUsd,
     requests: totals.requests,
     tokens: totals.tokens,

@@ -33,6 +33,11 @@ body {
   font-family: var(--sans);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  /* Clearance for .now-playing-banner, which is position: fixed and would
+     otherwise sit on top of the last row of whichever tab is showing.
+     Unconditional rather than toggled by a body class — indistinguishable
+     from the page's own bottom padding when the banner is hidden. */
+  padding-bottom: 56px;
 }
 
 /* draggable strip so the frameless window can be moved */
@@ -286,7 +291,7 @@ body {
 .grid-finances {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
-    "ynab-accounts ynab-bills ynab-financelog"
+    "ynab-financelog ynab-accounts ynab-bills"
     "ynab-unapproved ynab-unapproved ynab-unapproved"
     "ynab-budgethealth ynab-budgethealth ynab-budgethealth";
 }
@@ -374,9 +379,9 @@ body {
   .grid-finances {
     grid-template-columns: 1fr;
     grid-template-areas:
+      "ynab-financelog"
       "ynab-accounts"
       "ynab-bills"
-      "ynab-financelog"
       "ynab-unapproved"
       "ynab-budgethealth";
   }
@@ -639,15 +644,16 @@ body {
   background: var(--accent-glow);
 }
 
-.habits-category-filter {
+/* Compound selector, not just .habits-category-filter: needs to outrank
+   .dropdown-trigger's own background/color/font-family/padding/radius
+   regardless of which rule happens to come first in the file. */
+.dropdown-trigger.habits-category-filter {
   background: transparent;
-  border: 1px solid var(--panel-edge);
   color: var(--ink-dim);
   font-family: var(--mono);
   font-size: 11px;
   padding: 4px 8px;
   border-radius: 999px;
-  cursor: pointer;
 }
 
 .habit-progress {
@@ -693,8 +699,7 @@ body {
   border-top: 1px solid var(--panel-edge-soft);
 }
 
-.habit-form input,
-.habit-form select {
+.habit-form input {
   background: var(--ground);
   border: 1px solid var(--panel-edge);
   color: var(--ink);
@@ -703,14 +708,15 @@ body {
   padding: 7px 10px;
   border-radius: 8px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.habit-form input {
   flex: 1;
   min-width: 120px;
 }
 
-.habit-form select {
+/* The frequency-type Select needs no className of its own — this ancestor
+   rule is what gives it the mono/12px treatment .dropdown-trigger's base
+   skin doesn't otherwise have, same as it did back when it was a
+   `.habit-form select`. */
+.habit-form .dropdown-trigger {
   font-family: var(--mono);
   font-size: 12px;
 }
@@ -722,8 +728,7 @@ body {
   font-family: var(--mono) !important;
 }
 
-.habit-form input:focus,
-.habit-form select:focus {
+.habit-form input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -969,18 +974,6 @@ body {
   color: var(--ink-dim);
 }
 
-/* Word/char count sits next to the Saving…/Saved status. Dimmer and
-   hideable, since it's ambient information rather than state you act on. */
-.md-wordcount {
-  opacity: 0.7;
-  white-space: nowrap;
-}
-@media (max-width: 900px) {
-  .md-wordcount {
-    display: none;
-  }
-}
-
 .scratchpad-clear {
   display: inline-flex;
   align-items: center;
@@ -1003,6 +996,22 @@ body {
 .scratchpad-clear:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.md-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+.md-expand-btn:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
 }
 
 .scratchpad {
@@ -1491,22 +1500,9 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-.notes-browser-create select {
+.notes-browser-create .dropdown-trigger {
   flex-shrink: 0;
   max-width: 160px;
-  background: var(--ground);
-  border: 1px solid var(--panel-edge);
-  color: var(--ink);
-  font-family: var(--sans);
-  font-size: 13px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.notes-browser-create select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .notes-browser-create button {
   display: flex;
@@ -1793,7 +1789,8 @@ body {
   border-bottom: 1px solid var(--panel-edge-soft);
   margin-bottom: 10px;
 }
-.ynab-add-form .settings-input {
+.ynab-add-form .settings-input,
+.ynab-add-form .dropdown-trigger {
   width: auto;
   flex: 1 1 120px;
   min-width: 90px;
@@ -1862,7 +1859,10 @@ body {
   outline: none;
   border-color: var(--accent);
 }
-.ynab-category-dropdown {
+/* Shared by CategoryPicker/PayeePicker above and Select.tsx's generic
+   dropdown below — one portaled popup style used by every custom picker in
+   the app, so they all read as the same control. */
+.dropdown-menu {
   position: fixed;
   z-index: 200;
   max-height: 280px;
@@ -1885,7 +1885,7 @@ body {
   color: var(--accent);
   padding: 6px 8px 2px;
 }
-.ynab-category-option {
+.dropdown-option {
   display: block;
   width: 100%;
   text-align: left;
@@ -1897,17 +1897,63 @@ body {
   border-radius: 5px;
   cursor: pointer;
 }
-.ynab-category-option:hover {
+.dropdown-option:hover,
+.dropdown-option.highlighted {
   background: var(--accent-glow);
   color: var(--accent);
 }
-.ynab-category-option.selected {
+.dropdown-option.selected {
   color: var(--accent);
   font-weight: 600;
 }
-.ynab-category-empty {
+.dropdown-empty {
   padding: 8px;
   font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* Select.tsx's trigger — the themed replacement for a native <select>'s
+   closed box. Deliberately the same skin as .settings-input (dark ground,
+   subtle border, 8px radius) so every dropdown in the app reads as one
+   control language; call sites layer a size/shape class on top exactly the
+   way .card-table-input already layers onto .settings-input. */
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.dropdown-trigger:focus-visible,
+.dropdown-trigger.open {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.dropdown-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dropdown-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropdown-trigger-chevron {
+  flex-shrink: 0;
   color: var(--ink-dim);
 }
 
@@ -2388,22 +2434,14 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-.todoist-add-project {
+/* Compound selector — see .dropdown-trigger.habits-category-filter above
+   for why. */
+.dropdown-trigger.todoist-add-project {
   flex-shrink: 0;
   max-width: 130px;
-  background: var(--ground);
-  border: 1px solid var(--panel-edge);
   color: var(--ink-dim);
-  font-family: var(--sans);
   font-size: 12px;
   padding: 7px 8px;
-  border-radius: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.todoist-add-project:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .todoist-add button {
   display: flex;
@@ -3577,6 +3615,13 @@ body {
 .card-table-input[type="number"] {
   text-align: right;
 }
+/* Compound selector — see .dropdown-trigger.habits-category-filter above
+   for why: .dropdown-trigger's own padding/font-size would otherwise win
+   on source order alone. */
+.dropdown-trigger.card-table-input {
+  padding: 5px 8px;
+  font-size: 12px;
+}
 /* Add-row's Add button and an editing row's Save/Cancel stay visible even
    without a hover — there's no saved data yet for the mouse-out state to
    fall back to showing. */
@@ -3838,6 +3883,42 @@ body {
 .time-entry-delete:hover {
   opacity: 1;
   color: var(--alert);
+}
+
+/* Markdown-editor "expand" modal — same scrim as .settings-scrim, sized to
+   take up most of the window rather than a fixed box, since the point is
+   room to read/write, not a fixed dialog size. */
+.md-expand-panel {
+  width: calc(100vw - 64px);
+  height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 var(--panel-edge-soft) inset,
+    0 24px 60px -20px rgba(0, 0, 0, 0.75),
+    0 1px 3px rgba(0, 0, 0, 0.4);
+  animation: fadeInUp 0.15s ease both;
+}
+.md-expand-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--panel-edge);
+  flex-shrink: 0;
+}
+.md-expand-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 14px 18px 18px;
+}
+.md-expand-editor {
+  height: 100%;
 }
 
 /* Monthly time report modal — same scrim as .settings-scrim, own panel. */
@@ -4377,4 +4458,118 @@ body {
 .openrouter-breakdown-row .status {
   margin-left: auto;
   color: var(--ink-dim);
+}
+
+/* ---- AI tab (Claude / OpenRouter / OpenAI subtabs) ---- */
+
+/* Second-level nav within the AI tab, above whichever provider's grid is
+   active. Same segmented-pill language as .openrouter-period-toggle, but
+   sized/positioned as a nav row (like .tabs) rather than a Panel-header
+   control — it switches the whole grid below, not one panel's period. */
+.ai-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 28px 14px;
+}
+.ai-subtab {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ai-subtab:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ai-subtab.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.grid-openai {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "openai-summary openai-summary"
+    "openai-models openai-lineitems";
+}
+.slot-openai-summary {
+  grid-area: openai-summary;
+}
+.slot-openai-models {
+  grid-area: openai-models;
+}
+.slot-openai-lineitems {
+  grid-area: openai-lineitems;
+}
+
+/* No credit balance stat (OpenAI's API doesn't expose one — see
+   services/openai.ts), so only two tiles: override the 3-column grid
+   .openrouter-stats otherwise uses down to 2, rather than leaving a gap. */
+.openai-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Now Playing banner — persistent bottom strip, not a modal, so it sits below
+   the palette/settings overlays (z-index: 1000) but above ordinary content
+   (z-index: 1). Only rendered at all while Spotify is actively playing.
+   Background is Spotify's own brand green rather than this app's usual
+   near-black panel — it's meant to read as "Spotify" at a glance. Text is
+   near-black, not the app's usual light --ink: white text on this green is
+   ~2.6:1 contrast (fails WCAG AA), dark text is ~8:1. */
+.now-playing-banner {
+  --spotify-green: #1db954;
+  --spotify-green-edge: #14893f;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 28px;
+  background: var(--spotify-green);
+  border-top: 1px solid var(--spotify-green-edge);
+  -webkit-app-region: no-drag;
+}
+
+.now-playing-art {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.now-playing-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.now-playing-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #05170c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgba(5, 23, 12, 0.72);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

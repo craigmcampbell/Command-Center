@@ -34,6 +34,7 @@ import type {
   NotificationHealth,
   NotificationSettings,
   OpenRouterScalarConfig,
+  OpenAIScalarConfig,
   ProcessConfig,
   VaultConfig,
   YnabScalarConfig,
@@ -80,12 +81,14 @@ interface SettingsPageProps {
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
+  onSpotifyEnabledChange: (enabled: boolean) => void;
   onGitRefreshSecondsChange: (seconds?: number) => void;
   onNotificationSettingsChange: (values: NotificationSettings) => void;
   onGithubRefreshSecondsChange: (seconds: number) => void;
   onYnabRefreshSecondsChange: (seconds: number) => void;
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
   onOpenRouterRefreshSecondsChange: (seconds?: number) => void;
+  onOpenAIRefreshSecondsChange: (seconds?: number) => void;
 }
 
 function slugify(label: string): string {
@@ -222,6 +225,50 @@ function DockerCard({
           onChange={(e) => setSeconds(e.target.value)}
         />
       </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function SpotifyCard({
+  value,
+  onSaved,
+}: {
+  value: { enabled: boolean };
+  onSaved: (v: { enabled: boolean }) => void;
+}) {
+  const [draft, setDraft] = useState(value.enabled);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(value.enabled), [value.enabled]);
+  const dirty = draft !== value.enabled;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.spotify.update({ enabled: draft });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Spotify</h3>
+      <p className="settings-card-hint">
+        Shows a banner at the bottom of the window with the currently playing track, read
+        directly from the local Spotify app — no account connection needed.
+      </p>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={draft}
+          onChange={(e) => setDraft(e.target.checked)}
+        />
+        Show Now Playing banner
+      </label>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -906,6 +953,72 @@ function OpenRouterCard({
         <SecretField
           value={managementApiKey}
           onChange={setManagementApiKey}
+          placeholder="•••••••••••••••"
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={refreshSeconds}
+          onChange={(e) => setRefreshSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function OpenAICard({
+  value,
+  onSaved,
+}: {
+  value: OpenAIScalarConfig;
+  onSaved: (v: OpenAIScalarConfig) => void;
+}) {
+  const [adminApiKey, setAdminApiKey] = useState(value.adminApiKey ?? "");
+  const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setAdminApiKey(value.adminApiKey ?? "");
+    setRefreshSeconds(String(value.refreshSeconds ?? 900));
+  }, [value.adminApiKey, value.refreshSeconds]);
+  const dirty =
+    adminApiKey !== (value.adminApiKey ?? "") ||
+    refreshSeconds !== String(value.refreshSeconds ?? 900);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.openai.update({
+      adminApiKey: adminApiKey || undefined,
+      refreshSeconds: Number(refreshSeconds) || 900,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>OpenAI</h3>
+      <p className="settings-card-hint">
+        Requires an <strong>Admin API key</strong> — a separate, org-level credential from a
+        normal project API key, created under OpenAI's dashboard (Settings → Organization →
+        Admin keys). It powers the AI tab's OpenAI usage-by-model and cost-by-line-item
+        reporting; a regular project key can't be used here. Unlike OpenRouter, OpenAI's API has
+        no endpoint for remaining credit balance, so that figure isn't shown.
+      </p>
+      <div className="settings-field-row">
+        <label>Admin API key</label>
+        <SecretField
+          value={adminApiKey}
+          onChange={setAdminApiKey}
           placeholder="•••••••••••••••"
         />
       </div>
@@ -1640,12 +1753,14 @@ export default function SettingsPage({
   onProcessConfigsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
+  onSpotifyEnabledChange,
   onGitRefreshSecondsChange,
   onNotificationSettingsChange,
   onGithubRefreshSecondsChange,
   onYnabRefreshSecondsChange,
   onTodoistShowTimeTrackingChange,
   onOpenRouterRefreshSecondsChange,
+  onOpenAIRefreshSecondsChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -1719,6 +1834,13 @@ export default function SettingsPage({
                       onDockerRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
+                  <SpotifyCard
+                    value={data.spotify ?? { enabled: true }}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, spotify: v } : prev));
+                      onSpotifyEnabledChange(v.enabled);
+                    }}
+                  />
                   <GitCard
                     value={data.git ?? {}}
                     onSaved={(v) => {
@@ -1790,6 +1912,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, openrouter: v } : prev));
                       onOpenRouterRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <OpenAICard
+                    value={data.openai ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, openai: v } : prev));
+                      onOpenAIRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
                 </>

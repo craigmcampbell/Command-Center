@@ -90,6 +90,14 @@ export function IconChevronRight({ size = 13, className }: IconProps) {
   );
 }
 
+export function IconChevronDown({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M5 9l7 7 7-7" />
+    </svg>
+  );
+}
+
 export function IconVideo({ size = 13, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
@@ -373,6 +381,14 @@ export function IconOutline({ size = 13, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...glyph}>
       <path d="M4 5h16M4 10h11M4 15h13M4 20h8" />
+    </svg>
+  );
+}
+
+export function IconExpand({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
     </svg>
   );
 }

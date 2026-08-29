@@ -24,6 +24,7 @@ import { toggleTaskAt } from "../lib/markdownTasks";
 import FrontmatterBlock from "./FrontmatterBlock";
 import MarkdownEditor from "./MarkdownEditor";
 import MarkdownToolbar from "./MarkdownToolbar";
+import { IconExpand } from "./icons";
 
 export type ViewMode = "edit" | "preview";
 
@@ -39,25 +40,12 @@ interface MarkdownPaneToolbarProps {
   // Which wrapper class the consumer's layout expects: "scratchpad-toolbar"
   // in a Panel header, "notes-toolbar"/"daily-note-toolbar" in a body.
   className?: string;
-  // Supply to show a word/character count next to the status. Optional
-  // because the count is only meaningful where the document is the point.
-  value?: string;
+  // Renders an expand button that calls back into the consumer, which is
+  // what actually owns the "open in a modal" state — the toolbar just
+  // exposes the affordance.
+  onExpand?: () => void;
   // Extra controls after the status label (Scratchpad's Clear button).
   children?: ReactNode;
-}
-
-// Frontmatter is stripped first so YAML keys don't inflate the count — the
-// number people care about is the prose they wrote.
-function countWords(text: string): { words: number; chars: number } {
-  // splitFrontmatter's `to` is the end of the closing "---" line, so the
-  // body is everything after it.
-  const fm = splitFrontmatter(text);
-  const body = fm ? text.slice(fm.to) : text;
-  const trimmed = body.trim();
-  return {
-    words: trimmed === "" ? 0 : trimmed.split(/\s+/).length,
-    chars: body.length,
-  };
 }
 
 export function MarkdownPaneToolbar({
@@ -66,11 +54,9 @@ export function MarkdownPaneToolbar({
   saving,
   showStatus = true,
   className = "scratchpad-toolbar",
-  value,
+  onExpand,
   children,
 }: MarkdownPaneToolbarProps) {
-  const stats = useMemo(() => (value === undefined ? null : countWords(value)), [value]);
-
   return (
     <div className={className}>
       <div className="scratchpad-modes">
@@ -85,14 +71,19 @@ export function MarkdownPaneToolbar({
           </button>
         ))}
       </div>
-      {stats && (
-        <span className="scratchpad-status md-wordcount">
-          {stats.words.toLocaleString()} {stats.words === 1 ? "word" : "words"} ·{" "}
-          {stats.chars.toLocaleString()} chars
-        </span>
-      )}
       {showStatus && (
         <span className="scratchpad-status">{saving ? "Saving…" : "Saved"}</span>
+      )}
+      {onExpand && (
+        <button
+          type="button"
+          className="md-expand-btn"
+          onClick={onExpand}
+          title="Expand"
+          aria-label="Expand"
+        >
+          <IconExpand />
+        </button>
       )}
       {children}
     </div>

@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DockerResult,
+  SpotifyNowPlayingResult,
   DailyNoteResult,
   ClaudeSessionsResult,
   ClaudeUsageResult,
@@ -30,8 +31,11 @@ import type {
   TabConfig,
   OpenRouterUsageResult,
   OpenRouterPeriod,
+  OpenAIUsageResult,
+  OpenAIPeriod,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
+import NowPlayingBanner from "./components/NowPlayingBanner";
 import GitHubWidget from "./components/GitHubWidget";
 import GitStatusWidget from "./components/GitStatusWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
@@ -48,6 +52,7 @@ import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import ClaudeUsageWidget, { ClaudeBreakdown } from "./components/ClaudeUsageWidget";
 import ClaudeSessionsWidget from "./components/ClaudeSessionsWidget";
 import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
+import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
@@ -70,8 +75,12 @@ type TabId =
   | "habits"
   | "notes"
   | "finances"
-  | "claude"
-  | "openrouter";
+  | "ai";
+
+// The AI tab's own sub-navigation (Claude / OpenRouter / OpenAI). Not
+// DB-backed like the top-level tabs — just local UI state, same as
+// openRouterPeriod — since three subtabs don't need reorder/rename.
+type AiSubTab = "claude" | "openrouter" | "openai";
 
 // Fallback order/labels for the very first render, before settings.getAll()
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
@@ -84,8 +93,7 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "habits", label: "Habits", sortOrder: 4 },
   { id: "notes", label: "Notes", sortOrder: 5 },
   { id: "finances", label: "Finances", sortOrder: 6 },
-  { id: "claude", label: "Claude", sortOrder: 7 },
-  { id: "openrouter", label: "OpenRouter", sortOrder: 8 },
+  { id: "ai", label: "AI", sortOrder: 7 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -99,6 +107,9 @@ const DEFAULT_YNAB_REFRESH_SECONDS = 300;
 // than GitHub's keeps this well clear of any per-key rate limit on the
 // Management API's N+1 /activity calls.
 const DEFAULT_OPENROUTER_REFRESH_SECONDS = 900;
+// Same rationale as OpenRouter's: usage/cost data, not real-time, and this
+// one's the admin usage + costs endpoints rather than a rate-limited key.
+const DEFAULT_OPENAI_REFRESH_SECONDS = 900;
 
 function tickClock(): string {
   return new Date()
@@ -141,6 +152,8 @@ export default function App() {
   const [readerPage, setReaderPage] = useState(0);
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
   const [dockerRefreshSeconds, setDockerRefreshSeconds] = useState(DEFAULT_DOCKER_REFRESH_SECONDS);
+  const [spotifyEnabled, setSpotifyEnabled] = useState(true);
+  const [nowPlaying, setNowPlaying] = useState<SpotifyNowPlayingResult | null>(null);
   const [githubRefreshSeconds, setGithubRefreshSeconds] = useState(DEFAULT_GITHUB_REFRESH_SECONDS);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -177,9 +190,16 @@ export default function App() {
   const [openRouterRefreshSeconds, setOpenRouterRefreshSeconds] = useState(
     DEFAULT_OPENROUTER_REFRESH_SECONDS
   );
+  const [openAIUsage, setOpenAIUsage] = useState<OpenAIUsageResult | null>(null);
+  const [openAIPeriod, setOpenAIPeriod] = useState<OpenAIPeriod>("30d");
+  const [openAIRefreshSeconds, setOpenAIRefreshSeconds] = useState(DEFAULT_OPENAI_REFRESH_SECONDS);
+  const [aiSubTab, setAiSubTab] = useState<AiSubTab>("claude");
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
+  }, []);
+  const loadNowPlaying = useCallback(async () => {
+    setNowPlaying(await window.api.spotify.nowPlaying());
   }, []);
   const loadGithub = useCallback(async () => {
     setGithub(await window.api.github.status());
@@ -240,6 +260,9 @@ export default function App() {
   const loadOpenRouter = useCallback(async () => {
     setOpenRouterUsage(await window.api.openrouter.usage(openRouterPeriod));
   }, [openRouterPeriod]);
+  const loadOpenAI = useCallback(async () => {
+    setOpenAIUsage(await window.api.openai.usage(openAIPeriod));
+  }, [openAIPeriod]);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
@@ -276,6 +299,7 @@ export default function App() {
       loadBills(),
       loadCards(),
       loadOpenRouter(),
+      loadOpenAI(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -296,6 +320,7 @@ export default function App() {
     loadBills,
     loadCards,
     loadOpenRouter,
+    loadOpenAI,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -356,11 +381,13 @@ export default function App() {
       const cfg = await window.api.settings.getAll();
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
+      setSpotifyEnabled(cfg.spotify?.enabled !== false);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
       setOpenRouterRefreshSeconds(
         cfg.openrouter?.refreshSeconds || DEFAULT_OPENROUTER_REFRESH_SECONDS
       );
+      setOpenAIRefreshSeconds(cfg.openai?.refreshSeconds || DEFAULT_OPENAI_REFRESH_SECONDS);
       setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
       setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
@@ -386,6 +413,7 @@ export default function App() {
         loadBills(),
         loadCards(),
         loadOpenRouter(),
+        loadOpenAI(),
       ]);
       setLastRefreshedAt(new Date());
 
@@ -408,6 +436,20 @@ export default function App() {
     return () => clearInterval(id);
   }, [loadDocker, dockerRefreshSeconds]);
 
+  // ---- Now Playing refresh. Interval is hardcoded (a local osascript call
+  // costs nothing, unlike Docker/GitHub's rate-limited or daemon-backed
+  // polls), gated on the Settings toggle so a disabled user truly stops the
+  // polling, not just the display. ----
+  useEffect(() => {
+    if (!spotifyEnabled) {
+      setNowPlaying(null);
+      return;
+    }
+    void loadNowPlaying();
+    const id = setInterval(loadNowPlaying, 4000);
+    return () => clearInterval(id);
+  }, [loadNowPlaying, spotifyEnabled]);
+
   // ---- GitHub refresh, reactive to Settings edits ----
   useEffect(() => {
     const id = setInterval(loadGithub, githubRefreshSeconds * 1000);
@@ -428,6 +470,19 @@ export default function App() {
     // depending on it alone would double-fire; depend on the period instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRouterPeriod]);
+
+  // ---- OpenAI refresh, reactive to Settings edits and period changes ----
+  useEffect(() => {
+    const id = setInterval(loadOpenAI, openAIRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadOpenAI, openAIRefreshSeconds]);
+
+  useEffect(() => {
+    void loadOpenAI();
+    // Same reasoning as the OpenRouter effect above: depend on the period,
+    // not loadOpenAI's identity, to avoid a double-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openAIPeriod]);
 
   // ---- alerts + tray, derived from state the widgets already poll ----
   // No new polling: this reacts to github/processStatuses/docker changing,
@@ -630,6 +685,9 @@ export default function App() {
 
       {activeTab === "finances" && (
         <main className="grid grid-finances">
+          <div className="slot slot-ynab-financelog">
+            <FinanceReviewLogWidget data={financeReviewLog} onChange={setFinanceReviewLog} />
+          </div>
           <div className="slot slot-ynab-accounts">
             <YnabAccountsWidget
               accountsData={ynabAccounts}
@@ -646,9 +704,6 @@ export default function App() {
               ynabAccounts={ynabAccounts}
             />
           </div>
-          <div className="slot slot-ynab-financelog">
-            <FinanceReviewLogWidget data={financeReviewLog} onChange={setFinanceReviewLog} />
-          </div>
           <div className="slot slot-ynab-unapproved">
             <YnabUnapprovedWidget
               data={ynabUnapproved}
@@ -664,56 +719,109 @@ export default function App() {
         </main>
       )}
 
-      {activeTab === "claude" && (
-        <main className="grid grid-claude">
-          <div className="slot slot-claude-usage">
-            <ClaudeUsageWidget data={claudeUsage} />
+      {activeTab === "ai" && (
+        <>
+          <div className="ai-subtabs" role="tablist" aria-label="AI provider">
+            {(
+              [
+                { id: "claude", label: "Claude" },
+                { id: "openrouter", label: "OpenRouter" },
+                { id: "openai", label: "OpenAI" },
+              ] as { id: AiSubTab; label: string }[]
+            ).map((sub) => (
+              <button
+                key={sub.id}
+                type="button"
+                role="tab"
+                aria-selected={aiSubTab === sub.id}
+                className={`ai-subtab ${aiSubTab === sub.id ? "active" : ""}`}
+                onClick={() => setAiSubTab(sub.id)}
+              >
+                {sub.label}
+              </button>
+            ))}
           </div>
-          <div className="slot slot-claude-projects">
-            <ClaudeBreakdown
-              title="By project (30d)"
-              rows={claudeUsage?.byProject ?? []}
-              emptyLabel="No usage in the last 30 days."
-            />
-          </div>
-          <div className="slot slot-claude-models">
-            <ClaudeBreakdown
-              title="By model (30d)"
-              rows={claudeUsage?.byModel ?? []}
-              emptyLabel="No usage in the last 30 days."
-            />
-          </div>
-          <div className="slot slot-claude-sessions">
-            <ClaudeSessionsWidget data={claudeSessions} />
-          </div>
-        </main>
+
+          {aiSubTab === "claude" && (
+            <main className="grid grid-claude">
+              <div className="slot slot-claude-usage">
+                <ClaudeUsageWidget data={claudeUsage} />
+              </div>
+              <div className="slot slot-claude-projects">
+                <ClaudeBreakdown
+                  title="By project (30d)"
+                  rows={claudeUsage?.byProject ?? []}
+                  emptyLabel="No usage in the last 30 days."
+                />
+              </div>
+              <div className="slot slot-claude-models">
+                <ClaudeBreakdown
+                  title="By model (30d)"
+                  rows={claudeUsage?.byModel ?? []}
+                  emptyLabel="No usage in the last 30 days."
+                />
+              </div>
+              <div className="slot slot-claude-sessions">
+                <ClaudeSessionsWidget data={claudeSessions} />
+              </div>
+            </main>
+          )}
+
+          {aiSubTab === "openrouter" && (
+            <main className="grid grid-openrouter">
+              <div className="slot slot-openrouter-summary">
+                <OpenRouterUsageWidget
+                  data={openRouterUsage}
+                  period={openRouterPeriod}
+                  onPeriodChange={setOpenRouterPeriod}
+                />
+              </div>
+              <div className="slot slot-openrouter-models">
+                <OpenRouterBreakdown
+                  title="By model"
+                  rows={openRouterUsage?.byModel ?? []}
+                  emptyLabel="No usage in this period."
+                />
+              </div>
+              <div className="slot slot-openrouter-keys">
+                <OpenRouterBreakdown
+                  title="By API key"
+                  rows={openRouterUsage?.byKey ?? []}
+                  emptyLabel="No usage in this period."
+                />
+              </div>
+            </main>
+          )}
+
+          {aiSubTab === "openai" && (
+            <main className="grid grid-openai">
+              <div className="slot slot-openai-summary">
+                <OpenAIUsageWidget
+                  data={openAIUsage}
+                  period={openAIPeriod}
+                  onPeriodChange={setOpenAIPeriod}
+                />
+              </div>
+              <div className="slot slot-openai-models">
+                <OpenAIModelBreakdown
+                  title="By model"
+                  rows={openAIUsage?.byModel ?? []}
+                  emptyLabel="No usage in this period."
+                />
+              </div>
+              <div className="slot slot-openai-lineitems">
+                <OpenAICostBreakdown
+                  title="By line item"
+                  rows={openAIUsage?.byLineItem ?? []}
+                  emptyLabel="No cost in this period."
+                />
+              </div>
+            </main>
+          )}
+        </>
       )}
 
-      {activeTab === "openrouter" && (
-        <main className="grid grid-openrouter">
-          <div className="slot slot-openrouter-summary">
-            <OpenRouterUsageWidget
-              data={openRouterUsage}
-              period={openRouterPeriod}
-              onPeriodChange={setOpenRouterPeriod}
-            />
-          </div>
-          <div className="slot slot-openrouter-models">
-            <OpenRouterBreakdown
-              title="By model"
-              rows={openRouterUsage?.byModel ?? []}
-              emptyLabel="No usage in this period."
-            />
-          </div>
-          <div className="slot slot-openrouter-keys">
-            <OpenRouterBreakdown
-              title="By API key"
-              rows={openRouterUsage?.byKey ?? []}
-              emptyLabel="No usage in this period."
-            />
-          </div>
-        </main>
-      )}
+      <NowPlayingBanner data={nowPlaying} />
 
       <CommandPalette
         open={paletteOpen}
@@ -727,6 +835,7 @@ export default function App() {
         onProcessConfigsChange={setProcessConfigs}
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
+        onSpotifyEnabledChange={setSpotifyEnabled}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
         onGitRefreshSecondsChange={(seconds) =>
           setGitRefreshSeconds(seconds ?? DEFAULT_GIT_REFRESH_SECONDS)
@@ -736,6 +845,9 @@ export default function App() {
         onTodoistShowTimeTrackingChange={setShowTimeTracking}
         onOpenRouterRefreshSecondsChange={(seconds) =>
           setOpenRouterRefreshSeconds(seconds ?? DEFAULT_OPENROUTER_REFRESH_SECONDS)
+        }
+        onOpenAIRefreshSecondsChange={(seconds) =>
+          setOpenAIRefreshSeconds(seconds ?? DEFAULT_OPENAI_REFRESH_SECONDS)
         }
       />
     </>
