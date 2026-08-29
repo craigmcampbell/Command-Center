@@ -28,6 +28,7 @@ import type {
   ProcessConfig,
   YnabScalarConfig,
   OpenRouterScalarConfig,
+  OpenAIScalarConfig,
   TabConfig,
 } from "../../shared/types";
 
@@ -48,8 +49,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "habits", label: "Habits" },
   { id: "notes", label: "Notes" },
   { id: "finances", label: "Finances" },
-  { id: "claude", label: "Claude" },
-  { id: "openrouter", label: "OpenRouter" },
+  { id: "ai", label: "AI" },
 ];
 
 export function initSettings(): void {
@@ -103,7 +103,27 @@ export function initSettings(): void {
     label TEXT NOT NULL,
     sort_order INTEGER NOT NULL
   )`);
+  migrateAiTab();
   ensureTabDefaults();
+}
+
+// One-time migration folding the old separate "claude"/"openrouter" tab rows
+// into the single merged "ai" tab (now subtabs within it — see App.tsx).
+// Whichever of the two existed first keeps its id/position/sort_order,
+// renamed to "AI"; the other is just dropped. Runs every boot but is a no-op
+// after the first, since neither old id exists in the table afterward — same
+// idempotent-every-boot shape as the config.json migration below.
+function migrateAiTab(): void {
+  const db = getDatabase();
+  const old = db
+    .prepare(`SELECT id FROM tabs WHERE id IN ('claude', 'openrouter') ORDER BY sort_order ASC`)
+    .all() as { id: string }[];
+  if (old.length === 0) return;
+  const hasAiRow = db.prepare(`SELECT 1 FROM tabs WHERE id = 'ai'`).get() !== undefined;
+  if (!hasAiRow) {
+    db.prepare(`UPDATE tabs SET id = 'ai', label = 'AI' WHERE id = ?`).run(old[0].id);
+  }
+  db.prepare(`DELETE FROM tabs WHERE id IN ('claude', 'openrouter')`).run();
 }
 
 // Inserts a row for any DEFAULT_TABS id not already in the table — runs
@@ -166,6 +186,18 @@ export function updateDockerSettings(values: {
   refreshSeconds: number;
 }): { refreshSeconds: number } {
   setRaw("docker", values);
+  return values;
+}
+
+// No refreshSeconds here, unlike docker/git/github — the poll cost is a
+// single local osascript call, not an API budget or daemon query, so the
+// interval is hardcoded in the renderer instead. The only real config is
+// whether to run it at all.
+export function getSpotifySettings(): { enabled: boolean } {
+  return getRaw("spotify") ?? { enabled: true };
+}
+export function updateSpotifySettings(values: { enabled: boolean }): { enabled: boolean } {
+  setRaw("spotify", values);
   return values;
 }
 
@@ -285,6 +317,13 @@ export function getOpenRouterSettings(): OpenRouterScalarConfig {
 }
 export function updateOpenRouterSettings(values: OpenRouterScalarConfig): OpenRouterScalarConfig {
   setRaw("openrouter", values);
+  return values;
+}
+export function getOpenAISettings(): OpenAIScalarConfig {
+  return getRaw<OpenAIScalarConfig>("openai") ?? {};
+}
+export function updateOpenAISettings(values: OpenAIScalarConfig): OpenAIScalarConfig {
+  setRaw("openai", values);
   return values;
 }
 
@@ -583,7 +622,9 @@ export function getAllSettings(): AppConfig {
     processes: listProcessSettings(),
     ynab: getYnabSettings(),
     openrouter: getOpenRouterSettings(),
+    openai: getOpenAISettings(),
     tabs: listTabSettings(),
+    spotify: getSpotifySettings(),
   };
 }
 
@@ -659,6 +700,8 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   // No legacy config.json counterpart — this section postdates the migration,
   // so it always seeds from the empty default.
   seedRawIfEmpty("openrouter", {});
+  seedRawIfEmpty("openai", {});
+  seedRawIfEmpty("spotify", { enabled: true });
 
   seedVaultsIfEmpty(pick<{ label: string; path: string }[]>("vaults") ?? []);
   seedGithubReposIfEmpty(legacyGithub.repos ?? []);

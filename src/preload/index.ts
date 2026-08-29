@@ -21,6 +21,8 @@ import type {
   NotificationSettings,
   OpenRouterPeriod,
   OpenRouterScalarConfig,
+  OpenAIPeriod,
+  OpenAIScalarConfig,
   ProcessConfig,
   TraySummary,
   YnabScalarConfig,
@@ -32,6 +34,10 @@ const api: CommandCenterApi = {
     list: () => ipcRenderer.invoke("docker:list"),
     start: (name: string) => ipcRenderer.invoke("docker:start", name),
     stop: (name: string) => ipcRenderer.invoke("docker:stop", name),
+  },
+
+  spotify: {
+    nowPlaying: () => ipcRenderer.invoke("spotify:nowPlaying"),
   },
 
   grimoire: {
@@ -160,6 +166,10 @@ const api: CommandCenterApi = {
     usage: (period: OpenRouterPeriod) => ipcRenderer.invoke("openrouter:usage", period),
   },
 
+  openai: {
+    usage: (period: OpenAIPeriod) => ipcRenderer.invoke("openai:usage", period),
+  },
+
   notifications: {
     show: (alert: AppAlert) => ipcRenderer.invoke("notifications:show", alert),
     health: () => ipcRenderer.invoke("notifications:health"),
@@ -284,6 +294,10 @@ const api: CommandCenterApi = {
       update: (values: { refreshSeconds: number }) =>
         ipcRenderer.invoke("settings:docker:update", values),
     },
+    spotify: {
+      update: (values: { enabled: boolean }) =>
+        ipcRenderer.invoke("settings:spotify:update", values),
+    },
     app: {
       update: (values: { refreshMinutes?: number }) =>
         ipcRenderer.invoke("settings:app:update", values),
@@ -322,6 +336,9 @@ const api: CommandCenterApi = {
     openrouter: {
       update: (values: OpenRouterScalarConfig) =>
         ipcRenderer.invoke("settings:openrouter:update", values),
+    },
+    openai: {
+      update: (values: OpenAIScalarConfig) => ipcRenderer.invoke("settings:openai:update", values),
     },
     vaults: {
       list: () => ipcRenderer.invoke("settings:vaults:list"),

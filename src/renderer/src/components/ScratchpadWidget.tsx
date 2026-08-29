@@ -68,7 +68,6 @@ export default function ScratchpadWidget() {
           mode={mode}
           onModeChange={setMode}
           saving={autosave.savingKey !== null || clearing}
-          value={content}
         >
           <button
             type="button"

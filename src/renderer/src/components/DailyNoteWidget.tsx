@@ -96,7 +96,6 @@ export default function DailyNoteWidget({ data, onNavigate, onChange }: DailyNot
           // part of what made an empty day look like a real one. The
           // "Start typing to create …" hint below says what's true instead.
           showStatus={!creating}
-          value={data.content}
           className="daily-note-toolbar"
         >
           {creating && (

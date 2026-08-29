@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent, MouseEvent } from "react";
 import type { NoteBrowseResult, TemplateEntry } from "../../../shared/types";
+import Select from "./Select";
 import { IconFolder, IconNote, IconPlus, IconX } from "./icons";
 
 interface NoteBrowserModalProps {
@@ -137,18 +138,15 @@ export default function NoteBrowserModal({ vaultLabel, onClose, onPick }: NoteBr
             onChange={(e) => setNewName(e.target.value)}
           />
           {templates.length > 0 && (
-            <select
+            <Select
               value={templateChoice}
-              onChange={(e) => setTemplateChoice(e.target.value)}
+              onChange={setTemplateChoice}
               title="Start from a template"
-            >
-              <option value="">No template</option>
-              {templates.map((t) => (
-                <option key={t.path} value={t.path}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "No template" },
+                ...templates.map((t) => ({ value: t.path, label: t.name })),
+              ]}
+            />
           )}
           <button type="submit" disabled={!newName.trim() || creating} title="Create note here">
             <IconPlus size={12} />

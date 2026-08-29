@@ -76,6 +76,18 @@ export interface OpenRouterScalarConfig {
   refreshSeconds?: number;
 }
 
+// `adminApiKey` is an Admin API key from OpenAI's organization settings
+// (Settings → Organization → Admin keys) — a credential distinct from a
+// normal project API key, scoped to administrative endpoints only. It's
+// required for both endpoints this feature uses (organization usage,
+// organization costs); a regular project key can't call either. Unlike
+// OpenRouter, OpenAI's API has no endpoint for remaining credit balance, so
+// there's no `creditBalance` counterpart here. See services/openai.ts.
+export interface OpenAIScalarConfig {
+  adminApiKey?: string;
+  refreshSeconds?: number;
+}
+
 // A labeled Obsidian vault root for the Notes tab. Separate from
 // grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
 // point the Notes tab at several vaults, including that same one.
@@ -141,7 +153,9 @@ export interface AppConfig {
   processes?: ProcessConfig[];
   ynab?: YnabScalarConfig;
   openrouter?: OpenRouterScalarConfig;
+  openai?: OpenAIScalarConfig;
   tabs?: TabConfig[];
+  spotify?: { enabled: boolean };
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -152,6 +166,19 @@ export interface DockerContainer {
   state: ContainerState;
   status: string;
   ports: string;
+}
+
+// Read directly from the local Spotify.app via AppleScript — no Spotify Web
+// API, no OAuth. artworkUrl may be absent even while playing: local files not
+// synced to Spotify's CDN don't have one.
+export interface SpotifyNowPlayingResult {
+  ok: boolean;
+  reason?: string;
+  playing: boolean;
+  track?: string;
+  artist?: string;
+  album?: string;
+  artworkUrl?: string;
 }
 
 export interface DockerResult {
@@ -249,6 +276,11 @@ export interface OpenRouterUsageResult {
   ok: boolean;
   reason?: string;
   period: OpenRouterPeriod;
+  // Set only for period "daily": the completed UTC day ("YYYY-MM-DD") these
+  // numbers actually cover. "daily" is pinned to the most recent day OpenRouter
+  // has data for, not the caller's local calendar date — see services/openrouter.ts
+  // — so the UI shows this rather than assuming it means "today".
+  date?: string;
   costUsd: number;
   requests: number;
   tokens: OpenRouterTokenTotals;
@@ -258,6 +290,51 @@ export interface OpenRouterUsageResult {
   // succeeded — kept optional rather than folding into `ok` so a partial
   // result still shows usage even if the balance call had trouble.
   creditBalance?: { totalCredits: number; totalUsage: number; remaining: number };
+  scanMs: number;
+}
+
+// OpenAI org-level usage/cost periods. Same shape as OpenRouterPeriod, but
+// OpenAI's usage endpoint reports the current (incomplete) day in real time,
+// so "daily" here just means "today (UTC)" — none of OpenRouterPeriod's
+// most-recent-completed-day pinning is needed. See services/openai.ts.
+export type OpenAIPeriod = "daily" | "weekly" | "30d";
+
+export interface OpenAITokenTotals {
+  // Already includes cached + cache-write tokens, per OpenAI's own field
+  // description — `cached` below is a subset of this, not additional.
+  input: number;
+  cached: number;
+  output: number;
+}
+
+// One row of the by-model usage breakdown. Tokens/requests only: OpenAI's
+// costs endpoint can only be grouped by line item, project, or API key —
+// never by model — so cost can't join this table. See services/openai.ts.
+export interface OpenAIUsageBucket {
+  key: string;
+  label: string;
+  requests: number;
+  tokens: OpenAITokenTotals;
+}
+
+// One row of the by-line-item cost breakdown. Line items are OpenAI's own
+// cost categories (usually a model name, sometimes a product like "Realtime
+// API") — cost-only, since the costs endpoint carries no token counts.
+export interface OpenAICostBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+}
+
+export interface OpenAIUsageResult {
+  ok: boolean;
+  reason?: string;
+  period: OpenAIPeriod;
+  costUsd: number;
+  requests: number;
+  tokens: OpenAITokenTotals;
+  byModel: OpenAIUsageBucket[];
+  byLineItem: OpenAICostBucket[];
   scanMs: number;
 }
 
@@ -939,6 +1016,9 @@ export interface CommandCenterApi {
     start: (name: string) => Promise<ActionResult>;
     stop: (name: string) => Promise<ActionResult>;
   };
+  spotify: {
+    nowPlaying: () => Promise<SpotifyNowPlayingResult>;
+  };
   grimoire: {
     dailyNote: (date?: string) => Promise<DailyNoteResult>;
     saveDailyNote: (date: string, content: string) => Promise<ActionResult>;
@@ -1036,6 +1116,9 @@ export interface CommandCenterApi {
   };
   openrouter: {
     usage: (period: OpenRouterPeriod) => Promise<OpenRouterUsageResult>;
+  };
+  openai: {
+    usage: (period: OpenAIPeriod) => Promise<OpenAIUsageResult>;
   };
   notifications: {
     show: (alert: AppAlert) => Promise<void>;
@@ -1142,6 +1225,9 @@ export interface CommandCenterApi {
     docker: {
       update: (values: { refreshSeconds: number }) => Promise<{ refreshSeconds: number }>;
     };
+    spotify: {
+      update: (values: { enabled: boolean }) => Promise<{ enabled: boolean }>;
+    };
     app: {
       update: (values: { refreshMinutes?: number }) => Promise<{ refreshMinutes?: number }>;
     };
@@ -1177,6 +1263,9 @@ export interface CommandCenterApi {
     };
     openrouter: {
       update: (values: OpenRouterScalarConfig) => Promise<OpenRouterScalarConfig>;
+    };
+    openai: {
+      update: (values: OpenAIScalarConfig) => Promise<OpenAIScalarConfig>;
     };
     vaults: {
       list: () => Promise<VaultConfig[]>;

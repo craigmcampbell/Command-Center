@@ -1,5 +1,5 @@
-// Talks to the Todoist API (v1) for due/overdue tasks and for completing or
-// creating them. Requires a personal API token (Todoist Settings ->
+// Talks to the Todoist API (v1) for due/overdue tasks, tasks with deadlines,
+// and for completing or creating them. Requires a personal API token (Todoist Settings ->
 // Integrations -> Developer) stored in config.json. Fails soft, like the
 // other services, so a missing/bad token just shows a friendly message
 // instead of crashing the widget.
@@ -19,10 +19,34 @@ function todayLocalDateString(): string {
 }
 
 const API_ROOT = "https://api.todoist.com/api/v1";
-const TASKS_URL =
-  `${API_ROOT}/tasks/filter?query=` + encodeURIComponent("overdue | today");
 const PROJECTS_URL = `${API_ROOT}/projects`;
 const ALL_TASKS_URL = `${API_ROOT}/tasks`;
+
+type TaskPageResult =
+  | { ok: true; tasks: any[] }
+  | { ok: false; status: number };
+
+async function fetchAllActiveTasks(apiToken: string): Promise<TaskPageResult> {
+  const tasks: any[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const url = new URL(ALL_TASKS_URL);
+    url.searchParams.set("limit", "200");
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    });
+    if (!response.ok) return { ok: false, status: response.status };
+
+    const page = await response.json();
+    tasks.push(...page.results);
+    cursor = page.next_cursor || null;
+  } while (cursor);
+
+  return { ok: true, tasks };
+}
 
 export async function getDueTasks(
   { apiToken }: AppConfig["todoist"] = { apiToken: "" }
@@ -31,32 +55,29 @@ export async function getDueTasks(
     return { ok: false, reason: "No Todoist API token configured", tasks: [], projects: [] };
   }
 
-  let tasksRes: Response;
+  let taskPages: TaskPageResult;
   let projectsRes: Response;
-  let allTasksRes: Response;
   try {
-    [tasksRes, projectsRes, allTasksRes] = await Promise.all([
-      fetch(TASKS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
+    [taskPages, projectsRes] = await Promise.all([
+      fetchAllActiveTasks(apiToken),
       fetch(PROJECTS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
-      fetch(ALL_TASKS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
     ]);
   } catch {
     return { ok: false, reason: "Couldn't reach Todoist", tasks: [], projects: [] };
   }
 
-  const failed = !tasksRes.ok ? tasksRes : !projectsRes.ok ? projectsRes : !allTasksRes.ok ? allTasksRes : null;
-  if (failed) {
+  if (!taskPages.ok || !projectsRes.ok) {
+    const failedStatus = !taskPages.ok ? taskPages.status : projectsRes.status;
     return {
       ok: false,
-      reason: failed.status === 401 ? "Todoist token rejected" : "Todoist request failed",
+      reason: failedStatus === 401 ? "Todoist token rejected" : "Todoist request failed",
       tasks: [],
       projects: [],
     };
   }
 
-  const { results } = await tasksRes.json();
   const { results: projects } = await projectsRes.json();
-  const { results: allTasks } = await allTasksRes.json();
+  const allTasks = taskPages.tasks;
 
   const projectNames = new Map<string, string>(
     projects.map((p: any) => [p.id, p.name])
@@ -73,7 +94,11 @@ export async function getDueTasks(
 
   const today = todayLocalDateString();
 
-  const tasks = results
+  const tasks = allTasks
+    .filter((t: any) => {
+      const dueDate = typeof t.due?.date === "string" ? t.due.date.slice(0, 10) : null;
+      return !!t.deadline?.date || (!!dueDate && dueDate <= today);
+    })
     .map((t: any) => ({
       id: t.id,
       content: t.content,
@@ -93,8 +118,11 @@ export async function getDueTasks(
       })),
       labels: t.labels || [],
     }))
-    .sort((a: { due: string | null }, b: { due: string | null }) =>
-      (a.due || "").localeCompare(b.due || "")
+    .sort(
+      (
+        a: { due: string | null; deadline: string | null },
+        b: { due: string | null; deadline: string | null }
+      ) => (a.due || a.deadline || "").localeCompare(b.due || b.deadline || "")
     );
 
   const projectList = projects

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
+import { getNowPlaying } from "./services/spotify";
 import {
   readDailyNote,
   saveDailyNote,
@@ -81,6 +82,7 @@ import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBac
 import { capture } from "./services/capture";
 import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
 import { getOpenRouterUsage } from "./services/openrouter";
+import { getOpenAIUsage } from "./services/openai";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
 import {
   captureHotkeyStatus,
@@ -142,6 +144,8 @@ import {
   updateGrimoireSettings,
   getDockerSettings,
   updateDockerSettings,
+  getSpotifySettings,
+  updateSpotifySettings,
   getAppSettings,
   updateAppSettings,
   getTodoistSettings,
@@ -165,6 +169,8 @@ import {
   toggleYnabAccountHidden,
   getOpenRouterSettings,
   updateOpenRouterSettings,
+  getOpenAISettings,
+  updateOpenAISettings,
   listVaultSettings,
   addVault,
   updateVault,
@@ -204,6 +210,8 @@ import type {
   YnabNewTransactionInput,
   OpenRouterScalarConfig,
   OpenRouterPeriod,
+  OpenAIScalarConfig,
+  OpenAIPeriod,
 } from "../shared/types";
 
 initDatabase();
@@ -329,6 +337,11 @@ ipcMain.handle("docker:start", async (_evt, name: string) => {
 });
 ipcMain.handle("docker:stop", async (_evt, name: string) => {
   return stopContainer(name);
+});
+
+// Currently-playing track, read from the local Spotify.app via AppleScript.
+ipcMain.handle("spotify:nowPlaying", async () => {
+  return getNowPlaying();
 });
 
 // Grimoire: a daily note (raw markdown, defaults to today) and the missions list.
@@ -461,6 +474,12 @@ ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
 // remaining credit balance.
 ipcMain.handle("openrouter:usage", (_evt, period: OpenRouterPeriod) =>
   getOpenRouterUsage(getOpenRouterSettings(), period)
+);
+
+// OpenAI: usage by model + cost by line item for the selected period. No
+// credit balance — see services/openai.ts for why.
+ipcMain.handle("openai:usage", (_evt, period: OpenAIPeriod) =>
+  getOpenAIUsage(getOpenAISettings(), period)
 );
 
 // Transition detection happens in the renderer (that's where the polled state
@@ -720,6 +739,9 @@ ipcMain.handle("settings:capture:update", (_evt, values: CaptureSettings) => {
 ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
   updateDockerSettings(values)
 );
+ipcMain.handle("settings:spotify:update", (_evt, values: { enabled: boolean }) =>
+  updateSpotifySettings(values)
+);
 ipcMain.handle("settings:app:update", (_evt, values: { refreshMinutes?: number }) =>
   updateAppSettings(values)
 );
@@ -742,6 +764,9 @@ ipcMain.handle("settings:ynab:update", (_evt, values: YnabScalarConfig) =>
 );
 ipcMain.handle("settings:openrouter:update", (_evt, values: OpenRouterScalarConfig) =>
   updateOpenRouterSettings(values)
+);
+ipcMain.handle("settings:openai:update", (_evt, values: OpenAIScalarConfig) =>
+  updateOpenAISettings(values)
 );
 
 ipcMain.handle("settings:vaults:list", () => listVaultSettings());
