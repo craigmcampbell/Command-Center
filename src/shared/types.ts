@@ -252,6 +252,83 @@ export interface ClaudeUsageResult {
   scanMs: number;
 }
 
+// Codex records cached input as a subset of input and reasoning output as a
+// subset of output. Consumers must use input + output for a true total rather
+// than adding all five fields together.
+export interface CodexTokenTotals {
+  input: number;
+  cachedInput: number;
+  cacheWriteInput: number;
+  output: number;
+  reasoningOutput: number;
+}
+
+export interface CodexUsageWindow {
+  requests: number;
+  tokens: CodexTokenTotals;
+}
+
+export interface CodexUsageBucket extends CodexUsageWindow {
+  key: string;
+  label: string;
+}
+
+export interface CodexUsageDay {
+  date: string;
+  tokens: number;
+}
+
+export interface CodexQuotaWindow {
+  usedPercent: number;
+  windowMinutes: number;
+  resetsAt: number;
+  stale: boolean;
+}
+
+export interface CodexQuotaSnapshot {
+  reportedAt: number;
+  planType?: string;
+  primary?: CodexQuotaWindow;
+  secondary?: CodexQuotaWindow;
+  credits?: {
+    hasCredits: boolean;
+    unlimited: boolean;
+    balance?: string;
+  };
+  rateLimitReachedType?: string;
+  spendControlReached?: boolean;
+}
+
+export interface CodexUsageResult {
+  ok: boolean;
+  reason?: string;
+  today: CodexUsageWindow;
+  last7: CodexUsageWindow;
+  last30: CodexUsageWindow;
+  days: CodexUsageDay[];
+  byProject: CodexUsageBucket[];
+  byModel: CodexUsageBucket[];
+  quota?: CodexQuotaSnapshot;
+  scanMs: number;
+}
+
+export interface CodexSession {
+  id: string;
+  cwd: string;
+  projectLabel: string;
+  title: string;
+  model?: string;
+  reasoningEffort?: string;
+  tokensUsed: number;
+  updatedAt: number;
+}
+
+export interface CodexSessionsResult {
+  ok: boolean;
+  reason?: string;
+  sessions: CodexSession[];
+}
+
 // OpenRouter's reporting periods. Capped at 30d deliberately: OpenRouter's
 // own /activity endpoint hard-limits history to the last 30 completed UTC
 // days — there's no 60d/90d to offer even with pagination.
@@ -1055,6 +1132,11 @@ export interface CommandCenterApi {
     launch: (projectPath: string) => Promise<ActionResult>;
     usage: () => Promise<ClaudeUsageResult>;
     sessions: (limit?: number) => Promise<ClaudeSessionsResult>;
+    resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
+  };
+  codex: {
+    usage: () => Promise<CodexUsageResult>;
+    sessions: (limit?: number) => Promise<CodexSessionsResult>;
     resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   forklift: {

@@ -138,7 +138,7 @@ export default function OpenAIUsageWidget({ data, period, onPeriodChange }: Open
   }
 
   return (
-    <Panel title="OpenAI usage" headerRight={<PeriodToggle period={period} onChange={onPeriodChange} />}>
+    <Panel title="OpenAI API usage" headerRight={<PeriodToggle period={period} onChange={onPeriodChange} />}>
       {body}
     </Panel>
   );

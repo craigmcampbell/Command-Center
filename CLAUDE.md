@@ -530,6 +530,35 @@ of a subscription is used up — checked: `rateLimits` appears in transcripts
 only inside a 429 error payload, after the fact. Don't imply otherwise in the
 UI.
 
+## Codex subscription usage
+
+The **OpenAI** tab leads with local Codex subscription telemetry, then keeps
+the separate Admin API usage/cost cards below it. `services/codexUsage.ts`
+reads `${CODEX_HOME:-~/.codex}` only; Codex works without the Admin API key,
+and an API credential failure must never suppress the local panels.
+
+Token events come from `token_count.info.last_token_usage`. Cached input is a
+subset of input and reasoning output is a subset of output, so the headline
+total is always `input + output`; the subset fields are breakdowns only.
+Copied/forked history is deduped on the original event timestamp plus token
+tuple, and each event is attributed to the active `session_meta` /
+`turn_context` cwd and model. Active and archived rollouts both count toward
+history, but archived threads are excluded from Recent sessions.
+
+Unlike Claude, Codex writes a real rolling-limit snapshot alongside token
+events. Window labels come from `window_minutes` rather than assumed 5h/7d
+names, and both current `resets_at` and legacy `resets_in_seconds` forms are
+supported. A window whose reset passed is marked stale — never reset to a
+made-up 0% — until Codex reports again. Plan and optional credit fields are
+shown from that same snapshot. These are subscription limits, not API billing
+limits.
+
+Recent session metadata prefers the newest compatible `state_*.sqlite`
+`threads` table, with `session_index.jsonl` + transcript metadata as the
+schema-change fallback. The state database is opened read-only and closed per
+read. Resume validates the UUID and working directory before launching
+`codex resume <id>` through the existing terminal service.
+
 ## Daily note template
 
 Settings → Grimoire takes a vault-relative `dailyTemplatePath`. When a daily

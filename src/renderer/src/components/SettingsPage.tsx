@@ -1008,11 +1008,10 @@ function OpenAICard({
     <form className="settings-card" onSubmit={handleSave}>
       <h3>OpenAI</h3>
       <p className="settings-card-hint">
-        Requires an <strong>Admin API key</strong> — a separate, org-level credential from a
-        normal project API key, created under OpenAI's dashboard (Settings → Organization →
-        Admin keys). It powers the AI tab's OpenAI usage-by-model and cost-by-line-item
-        reporting; a regular project key can't be used here. Unlike OpenRouter, OpenAI's API has
-        no endpoint for remaining credit balance, so that figure isn't shown.
+        Local Codex subscription usage is read from this machine and needs no key. The optional
+        <strong> Admin API key</strong> below is a separate, org-level credential created under
+        OpenAI's dashboard (Settings → Organization → Admin keys); it powers only the OpenAI API
+        usage-by-model and cost-by-line-item section. A regular project key can't be used there.
       </p>
       <div className="settings-field-row">
         <label>Admin API key</label>
