@@ -170,6 +170,13 @@ const api: CommandCenterApi = {
     usage: (period: OpenAIPeriod) => ipcRenderer.invoke("openai:usage", period),
   },
 
+  codex: {
+    usage: () => ipcRenderer.invoke("codex:usage"),
+    sessions: (limit?: number) => ipcRenderer.invoke("codex:sessions", limit),
+    resume: (sessionId: string, cwd: string) =>
+      ipcRenderer.invoke("codex:resume", sessionId, cwd),
+  },
+
   notifications: {
     show: (alert: AppAlert) => ipcRenderer.invoke("notifications:show", alert),
     health: () => ipcRenderer.invoke("notifications:health"),

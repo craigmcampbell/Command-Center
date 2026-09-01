@@ -81,6 +81,11 @@ import { destroyTray, initTray, updateTray } from "./services/tray";
 import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
 import { capture } from "./services/capture";
 import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
+import {
+  getCodexUsage,
+  listCodexSessions,
+  validateCodexResumeTarget,
+} from "./services/codexUsage";
 import { getOpenRouterUsage } from "./services/openrouter";
 import { getOpenAIUsage } from "./services/openai";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
@@ -420,6 +425,13 @@ ipcMain.handle("claude:sessions", (_evt, limit?: number) => listClaudeSessions(l
 // `claude -r <id>` resumes by session id; the id is the transcript filename.
 ipcMain.handle("claude:resume", async (_evt, sessionId: string, cwd: string) => {
   return openInTerminal(cwd, `claude -r ${sessionId}`);
+});
+ipcMain.handle("codex:usage", () => getCodexUsage());
+ipcMain.handle("codex:sessions", (_evt, limit?: number) => listCodexSessions(limit));
+ipcMain.handle("codex:resume", async (_evt, sessionId: string, cwd: string) => {
+  const reason = validateCodexResumeTarget(sessionId, cwd);
+  if (reason) return { ok: false, reason };
+  return openInTerminal(cwd, `codex resume ${sessionId}`);
 });
 
 // Open a local directory in ForkLift (File Links widget).

@@ -8,6 +8,8 @@ import type {
   DailyNoteResult,
   ClaudeSessionsResult,
   ClaudeUsageResult,
+  CodexSessionsResult,
+  CodexUsageResult,
   GitHubStatusResult,
   GitStatusResult,
   LinkItem,
@@ -51,6 +53,8 @@ import LinkLauncherWidget, { toDisplayBasename } from "./components/LinkLauncher
 import ClaudeLauncherWidget from "./components/ClaudeLauncherWidget";
 import ClaudeUsageWidget, { ClaudeBreakdown } from "./components/ClaudeUsageWidget";
 import ClaudeSessionsWidget from "./components/ClaudeSessionsWidget";
+import CodexUsageWidget, { CodexBreakdown } from "./components/CodexUsageWidget";
+import CodexSessionsWidget from "./components/CodexSessionsWidget";
 import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
 import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
@@ -161,6 +165,8 @@ export default function App() {
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
   const [claudeUsage, setClaudeUsage] = useState<ClaudeUsageResult | null>(null);
   const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionsResult | null>(null);
+  const [codexUsage, setCodexUsage] = useState<CodexUsageResult | null>(null);
+  const [codexSessions, setCodexSessions] = useState<CodexSessionsResult | null>(null);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({});
   // Previous poll's snapshot, for edge-triggered alerting. A ref, not state:
   // updating it must not itself cause a render, or the alert effect would
@@ -215,6 +221,13 @@ export default function App() {
     // project's most recent work and starves quieter ones out of the list
     // entirely — 40 gives every active project a real chance to appear.
     setClaudeSessions(await window.api.claude.sessions(40));
+  }, []);
+  const loadCodex = useCallback(async () => {
+    // Usage scans every active + archived transcript. Let it populate the
+    // service's per-file cache before the active-session fallback asks for
+    // transcript metadata, avoiding two concurrent cold parses.
+    setCodexUsage(await window.api.codex.usage());
+    setCodexSessions(await window.api.codex.sessions(40));
   }, []);
   const loadProcessStatuses = useCallback(async () => {
     setProcessStatuses(await window.api.process.statusAll());
@@ -293,6 +306,7 @@ export default function App() {
       loadGithub(),
       loadGit(),
       loadClaude(),
+      loadCodex(),
       loadProcessStatuses(),
       loadYnab(),
       loadFinanceReviewLog(),
@@ -314,6 +328,7 @@ export default function App() {
     loadGithub,
     loadGit,
     loadClaude,
+    loadCodex,
     loadProcessStatuses,
     loadYnab,
     loadFinanceReviewLog,
@@ -407,6 +422,7 @@ export default function App() {
         loadGithub(),
         loadGit(),
         loadClaude(),
+        loadCodex(),
         loadProcessStatuses(),
         loadYnab(),
         loadFinanceReviewLog(),
@@ -795,6 +811,27 @@ export default function App() {
 
           {aiSubTab === "openai" && (
             <main className="grid grid-openai">
+              <div className="slot slot-codex-summary">
+                <CodexUsageWidget data={codexUsage} />
+              </div>
+              <div className="slot slot-codex-projects">
+                <CodexBreakdown
+                  title="Codex by project (30d)"
+                  rows={codexUsage?.byProject ?? []}
+                  emptyLabel="No local Codex usage in the last 30 days."
+                />
+              </div>
+              <div className="slot slot-codex-models">
+                <CodexBreakdown
+                  title="Codex by model (30d)"
+                  rows={codexUsage?.byModel ?? []}
+                  emptyLabel="No local Codex usage in the last 30 days."
+                />
+              </div>
+              <div className="slot slot-codex-sessions">
+                <CodexSessionsWidget data={codexSessions} />
+              </div>
+              <h2 className="slot openai-api-heading">OpenAI API</h2>
               <div className="slot slot-openai-summary">
                 <OpenAIUsageWidget
                   data={openAIUsage}
@@ -804,14 +841,14 @@ export default function App() {
               </div>
               <div className="slot slot-openai-models">
                 <OpenAIModelBreakdown
-                  title="By model"
+                  title="API by model"
                   rows={openAIUsage?.byModel ?? []}
                   emptyLabel="No usage in this period."
                 />
               </div>
               <div className="slot slot-openai-lineitems">
                 <OpenAICostBreakdown
-                  title="By line item"
+                  title="API by line item"
                   rows={openAIUsage?.byLineItem ?? []}
                   emptyLabel="No cost in this period."
                 />

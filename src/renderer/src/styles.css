@@ -4496,8 +4496,33 @@ body {
 .grid-openai {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-areas:
+    "codex-summary codex-summary"
+    "codex-projects codex-models"
+    "codex-sessions codex-sessions"
+    "openai-api-heading openai-api-heading"
     "openai-summary openai-summary"
     "openai-models openai-lineitems";
+}
+.slot-codex-summary {
+  grid-area: codex-summary;
+}
+.slot-codex-projects {
+  grid-area: codex-projects;
+}
+.slot-codex-models {
+  grid-area: codex-models;
+}
+.slot-codex-sessions {
+  grid-area: codex-sessions;
+}
+.openai-api-heading {
+  grid-area: openai-api-heading;
+  margin: 8px 2px -2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 .slot-openai-summary {
   grid-area: openai-summary;
@@ -4514,6 +4539,114 @@ body {
    .openrouter-stats otherwise uses down to 2, rather than leaving a gap. */
 .openai-stats {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.codex-quota {
+  margin-bottom: 2px;
+}
+.codex-quota-titleline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.codex-quota-titleline strong {
+  font-size: 13px;
+}
+.codex-quota-titleline span,
+.codex-quota-reset,
+.codex-credit,
+.codex-quota-empty {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.codex-quota-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.codex-quota-window {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.codex-quota-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.codex-quota-window.stale .codex-quota-head {
+  color: var(--ink-dim);
+}
+.codex-quota-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--panel-edge-soft);
+}
+.codex-quota-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.codex-credit {
+  margin: 10px 0 0;
+}
+.codex-limit-warning {
+  margin: 10px 0 0;
+  color: var(--alert);
+  font-size: 11px;
+}
+.codex-quota-empty {
+  margin: 0;
+}
+.codex-usage-divider {
+  height: 1px;
+  margin: 14px 0;
+  background: var(--panel-edge-soft);
+}
+.codex-breakdown-row .status,
+.codex-breakdown-row .codex-tokens {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.codex-breakdown-row .status {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+.codex-breakdown-row .codex-tokens {
+  min-width: 68px;
+  text-align: right;
+  color: var(--ink);
+}
+
+@media (max-width: 860px) {
+  .grid-openai {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "codex-summary"
+      "codex-projects"
+      "codex-models"
+      "codex-sessions"
+      "openai-api-heading"
+      "openai-summary"
+      "openai-models"
+      "openai-lineitems";
+  }
+  .codex-quota-grid,
+  .claude-stats,
+  .openai-stats {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Now Playing banner — persistent bottom strip, not a modal, so it sits below
