@@ -19,6 +19,7 @@ import {
 } from "./services/grimoire";
 import { openInTerminal } from "./services/launcher";
 import { openInForkLift } from "./services/forklift";
+import { openInCursor } from "./services/cursor";
 import {
   getDueTasks,
   completeTask,
@@ -437,6 +438,11 @@ ipcMain.handle("codex:resume", async (_evt, sessionId: string, cwd: string) => {
 // Open a local directory in ForkLift (File Links widget).
 ipcMain.handle("forklift:open", async (_evt, dirPath: string) => {
   return openInForkLift(dirPath);
+});
+
+// Open a local directory in Cursor (Git widget).
+ipcMain.handle("cursor:open", async (_evt, dirPath: string) => {
+  return openInCursor(dirPath);
 });
 
 // Google Calendar: a day's events (defaults to today), plus the one-time

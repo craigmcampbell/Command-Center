@@ -4080,6 +4080,25 @@ body {
   font-size: 11px;
   color: var(--ink-dim);
 }
+/* Its own icon-button rather than folded into .git-last's click target — the
+   row is already a ForkLift launcher, so this needs a hit area a click can
+   land on without also triggering that. */
+.git-cursor-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  opacity: 0.55;
+}
+.git-cursor-btn:hover {
+  opacity: 1;
+  background: var(--panel-hover, rgba(255, 255, 255, 0.06));
+}
+.git-cursor-btn img {
+  display: block;
+  border-radius: 3px;
+}
 
 /* ---- Quick capture panel (its own frameless window) ---- */
 
