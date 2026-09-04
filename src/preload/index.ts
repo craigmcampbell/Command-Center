@@ -93,6 +93,10 @@ const api: CommandCenterApi = {
     open: (dirPath: string) => ipcRenderer.invoke("forklift:open", dirPath),
   },
 
+  cursor: {
+    open: (dirPath: string) => ipcRenderer.invoke("cursor:open", dirPath),
+  },
+
   calendar: {
     events: (date?: string) => ipcRenderer.invoke("calendar:events", date),
     connect: () => ipcRenderer.invoke("calendar:connect"),

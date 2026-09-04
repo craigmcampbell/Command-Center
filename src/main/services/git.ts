@@ -122,6 +122,7 @@ async function getRepoStatus(repo: GitHubRepoConfig): Promise<GitRepoStatus> {
   const base: GitRepoStatus = {
     id: repo.id,
     label: repo.label,
+    owner: repo.owner,
     path,
     ok: false,
     branch: "(unknown)",

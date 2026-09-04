@@ -637,11 +637,11 @@ export default function App() {
 
       {activeTab === "development" && (
         <main className="grid grid-dev">
-          <div className="slot slot-github">
-            <GitHubWidget data={github} />
-          </div>
           <div className="slot slot-git">
             <GitStatusWidget data={gitStatus} />
+          </div>
+          <div className="slot slot-github">
+            <GitHubWidget data={github} />
           </div>
           <div className="slot slot-services">
             <DockerWidget data={docker} onRefresh={loadDocker} />

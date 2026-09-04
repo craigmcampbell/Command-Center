@@ -526,6 +526,10 @@ export type AppCommand =
 export interface GitRepoStatus {
   id: number;
   label: string;
+  // Absent for a local-only repo with no GitHub counterpart — see
+  // GitHubRepoConfig.owner. Carried through so the widget can group rows by
+  // owner the same way GitHubWidget does.
+  owner?: string;
   path: string;
   ok: boolean;
   reason?: string;
@@ -1140,6 +1144,9 @@ export interface CommandCenterApi {
     resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   forklift: {
+    open: (dirPath: string) => Promise<ActionResult>;
+  };
+  cursor: {
     open: (dirPath: string) => Promise<ActionResult>;
   };
   calendar: {
