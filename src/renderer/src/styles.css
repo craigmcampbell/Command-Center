@@ -259,13 +259,15 @@ body {
     "filelinks filelinks filelinks filelinks filelinks filelinks";
 }
 
+/* 6 columns (not 2) so git/github can split the row 50/50 while
+   services/claude keeps its original 2:1 lean — a plain 2-column grid can
+   only give one ratio to every row that shares its tracks. */
 .grid-dev {
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-template-areas:
-    "github github"
-    "git git"
-    "services claude"
-    "processes processes";
+    "git git git github github github"
+    "services services services services claude claude"
+    "processes processes processes processes processes processes";
 }
 
 .grid-reader {
@@ -388,8 +390,8 @@ body {
   .grid-dev {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "github"
       "git"
+      "github"
       "services"
       "claude"
       "processes";
@@ -4023,11 +4025,31 @@ body {
 
 /* ---- Git widget (Development tab) ---- */
 
+/* Each row is wrapped so the commit-detail toggle below it (see
+   .expand-note) can sit as a sibling rather than inside the row's own flex
+   layout. The border that used to live on .row moves here, since .row is
+   now always its wrapper's only child — ".row:last-child" would otherwise
+   match every row instead of just the group's actual last one. */
+.git-repo-row {
+  border-bottom: 1px solid var(--panel-edge-soft);
+}
+.git-repo-row:last-child {
+  border-bottom: none;
+}
+.git-repo-row .git-row {
+  border-bottom: none;
+}
 .git-row {
   cursor: pointer;
 }
 .git-row:hover {
   background: var(--panel-hover, rgba(255, 255, 255, 0.03));
+}
+/* The repo label must never be the thing that gives way to a long branch
+   name or commit-count badges crowding the row. Matches .github-repo-label's
+   same never-shrink role in GitHubWidget. */
+.git-row .name {
+  flex-shrink: 0;
 }
 .git-branch {
   display: inline-flex;
@@ -4071,18 +4093,10 @@ body {
   color: var(--alert);
   border-color: color-mix(in srgb, var(--alert) 45%, transparent);
 }
-.git-last {
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--ink-dim);
-}
-/* Its own icon-button rather than folded into .git-last's click target — the
+/* Its own icon-button rather than folded into the row's click target — the
    row is already a ForkLift launcher, so this needs a hit area a click can
-   land on without also triggering that. */
+   land on without also triggering that. Same reasoning for .desc-toggle
+   (the commit-detail reveal) just below. */
 .git-cursor-btn {
   display: inline-flex;
   flex-shrink: 0;
@@ -4098,6 +4112,13 @@ body {
 .git-cursor-btn img {
   display: block;
   border-radius: 3px;
+}
+/* Pushes the commit-detail toggle to the row's trailing edge, where the
+   always-visible commit text used to sit — .desc-toggle itself carries no
+   margin so CalendarWidget's usage (already positioned by its own
+   .due-meta wrapper) is unaffected. */
+.git-row .desc-toggle {
+  margin-left: auto;
 }
 
 /* ---- Quick capture panel (its own frameless window) ---- */
