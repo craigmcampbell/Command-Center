@@ -32,6 +32,14 @@ export function IconRefresh({ size = 14, className }: IconProps) {
   );
 }
 
+export function IconArrowUp({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M12 19V5M6 11l6-6 6 6" />
+    </svg>
+  );
+}
+
 export function IconCheck({ size = 10, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>

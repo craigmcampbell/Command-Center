@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DockerResult,
+  DockerUpdateCheckResult,
   SpotifyNowPlayingResult,
   DailyNoteResult,
   ClaudeSessionsResult,
@@ -35,6 +36,12 @@ import type {
   OpenRouterPeriod,
   OpenAIUsageResult,
   OpenAIPeriod,
+  SystemStatsResult,
+  StorageStatsResult,
+  NetworkStatsResult,
+  PublicIpResult,
+  StatsSettings,
+  TopProcessesResult,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
 import NowPlayingBanner from "./components/NowPlayingBanner";
@@ -62,6 +69,11 @@ import ReaderWidget from "./components/ReaderWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
 import NotesWidget from "./components/NotesWidget";
+import SystemStatsWidget from "./components/SystemStatsWidget";
+import StorageWidget from "./components/StorageWidget";
+import NetworkWidget from "./components/NetworkWidget";
+import UtilizationWidget from "./components/UtilizationWidget";
+import TopProcessesWidget from "./components/TopProcessesWidget";
 import TabBar from "./components/TabBar";
 import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./components/SettingsPage";
@@ -79,7 +91,8 @@ type TabId =
   | "habits"
   | "notes"
   | "finances"
-  | "ai";
+  | "ai"
+  | "stats";
 
 // The AI tab's own sub-navigation (Claude / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
@@ -98,10 +111,17 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "notes", label: "Notes", sortOrder: 5 },
   { id: "finances", label: "Finances", sortOrder: 6 },
   { id: "ai", label: "AI", sortOrder: 7 },
+  { id: "stats", label: "Stats", sortOrder: 8 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
 const DEFAULT_DOCKER_REFRESH_SECONDS = 15;
+const DEFAULT_DOCKER_UPDATE_CHECK_MINUTES = 60;
+const DEFAULT_STATS_REFRESH_SECONDS = 5;
+const DEFAULT_STATS_PUBLIC_IP_CHECK_MINUTES = 60;
+// ~3.3 minutes of trend at the default 5s refresh — enough to see a recent
+// spike without the sparkline going stale-looking at a slower interval.
+const STATS_HISTORY_LENGTH = 40;
 const DEFAULT_GITHUB_REFRESH_SECONDS = 300;
 // Much faster than GitHub's: that one is slow to protect the API rate limit,
 // while local git costs nothing and should react to a file you just touched.
@@ -156,6 +176,27 @@ export default function App() {
   const [readerPage, setReaderPage] = useState(0);
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
   const [dockerRefreshSeconds, setDockerRefreshSeconds] = useState(DEFAULT_DOCKER_REFRESH_SECONDS);
+  const [dockerUpdates, setDockerUpdates] = useState<DockerUpdateCheckResult | null>(null);
+  const [dockerUpdateChecksEnabled, setDockerUpdateChecksEnabled] = useState(true);
+  const [dockerUpdateCheckMinutes, setDockerUpdateCheckMinutes] = useState(
+    DEFAULT_DOCKER_UPDATE_CHECK_MINUTES
+  );
+  const [systemStats, setSystemStats] = useState<SystemStatsResult | null>(null);
+  const [storageStats, setStorageStats] = useState<StorageStatsResult | null>(null);
+  const [networkStats, setNetworkStats] = useState<NetworkStatsResult | null>(null);
+  const [publicIp, setPublicIp] = useState<PublicIpResult | null>(null);
+  const [topProcesses, setTopProcesses] = useState<TopProcessesResult | null>(null);
+  // Rolling recent-samples window for the utilization sparklines — a
+  // frontend-only trend view (doesn't survive a restart, same as Activity
+  // Monitor's own history), fed by the system/storage polls below.
+  const [cpuHistory, setCpuHistory] = useState<number[]>([]);
+  const [memHistory, setMemHistory] = useState<number[]>([]);
+  const [storageHistory, setStorageHistory] = useState<number[]>([]);
+  const [statsRefreshSeconds, setStatsRefreshSeconds] = useState(DEFAULT_STATS_REFRESH_SECONDS);
+  const [statsPublicIpEnabled, setStatsPublicIpEnabled] = useState(true);
+  const [statsPublicIpCheckMinutes, setStatsPublicIpCheckMinutes] = useState(
+    DEFAULT_STATS_PUBLIC_IP_CHECK_MINUTES
+  );
   const [spotifyEnabled, setSpotifyEnabled] = useState(true);
   const [nowPlaying, setNowPlaying] = useState<SpotifyNowPlayingResult | null>(null);
   const [githubRefreshSeconds, setGithubRefreshSeconds] = useState(DEFAULT_GITHUB_REFRESH_SECONDS);
@@ -203,6 +244,30 @@ export default function App() {
 
   const loadDocker = useCallback(async () => {
     setDocker(await window.api.docker.list());
+  }, []);
+  // Deliberately not part of refreshAll's Promise.all — registry lookups can
+  // be rate-limited, so this only runs from its own interval and the widget's
+  // manual "check now" button, never from the fast "refresh everything" path.
+  const loadDockerUpdates = useCallback(async () => {
+    setDockerUpdates(await window.api.docker.checkUpdates());
+  }, []);
+  const loadSystemStats = useCallback(async () => {
+    setSystemStats(await window.api.stats.system());
+  }, []);
+  const loadStorageStats = useCallback(async () => {
+    setStorageStats(await window.api.stats.storage());
+  }, []);
+  const loadNetworkStats = useCallback(async () => {
+    setNetworkStats(await window.api.stats.network());
+  }, []);
+  const loadTopProcesses = useCallback(async () => {
+    setTopProcesses(await window.api.stats.topProcesses());
+  }, []);
+  // Deliberately not part of refreshAll's Promise.all, same reasoning as
+  // loadDockerUpdates — this is the one call to a third party, so it only
+  // runs from its own interval and the widget's manual "check now" button.
+  const loadPublicIp = useCallback(async () => {
+    setPublicIp(await window.api.stats.publicIp());
   }, []);
   const loadNowPlaying = useCallback(async () => {
     setNowPlaying(await window.api.spotify.nowPlaying());
@@ -314,6 +379,10 @@ export default function App() {
       loadCards(),
       loadOpenRouter(),
       loadOpenAI(),
+      loadSystemStats(),
+      loadStorageStats(),
+      loadNetworkStats(),
+      loadTopProcesses(),
     ]);
     setRefreshing(false);
     setLastRefreshedAt(new Date());
@@ -336,6 +405,10 @@ export default function App() {
     loadCards,
     loadOpenRouter,
     loadOpenAI,
+    loadSystemStats,
+    loadStorageStats,
+    loadNetworkStats,
+    loadTopProcesses,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -396,6 +469,15 @@ export default function App() {
       const cfg = await window.api.settings.getAll();
       setAppRefreshMinutes(cfg.app?.refreshMinutes ?? DEFAULT_REFRESH_MINUTES);
       setDockerRefreshSeconds(cfg.docker?.refreshSeconds || DEFAULT_DOCKER_REFRESH_SECONDS);
+      setDockerUpdateChecksEnabled(cfg.docker?.updateChecksEnabled !== false);
+      setDockerUpdateCheckMinutes(
+        cfg.docker?.updateCheckMinutes || DEFAULT_DOCKER_UPDATE_CHECK_MINUTES
+      );
+      setStatsRefreshSeconds(cfg.stats?.refreshSeconds || DEFAULT_STATS_REFRESH_SECONDS);
+      setStatsPublicIpEnabled(cfg.stats?.publicIpEnabled !== false);
+      setStatsPublicIpCheckMinutes(
+        cfg.stats?.publicIpCheckMinutes || DEFAULT_STATS_PUBLIC_IP_CHECK_MINUTES
+      );
       setSpotifyEnabled(cfg.spotify?.enabled !== false);
       setGithubRefreshSeconds(cfg.github?.refreshSeconds || DEFAULT_GITHUB_REFRESH_SECONDS);
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
@@ -430,8 +512,17 @@ export default function App() {
         loadCards(),
         loadOpenRouter(),
         loadOpenAI(),
+        loadSystemStats(),
+        loadStorageStats(),
+        loadNetworkStats(),
+        loadTopProcesses(),
       ]);
       setLastRefreshedAt(new Date());
+
+      // Not part of the Promise.all above — a slow/rate-limited registry
+      // check must never delay every other widget's first paint. Unawaited.
+      if (cfg.docker?.updateChecksEnabled !== false) void loadDockerUpdates();
+      if (cfg.stats?.publicIpEnabled !== false) void loadPublicIp();
 
       // Pips only need to be "roughly fresh" — the widget itself polls
       // faster (window.api.process.status) for whichever row's logs panel
@@ -451,6 +542,53 @@ export default function App() {
     const id = setInterval(loadDocker, dockerRefreshSeconds * 1000);
     return () => clearInterval(id);
   }, [loadDocker, dockerRefreshSeconds]);
+
+  // ---- Docker image-update checks: separate, much slower interval, since
+  // registry lookups can be rate-limited (unlike the docker ps poll above).
+  // Gated on the Settings toggle so disabling it truly stops the polling. ----
+  useEffect(() => {
+    if (!dockerUpdateChecksEnabled) return;
+    const id = setInterval(loadDockerUpdates, dockerUpdateCheckMinutes * 60_000);
+    return () => clearInterval(id);
+  }, [loadDockerUpdates, dockerUpdateChecksEnabled, dockerUpdateCheckMinutes]);
+
+  // ---- Stats tab refresh: system/storage/network/top-processes are cheap
+  // and local-only, so they share one fast interval, reactive to Settings
+  // edits. ----
+  useEffect(() => {
+    const id = setInterval(() => {
+      void loadSystemStats();
+      void loadStorageStats();
+      void loadNetworkStats();
+      void loadTopProcesses();
+    }, statsRefreshSeconds * 1000);
+    return () => clearInterval(id);
+  }, [loadSystemStats, loadStorageStats, loadNetworkStats, loadTopProcesses, statsRefreshSeconds]);
+
+  // ---- Utilization sparkline history: append the latest sample whenever
+  // system/storage stats resolve, regardless of what triggered the fetch
+  // (interval, refreshAll, or the initial boot load). ----
+  useEffect(() => {
+    if (!systemStats?.ok) return;
+    setCpuHistory((prev) => [...prev, systemStats.cpuPercent].slice(-STATS_HISTORY_LENGTH));
+    const memPercent = (systemStats.memory.usedBytes / systemStats.memory.totalBytes) * 100;
+    setMemHistory((prev) => [...prev, memPercent].slice(-STATS_HISTORY_LENGTH));
+  }, [systemStats]);
+
+  useEffect(() => {
+    if (!storageStats?.ok) return;
+    const main = storageStats.volumes[0];
+    if (!main) return;
+    setStorageHistory((prev) => [...prev, main.usedPercent].slice(-STATS_HISTORY_LENGTH));
+  }, [storageStats]);
+
+  // ---- Public IP: separate, much slower interval, since it's the one call
+  // to a third party — same reasoning as the Docker update-check above. ----
+  useEffect(() => {
+    if (!statsPublicIpEnabled) return;
+    const id = setInterval(loadPublicIp, statsPublicIpCheckMinutes * 60_000);
+    return () => clearInterval(id);
+  }, [loadPublicIp, statsPublicIpEnabled, statsPublicIpCheckMinutes]);
 
   // ---- Now Playing refresh. Interval is hardcoded (a local osascript call
   // costs nothing, unlike Docker/GitHub's rate-limited or daemon-backed
@@ -644,7 +782,12 @@ export default function App() {
             <GitHubWidget data={github} />
           </div>
           <div className="slot slot-services">
-            <DockerWidget data={docker} onRefresh={loadDocker} />
+            <DockerWidget
+              data={docker}
+              updates={dockerUpdates}
+              onRefresh={loadDocker}
+              onCheckUpdatesNow={loadDockerUpdates}
+            />
           </div>
           <div className="slot slot-claude">
             <ClaudeLauncherWidget
@@ -858,6 +1001,59 @@ export default function App() {
         </>
       )}
 
+      {activeTab === "stats" && (
+        <main className="grid grid-stats">
+          <div className="slot slot-cpu-graph">
+            <UtilizationWidget
+              title="CPU"
+              percent={systemStats?.ok ? systemStats.cpuPercent : null}
+              history={cpuHistory}
+              ok={systemStats === null || systemStats.ok}
+              reason={systemStats && !systemStats.ok ? systemStats.reason : undefined}
+            />
+          </div>
+          <div className="slot slot-mem-graph">
+            <UtilizationWidget
+              title="Memory"
+              percent={
+                systemStats?.ok
+                  ? (systemStats.memory.usedBytes / systemStats.memory.totalBytes) * 100
+                  : null
+              }
+              history={memHistory}
+              ok={systemStats === null || systemStats.ok}
+              reason={systemStats && !systemStats.ok ? systemStats.reason : undefined}
+            />
+          </div>
+          <div className="slot slot-storage-graph">
+            <UtilizationWidget
+              title="Storage"
+              percent={storageStats?.ok ? (storageStats.volumes[0]?.usedPercent ?? null) : null}
+              history={storageHistory}
+              ok={storageStats === null || storageStats.ok}
+              reason={storageStats && !storageStats.ok ? storageStats.reason : undefined}
+            />
+          </div>
+          <div className="slot slot-system-stats">
+            <SystemStatsWidget data={systemStats} />
+          </div>
+          <div className="slot slot-storage-stats">
+            <StorageWidget data={storageStats} />
+          </div>
+          <div className="slot slot-network-stats">
+            <NetworkWidget
+              data={networkStats}
+              publicIp={publicIp}
+              publicIpEnabled={statsPublicIpEnabled}
+              onCheckPublicIpNow={loadPublicIp}
+            />
+          </div>
+          <div className="slot slot-top-processes">
+            <TopProcessesWidget data={topProcesses} />
+          </div>
+        </main>
+      )}
+
       <NowPlayingBanner data={nowPlaying} />
 
       <CommandPalette
@@ -872,6 +1068,19 @@ export default function App() {
         onProcessConfigsChange={setProcessConfigs}
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}
+        onDockerUpdateSettingsChange={(settings) => {
+          setDockerUpdateChecksEnabled(settings.updateChecksEnabled !== false);
+          setDockerUpdateCheckMinutes(
+            settings.updateCheckMinutes || DEFAULT_DOCKER_UPDATE_CHECK_MINUTES
+          );
+        }}
+        onStatsSettingsChange={(settings: StatsSettings) => {
+          setStatsRefreshSeconds(settings.refreshSeconds || DEFAULT_STATS_REFRESH_SECONDS);
+          setStatsPublicIpEnabled(settings.publicIpEnabled !== false);
+          setStatsPublicIpCheckMinutes(
+            settings.publicIpCheckMinutes || DEFAULT_STATS_PUBLIC_IP_CHECK_MINUTES
+          );
+        }}
         onSpotifyEnabledChange={setSpotifyEnabled}
         onGithubRefreshSecondsChange={setGithubRefreshSeconds}
         onGitRefreshSecondsChange={(seconds) =>

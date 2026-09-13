@@ -270,6 +270,14 @@ body {
     "processes processes processes processes processes processes";
 }
 
+.grid-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "cpu-graph mem-graph storage-graph"
+    "system storage network"
+    "top-processes top-processes top-processes";
+}
+
 .grid-reader {
   grid-template-columns: 1fr;
   grid-template-areas: "reader";
@@ -338,6 +346,27 @@ body {
 .slot-git {
   grid-area: git;
 }
+.slot-cpu-graph {
+  grid-area: cpu-graph;
+}
+.slot-mem-graph {
+  grid-area: mem-graph;
+}
+.slot-storage-graph {
+  grid-area: storage-graph;
+}
+.slot-system-stats {
+  grid-area: system;
+}
+.slot-storage-stats {
+  grid-area: storage;
+}
+.slot-network-stats {
+  grid-area: network;
+}
+.slot-top-processes {
+  grid-area: top-processes;
+}
 .slot-reader {
   grid-area: reader;
 }
@@ -395,6 +424,17 @@ body {
       "services"
       "claude"
       "processes";
+  }
+  .grid-stats {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "cpu-graph"
+      "mem-graph"
+      "storage-graph"
+      "system"
+      "storage"
+      "network"
+      "top-processes";
   }
 }
 
@@ -2161,6 +2201,136 @@ body {
 .docker-toggle:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* Docker: update-available indicator/action (doubles as both — clicking it
+   triggers the stop/pull/recreate flow), and the panel header's manual
+   "check now" trigger. */
+.docker-update {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--pending);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  margin-left: 8px;
+  transition: all 0.15s ease;
+}
+.docker-update:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+.docker-update:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.docker-update-error {
+  margin: 0 0 4px;
+  padding: 2px 6px 6px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.docker-update-error.alert {
+  color: var(--alert);
+  font-weight: 600;
+}
+.docker-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.docker-check-updates {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.docker-check-updates:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+/* Stats tab: Storage volume usage bar, Network's public-IP header button */
+.storage-volume {
+  margin-bottom: 10px;
+}
+.storage-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-edge-soft);
+  overflow: hidden;
+  margin: 0 6px;
+}
+.storage-bar-fill {
+  height: 100%;
+  background: var(--live);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.storage-bar-fill.alert {
+  background: var(--alert);
+}
+.network-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.network-refresh-ip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.network-refresh-ip:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+.network-refresh-ip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Stats tab: CPU/Memory/Storage utilization tiles (value + sparkline) and
+   the Top Processes list's rank column. */
+.utilization-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.utilization-value {
+  /* Matches .claude-stat-value's existing mono-headline-number convention. */
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+}
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+.process-rank {
+  flex-shrink: 0;
+  width: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  text-align: right;
 }
 
 /* Todoist: completion checkbox, description toggle/panel, add-task form */

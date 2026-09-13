@@ -21,6 +21,7 @@ import type {
   GitHubRepoConfig,
   BackupSettings,
   CaptureSettings,
+  DockerSettings,
   WindowState,
   GitHubRepoInput,
   NotificationSettings,
@@ -29,6 +30,7 @@ import type {
   YnabScalarConfig,
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
+  StatsSettings,
   TabConfig,
 } from "../../shared/types";
 
@@ -50,6 +52,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "notes", label: "Notes" },
   { id: "finances", label: "Finances" },
   { id: "ai", label: "AI" },
+  { id: "stats", label: "Stats" },
 ];
 
 export function initSettings(): void {
@@ -179,13 +182,31 @@ export function updateGrimoireSettings(values: GrimoireConfig): GrimoireConfig {
   return values;
 }
 
-export function getDockerSettings(): { refreshSeconds: number } {
-  return getRaw("docker") ?? { refreshSeconds: 15 };
+const DEFAULT_DOCKER_SETTINGS: DockerSettings = {
+  refreshSeconds: 15,
+  updateChecksEnabled: true,
+  updateCheckMinutes: 60,
+};
+
+export function getDockerSettings(): DockerSettings {
+  return getRaw("docker") ?? DEFAULT_DOCKER_SETTINGS;
 }
-export function updateDockerSettings(values: {
-  refreshSeconds: number;
-}): { refreshSeconds: number } {
+export function updateDockerSettings(values: DockerSettings): DockerSettings {
   setRaw("docker", values);
+  return values;
+}
+
+const DEFAULT_STATS_SETTINGS: StatsSettings = {
+  refreshSeconds: 5,
+  publicIpEnabled: true,
+  publicIpCheckMinutes: 60,
+};
+
+export function getStatsSettings(): StatsSettings {
+  return getRaw("stats") ?? DEFAULT_STATS_SETTINGS;
+}
+export function updateStatsSettings(values: StatsSettings): StatsSettings {
+  setRaw("stats", values);
   return values;
 }
 
@@ -609,6 +630,7 @@ export function getAllSettings(): AppConfig {
   return {
     grimoire: getGrimoireSettings(),
     docker: getDockerSettings(),
+    stats: getStatsSettings(),
     app: getAppSettings(),
     todoist: getTodoistSettings(),
     googleCalendar: getGoogleCalendarSettings(),
@@ -666,10 +688,11 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
     (legacy?.[key] as T | undefined) ?? (defaults[key] as T | undefined);
 
   seedRawIfEmpty("grimoire", pick("grimoire") ?? { vaultPath: "", dailyLogDir: "", missionsDir: "" });
-  seedRawIfEmpty("docker", pick("docker") ?? { refreshSeconds: 15 });
+  seedRawIfEmpty("docker", pick("docker") ?? DEFAULT_DOCKER_SETTINGS);
   // No legacy config.json counterpart — this section postdates the migration,
   // so it always seeds from the default.
   seedRawIfEmpty("git", { refreshSeconds: 30 });
+  seedRawIfEmpty("stats", DEFAULT_STATS_SETTINGS);
   seedRawIfEmpty("notifications", {
     enabled: true,
     ciFailure: true,

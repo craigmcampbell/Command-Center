@@ -139,7 +139,7 @@ export interface TabConfig {
 
 export interface AppConfig {
   grimoire: GrimoireConfig;
-  docker: { refreshSeconds: number };
+  docker: DockerSettings;
   app?: { refreshMinutes?: number };
   todoist: { apiToken: string; showTimeTracking?: boolean };
   googleCalendar: GoogleCalendarConfig;
@@ -156,6 +156,84 @@ export interface AppConfig {
   openai?: OpenAIScalarConfig;
   tabs?: TabConfig[];
   spotify?: { enabled: boolean };
+  stats?: StatsSettings;
+}
+
+export interface StatsSettings {
+  refreshSeconds: number;
+  publicIpEnabled?: boolean;
+  publicIpCheckMinutes?: number;
+}
+
+export interface SystemStatsResult {
+  ok: boolean;
+  reason?: string;
+  cpuPercent: number;
+  loadAvg: [number, number, number];
+  uptimeSeconds: number;
+  memory: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    wiredBytes: number;
+    compressedBytes: number;
+    cachedBytes: number;
+    swapUsedBytes: number;
+    swapTotalBytes: number;
+  };
+  battery?: { percent: number; charging: boolean; powerSource: string };
+}
+
+export interface StorageVolume {
+  name: string;
+  mountPoint: string;
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  usedPercent: number;
+}
+
+export interface StorageStatsResult {
+  ok: boolean;
+  reason?: string;
+  volumes: StorageVolume[];
+}
+
+export interface NetworkInterfaceInfo {
+  name: string;
+  address: string;
+}
+
+export interface NetworkStatsResult {
+  ok: boolean;
+  reason?: string;
+  interfaces: NetworkInterfaceInfo[];
+  primary?: {
+    name: string;
+    address: string;
+    uploadBytesPerSec: number;
+    downloadBytesPerSec: number;
+  };
+}
+
+export interface PublicIpResult {
+  ok: boolean;
+  reason?: string;
+  ip?: string;
+  checkedAt: number;
+}
+
+export interface TopMemoryProcess {
+  pid: number;
+  name: string;
+  memoryBytes: number;
+  memoryPercent: number;
+}
+
+export interface TopProcessesResult {
+  ok: boolean;
+  reason?: string;
+  processes: TopMemoryProcess[];
 }
 
 export type ContainerState = "running" | "exited" | "created" | "paused" | string;
@@ -185,6 +263,40 @@ export interface DockerResult {
   ok: boolean;
   reason?: string;
   containers: DockerContainer[];
+}
+
+export interface DockerSettings {
+  refreshSeconds: number;
+  updateChecksEnabled?: boolean;
+  updateCheckMinutes?: number;
+}
+
+// Whether a newer image is available in the registry, checked via the Engine
+// API's /distribution endpoint (no pull needed) — see services/dockerUpdates.ts.
+// "unknown" covers every case where the comparison can't be made confidently
+// (no local digest to compare, registry auth required, unreachable, ...); it
+// deliberately never resolves ambiguity into "updateAvailable".
+export type DockerImageUpdateStatus = "unknown" | "upToDate" | "updateAvailable";
+
+export interface DockerImageUpdateInfo {
+  image: string;
+  status: DockerImageUpdateStatus;
+  reason?: string;
+  checkedAt: number;
+}
+
+export interface DockerUpdateCheckResult {
+  ok: boolean;
+  reason?: string;
+  images: DockerImageUpdateInfo[];
+}
+
+// rolledBack is only meaningful when ok is false: true (or absent) means the
+// container was safely restored to its pre-update state; false means the
+// update failed *and* the rollback itself failed, which needs to be surfaced
+// loudly rather than as a routine fail-soft message.
+export interface DockerUpdateResult extends ActionResult {
+  rolledBack?: boolean;
 }
 
 // Persisted window geometry. Main-process only — deliberately absent from
@@ -1096,6 +1208,15 @@ export interface CommandCenterApi {
     list: () => Promise<DockerResult>;
     start: (name: string) => Promise<ActionResult>;
     stop: (name: string) => Promise<ActionResult>;
+    checkUpdates: () => Promise<DockerUpdateCheckResult>;
+    update: (name: string) => Promise<DockerUpdateResult>;
+  };
+  stats: {
+    system: () => Promise<SystemStatsResult>;
+    storage: () => Promise<StorageStatsResult>;
+    network: () => Promise<NetworkStatsResult>;
+    publicIp: () => Promise<PublicIpResult>;
+    topProcesses: () => Promise<TopProcessesResult>;
   };
   spotify: {
     nowPlaying: () => Promise<SpotifyNowPlayingResult>;
@@ -1312,7 +1433,10 @@ export interface CommandCenterApi {
       update: (values: GrimoireConfig) => Promise<GrimoireConfig>;
     };
     docker: {
-      update: (values: { refreshSeconds: number }) => Promise<{ refreshSeconds: number }>;
+      update: (values: DockerSettings) => Promise<DockerSettings>;
+    };
+    stats: {
+      update: (values: StatsSettings) => Promise<StatsSettings>;
     };
     spotify: {
       update: (values: { enabled: boolean }) => Promise<{ enabled: boolean }>;

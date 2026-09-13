@@ -1,23 +1,32 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { DockerContainer, DockerResult } from "../../../shared/types";
+import type { DockerContainer, DockerResult, DockerUpdateCheckResult } from "../../../shared/types";
 import Panel from "./Panel";
-import { IconPlay, IconStop } from "./icons";
+import { IconArrowUp, IconPlay, IconRefresh, IconStop } from "./icons";
 
 interface DockerWidgetProps {
   data: DockerResult | null;
+  updates: DockerUpdateCheckResult | null;
   onRefresh: () => Promise<void>;
+  onCheckUpdatesNow: () => Promise<void>;
 }
 
 function DockerRow({
   container,
+  updateStatus,
   onRefresh,
+  onCheckUpdatesNow,
 }: {
   container: DockerContainer;
+  updateStatus?: DockerUpdateCheckResult["images"][number];
   onRefresh: () => Promise<void>;
+  onCheckUpdatesNow: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateFailedHard, setUpdateFailedHard] = useState(false);
   const running = container.state === "running";
+  const updateAvailable = updateStatus?.status === "updateAvailable";
 
   async function handleToggle() {
     setBusy(true);
@@ -28,24 +37,60 @@ function DockerRow({
     setBusy(false);
   }
 
+  async function handleUpdate() {
+    setBusy(true);
+    setUpdateError(null);
+    setUpdateFailedHard(false);
+    const res = await window.api.docker.update(container.name);
+    if (!res.ok) {
+      setUpdateError(res.reason ?? "Update failed");
+      setUpdateFailedHard(res.rolledBack === false);
+    }
+    await onRefresh();
+    await onCheckUpdatesNow();
+    setBusy(false);
+  }
+
   return (
-    <div className="row">
-      <span className={`dot ${running ? "running" : ""}`}></span>
-      <span className="name">{container.name}</span>
-      <span className="status">{container.status}</span>
-      <button
-        className={`docker-toggle ${running ? "stop" : ""}`}
-        onClick={handleToggle}
-        disabled={busy}
-        title={running ? "Stop container" : "Start container"}
-      >
-        {running ? <IconStop /> : <IconPlay />}
-      </button>
-    </div>
+    <>
+      <div className="row">
+        <span className={`dot ${running ? "running" : ""}`}></span>
+        <span className="name">{container.name}</span>
+        <span className="status">{container.status}</span>
+        {updateAvailable && (
+          <button
+            className="docker-update"
+            onClick={handleUpdate}
+            disabled={busy}
+            title="Update available — stop, pull latest, and restart"
+          >
+            <IconArrowUp />
+          </button>
+        )}
+        <button
+          className={`docker-toggle ${running ? "stop" : ""}`}
+          onClick={handleToggle}
+          disabled={busy}
+          title={running ? "Stop container" : "Start container"}
+        >
+          {running ? <IconStop /> : <IconPlay />}
+        </button>
+      </div>
+      {updateError && (
+        <p className={updateFailedHard ? "docker-update-error alert" : "docker-update-error"}>
+          {updateError}
+        </p>
+      )}
+    </>
   );
 }
 
-export default function DockerWidget({ data, onRefresh }: DockerWidgetProps) {
+export default function DockerWidget({
+  data,
+  updates,
+  onRefresh,
+  onCheckUpdatesNow,
+}: DockerWidgetProps) {
   let pipClassName = "pip";
   let body: ReactNode;
 
@@ -60,12 +105,32 @@ export default function DockerWidget({ data, onRefresh }: DockerWidgetProps) {
     const anyRunning = data.containers.some((c) => c.state === "running");
     pipClassName = anyRunning ? "pip live" : "pip";
     body = data.containers.map((c) => (
-      <DockerRow key={c.name} container={c} onRefresh={onRefresh} />
+      <DockerRow
+        key={c.name}
+        container={c}
+        updateStatus={updates?.images.find((i) => i.image === c.image)}
+        onRefresh={onRefresh}
+        onCheckUpdatesNow={onCheckUpdatesNow}
+      />
     ));
   }
 
   return (
-    <Panel title="Services" headerRight={<span className={pipClassName}></span>}>
+    <Panel
+      title="Services"
+      headerRight={
+        <div className="docker-head-actions">
+          <button
+            className="docker-check-updates"
+            onClick={() => void onCheckUpdatesNow()}
+            title="Check for image updates now"
+          >
+            <IconRefresh />
+          </button>
+          <span className={pipClassName}></span>
+        </div>
+      }
+    >
       {body}
     </Panel>
   );
