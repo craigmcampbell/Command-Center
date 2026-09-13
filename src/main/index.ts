@@ -9,6 +9,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
+import { checkForImageUpdates, updateContainer } from "./services/dockerUpdates";
+import {
+  getNetworkStats,
+  getPublicIp,
+  getStorageStats,
+  getSystemStats,
+  getTopMemoryProcesses,
+} from "./services/systemStats";
 import { getNowPlaying } from "./services/spotify";
 import {
   readDailyNote,
@@ -150,6 +158,8 @@ import {
   updateGrimoireSettings,
   getDockerSettings,
   updateDockerSettings,
+  getStatsSettings,
+  updateStatsSettings,
   getSpotifySettings,
   updateSpotifySettings,
   getAppSettings,
@@ -204,6 +214,7 @@ import type {
   BackupSettings,
   CaptureSettings,
   CaptureTarget,
+  DockerSettings,
   ExportResult,
   GitHubScalarConfig,
   GitHubRepoInput,
@@ -218,6 +229,7 @@ import type {
   OpenRouterPeriod,
   OpenAIScalarConfig,
   OpenAIPeriod,
+  StatsSettings,
 } from "../shared/types";
 
 initDatabase();
@@ -343,6 +355,31 @@ ipcMain.handle("docker:start", async (_evt, name: string) => {
 });
 ipcMain.handle("docker:stop", async (_evt, name: string) => {
   return stopContainer(name);
+});
+ipcMain.handle("docker:checkUpdates", async () => {
+  return checkForImageUpdates();
+});
+ipcMain.handle("docker:updateContainer", async (_evt, name: string) => {
+  return updateContainer(name);
+});
+
+// Host machine stats for the Stats tab: system vitals, storage, network
+// throughput, and public IP (the last one deliberately its own channel —
+// see services/systemStats.ts — since it's the one call to a third party).
+ipcMain.handle("stats:system", async () => {
+  return getSystemStats();
+});
+ipcMain.handle("stats:storage", async () => {
+  return getStorageStats();
+});
+ipcMain.handle("stats:network", async () => {
+  return getNetworkStats();
+});
+ipcMain.handle("stats:publicIp", async () => {
+  return getPublicIp();
+});
+ipcMain.handle("stats:topProcesses", async () => {
+  return getTopMemoryProcesses();
 });
 
 // Currently-playing track, read from the local Spotify.app via AppleScript.
@@ -754,8 +791,11 @@ ipcMain.handle("settings:capture:update", (_evt, values: CaptureSettings) => {
   if (saved.accelerator) registerCaptureHotkey(saved.accelerator);
   return saved;
 });
-ipcMain.handle("settings:docker:update", (_evt, values: { refreshSeconds: number }) =>
+ipcMain.handle("settings:docker:update", (_evt, values: DockerSettings) =>
   updateDockerSettings(values)
+);
+ipcMain.handle("settings:stats:update", (_evt, values: StatsSettings) =>
+  updateStatsSettings(values)
 );
 ipcMain.handle("settings:spotify:update", (_evt, values: { enabled: boolean }) =>
   updateSpotifySettings(values)

@@ -30,6 +30,8 @@ import type {
   BackupSettings,
   CaptureHotkeyStatus,
   CaptureSettings,
+  DockerSettings,
+  StatsSettings,
   GrimoireConfig,
   NotificationHealth,
   NotificationSettings,
@@ -81,6 +83,8 @@ interface SettingsPageProps {
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
+  onDockerUpdateSettingsChange: (settings: DockerSettings) => void;
+  onStatsSettingsChange: (settings: StatsSettings) => void;
   onSpotifyEnabledChange: (enabled: boolean) => void;
   onGitRefreshSecondsChange: (seconds?: number) => void;
   onNotificationSettingsChange: (values: NotificationSettings) => void;
@@ -193,19 +197,32 @@ function DockerCard({
   value,
   onSaved,
 }: {
-  value: { refreshSeconds: number };
-  onSaved: (v: { refreshSeconds: number }) => void;
+  value: DockerSettings;
+  onSaved: (v: DockerSettings) => void;
 }) {
   const [seconds, setSeconds] = useState(String(value.refreshSeconds));
+  const [updateChecksEnabled, setUpdateChecksEnabled] = useState(value.updateChecksEnabled ?? true);
+  const [updateCheckMinutes, setUpdateCheckMinutes] = useState(
+    String(value.updateCheckMinutes ?? 60)
+  );
   const [saving, setSaving] = useState(false);
-  useEffect(() => setSeconds(String(value.refreshSeconds)), [value.refreshSeconds]);
-  const dirty = seconds !== String(value.refreshSeconds);
+  useEffect(() => {
+    setSeconds(String(value.refreshSeconds));
+    setUpdateChecksEnabled(value.updateChecksEnabled ?? true);
+    setUpdateCheckMinutes(String(value.updateCheckMinutes ?? 60));
+  }, [value.refreshSeconds, value.updateChecksEnabled, value.updateCheckMinutes]);
+  const dirty =
+    seconds !== String(value.refreshSeconds) ||
+    updateChecksEnabled !== (value.updateChecksEnabled ?? true) ||
+    updateCheckMinutes !== String(value.updateCheckMinutes ?? 60);
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     const result = await window.api.settings.docker.update({
       refreshSeconds: Number(seconds) || 15,
+      updateChecksEnabled,
+      updateCheckMinutes: Number(updateCheckMinutes) || 60,
     });
     setSaving(false);
     onSaved(result);
@@ -214,7 +231,10 @@ function DockerCard({
   return (
     <form className="settings-card" onSubmit={handleSave}>
       <h3>Docker</h3>
-      <p className="settings-card-hint">How often the Services widget polls `docker ps`.</p>
+      <p className="settings-card-hint">
+        How often the Services widget polls `docker ps`, and whether it checks registries for
+        newer images.
+      </p>
       <div className="settings-field-row">
         <label>Refresh seconds</label>
         <input
@@ -223,6 +243,105 @@ function DockerCard({
           min={1}
           value={seconds}
           onChange={(e) => setSeconds(e.target.value)}
+        />
+      </div>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={updateChecksEnabled}
+          onChange={(e) => setUpdateChecksEnabled(e.target.checked)}
+        />
+        Check for image updates
+      </label>
+      <div className="settings-field-row">
+        <label>Check every (minutes)</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          disabled={!updateChecksEnabled}
+          value={updateCheckMinutes}
+          onChange={(e) => setUpdateCheckMinutes(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function StatsCard({
+  value,
+  onSaved,
+}: {
+  value: StatsSettings;
+  onSaved: (v: StatsSettings) => void;
+}) {
+  const [seconds, setSeconds] = useState(String(value.refreshSeconds));
+  const [publicIpEnabled, setPublicIpEnabled] = useState(value.publicIpEnabled ?? true);
+  const [publicIpCheckMinutes, setPublicIpCheckMinutes] = useState(
+    String(value.publicIpCheckMinutes ?? 60)
+  );
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setSeconds(String(value.refreshSeconds));
+    setPublicIpEnabled(value.publicIpEnabled ?? true);
+    setPublicIpCheckMinutes(String(value.publicIpCheckMinutes ?? 60));
+  }, [value.refreshSeconds, value.publicIpEnabled, value.publicIpCheckMinutes]);
+  const dirty =
+    seconds !== String(value.refreshSeconds) ||
+    publicIpEnabled !== (value.publicIpEnabled ?? true) ||
+    publicIpCheckMinutes !== String(value.publicIpCheckMinutes ?? 60);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.stats.update({
+      refreshSeconds: Number(seconds) || 5,
+      publicIpEnabled,
+      publicIpCheckMinutes: Number(publicIpCheckMinutes) || 60,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Stats</h3>
+      <p className="settings-card-hint">
+        How often the Stats tab polls CPU/memory/storage/network, and whether it looks up your
+        public IP (a request to a third-party service).
+      </p>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={seconds}
+          onChange={(e) => setSeconds(e.target.value)}
+        />
+      </div>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={publicIpEnabled}
+          onChange={(e) => setPublicIpEnabled(e.target.checked)}
+        />
+        Check public IP
+      </label>
+      <div className="settings-field-row">
+        <label>Check every (minutes)</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          disabled={!publicIpEnabled}
+          value={publicIpCheckMinutes}
+          onChange={(e) => setPublicIpCheckMinutes(e.target.value)}
         />
       </div>
       <div className="settings-card-footer">
@@ -1752,6 +1871,8 @@ export default function SettingsPage({
   onProcessConfigsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
+  onDockerUpdateSettingsChange,
+  onStatsSettingsChange,
   onSpotifyEnabledChange,
   onGitRefreshSecondsChange,
   onNotificationSettingsChange,
@@ -1831,6 +1952,14 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, docker: v } : prev));
                       onDockerRefreshSecondsChange(v.refreshSeconds);
+                      onDockerUpdateSettingsChange(v);
+                    }}
+                  />
+                  <StatsCard
+                    value={data.stats ?? { refreshSeconds: 5, publicIpEnabled: true, publicIpCheckMinutes: 60 }}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, stats: v } : prev));
+                      onStatsSettingsChange(v);
                     }}
                   />
                   <SpotifyCard

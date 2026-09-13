@@ -12,6 +12,7 @@ import type {
   CaptureSettings,
   CaptureTarget,
   CommandCenterApi,
+  DockerSettings,
   GoogleCalendarConfig,
   GrimoireConfig,
   GitHubScalarConfig,
@@ -24,6 +25,7 @@ import type {
   OpenAIPeriod,
   OpenAIScalarConfig,
   ProcessConfig,
+  StatsSettings,
   TraySummary,
   YnabScalarConfig,
   YnabNewTransactionInput,
@@ -34,6 +36,16 @@ const api: CommandCenterApi = {
     list: () => ipcRenderer.invoke("docker:list"),
     start: (name: string) => ipcRenderer.invoke("docker:start", name),
     stop: (name: string) => ipcRenderer.invoke("docker:stop", name),
+    checkUpdates: () => ipcRenderer.invoke("docker:checkUpdates"),
+    update: (name: string) => ipcRenderer.invoke("docker:updateContainer", name),
+  },
+
+  stats: {
+    system: () => ipcRenderer.invoke("stats:system"),
+    storage: () => ipcRenderer.invoke("stats:storage"),
+    network: () => ipcRenderer.invoke("stats:network"),
+    publicIp: () => ipcRenderer.invoke("stats:publicIp"),
+    topProcesses: () => ipcRenderer.invoke("stats:topProcesses"),
   },
 
   spotify: {
@@ -302,8 +314,10 @@ const api: CommandCenterApi = {
       update: (values: GrimoireConfig) => ipcRenderer.invoke("settings:grimoire:update", values),
     },
     docker: {
-      update: (values: { refreshSeconds: number }) =>
-        ipcRenderer.invoke("settings:docker:update", values),
+      update: (values: DockerSettings) => ipcRenderer.invoke("settings:docker:update", values),
+    },
+    stats: {
+      update: (values: StatsSettings) => ipcRenderer.invoke("settings:stats:update", values),
     },
     spotify: {
       update: (values: { enabled: boolean }) =>
