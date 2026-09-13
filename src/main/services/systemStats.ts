@@ -8,9 +8,9 @@
 
 import { execFile } from "node:child_process";
 import os from "node:os";
+import { createNetworkCollector } from "./networkStats";
 import path from "node:path";
 import type {
-  NetworkStatsResult,
   PublicIpResult,
   StorageStatsResult,
   SystemStatsResult,
@@ -228,79 +228,7 @@ export async function getStorageStats(): Promise<StorageStatsResult> {
   }
 }
 
-function primaryInterface(): { name: string; address: string } | undefined {
-  const ifaces = os.networkInterfaces();
-  for (const [name, addrs] of Object.entries(ifaces)) {
-    for (const addr of addrs ?? []) {
-      if (addr.family === "IPv4" && !addr.internal) return { name, address: addr.address };
-    }
-  }
-  return undefined;
-}
-
-function listInterfaces(): { name: string; address: string }[] {
-  const ifaces = os.networkInterfaces();
-  const result: { name: string; address: string }[] = [];
-  for (const [name, addrs] of Object.entries(ifaces)) {
-    for (const addr of addrs ?? []) {
-      if (addr.family === "IPv4" && !addr.internal) result.push({ name, address: addr.address });
-    }
-  }
-  return result;
-}
-
-// `netstat -ib` lists each interface once per address family (with "-" for
-// byte counts) plus one row with real cumulative Ibytes/Obytes, identified
-// by its Network column starting with "<Link#" — that's the one we want.
-function parseNetstatBytes(text: string, ifaceName: string): { ibytes: number; obytes: number } | null {
-  for (const line of text.split("\n")) {
-    const parts = line.trim().split(/\s+/);
-    if (parts[0] !== ifaceName) continue;
-    if (!parts[2]?.startsWith("<Link#")) continue;
-    const ibytes = Number(parts[6]);
-    const obytes = Number(parts[9]);
-    if (Number.isFinite(ibytes) && Number.isFinite(obytes)) return { ibytes, obytes };
-  }
-  return null;
-}
-
-export async function getNetworkStats(): Promise<NetworkStatsResult> {
-  if (process.platform !== "darwin") {
-    return { ok: false, reason: NOT_SUPPORTED_REASON, interfaces: [] };
-  }
-  try {
-    const interfaces = listInterfaces();
-    const primary = primaryInterface();
-    if (!primary) return { ok: true, interfaces };
-
-    const before = parseNetstatBytes(await run("netstat", ["-ib"]), primary.name);
-    const start = Date.now();
-    await sleep(300);
-    const after = parseNetstatBytes(await run("netstat", ["-ib"]), primary.name);
-    const elapsedSec = (Date.now() - start) / 1000;
-
-    if (!before || !after || elapsedSec <= 0) {
-      return { ok: true, interfaces };
-    }
-
-    return {
-      ok: true,
-      interfaces,
-      primary: {
-        name: primary.name,
-        address: primary.address,
-        downloadBytesPerSec: Math.max(0, (after.ibytes - before.ibytes) / elapsedSec),
-        uploadBytesPerSec: Math.max(0, (after.obytes - before.obytes) / elapsedSec),
-      },
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : "Couldn't read network stats",
-      interfaces: [],
-    };
-  }
-}
+export const getNetworkStats = createNetworkCollector(run);
 
 function parsePs(text: string): TopProcessesResult["processes"] {
   const lines = text.trim().split("\n").slice(1);

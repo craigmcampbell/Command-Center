@@ -199,20 +199,40 @@ export interface StorageStatsResult {
   volumes: StorageVolume[];
 }
 
+export interface NetworkSample {
+  at: number;
+  downloadBytesPerSec: number;
+  uploadBytesPerSec: number;
+}
+
 export interface NetworkInterfaceInfo {
   name: string;
   address: string;
+  downloadBytesPerSec: number | null;
+  uploadBytesPerSec: number | null;
+  sessionStartedAt: number;
+  downloadedBytes: number;
+  uploadedBytes: number;
+  history: NetworkSample[];
 }
 
 export interface NetworkStatsResult {
   ok: boolean;
   reason?: string;
   interfaces: NetworkInterfaceInfo[];
-  primary?: {
-    name: string;
-    address: string;
-    uploadBytesPerSec: number;
-    downloadBytesPerSec: number;
+  primary?: NetworkInterfaceInfo;
+  apps?: {
+    ok: boolean;
+    reason?: string;
+    warmingUp?: boolean;
+    processes: {
+      name: string;
+      pid: number;
+      downloadBytesPerSec: number;
+      uploadBytesPerSec: number;
+      recentBytes: number;
+      state: "active" | "idle" | "ended" | "measuring";
+    }[];
   };
 }
 
