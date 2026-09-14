@@ -1,3 +1,4 @@
+import { usePolling, useWindowVisible } from "../hooks/usePolling";
 import { useEffect, useRef, useState } from "react";
 import type { ProcessConfig, ProcessStatus } from "../../../shared/types";
 import Panel from "./Panel";
@@ -103,6 +104,7 @@ export default function ManagedProcessesWidget({
   statuses,
   onRefresh,
 }: ManagedProcessesWidgetProps) {
+  const windowVisible = useWindowVisible();
   const [openIds, setOpenIds] = useState<string[]>([]);
   const [liveStatuses, setLiveStatuses] = useState<Record<string, ProcessStatus>>({});
 
@@ -110,26 +112,11 @@ export default function ManagedProcessesWidget({
     setOpenIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
-  useEffect(() => {
-    if (openIds.length === 0) {
-      setLiveStatuses({});
-      return;
-    }
-    let cancelled = false;
-    async function poll() {
-      const entries = await Promise.all(
-        openIds.map(async (id) => [id, await window.api.process.status(id)] as const)
-      );
-      if (cancelled) return;
-      setLiveStatuses(Object.fromEntries(entries));
-    }
-    poll();
-    const interval = setInterval(poll, LOG_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [openIds]);
+  useEffect(() => { if (openIds.length === 0) setLiveStatuses({}); }, [openIds]);
+  usePolling(async () => {
+    const entries = await Promise.all(openIds.map(async (id) => [id, await window.api.process.status(id)] as const));
+    setLiveStatuses(Object.fromEntries(entries));
+  }, LOG_POLL_MS, windowVisible && openIds.length > 0, 0, openIds.join(","));
 
   const statusById = new Map(statuses.map((s) => [s.id, s]));
 

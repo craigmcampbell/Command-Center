@@ -15,6 +15,7 @@
     "verify:signing": "codesign --verify --strict \"dist/mac-arm64/Command Center.app\" && codesign -dv \"dist/mac-arm64/Command Center.app\" 2>&1 | grep -q \"^Identifier=com.craig.command-center\" && echo \"signing OK\" || { echo \"SIGNING CHECK FAILED — bundle identity is wrong; see the packaging note in CLAUDE.md\"; exit 1; }",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
+    "test:electron": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-usage-worker.cjs && env -u ELECTRON_RUN_AS_NODE electron scripts/test-renderer.cjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

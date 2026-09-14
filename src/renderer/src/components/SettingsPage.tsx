@@ -280,6 +280,7 @@ function StatsCard({
   value: StatsSettings;
   onSaved: (v: StatsSettings) => void;
 }) {
+  const [backgroundNetwork, setBackgroundNetwork] = useState(value.backgroundNetwork === true);
   const [seconds, setSeconds] = useState(String(value.refreshSeconds));
   const [publicIpEnabled, setPublicIpEnabled] = useState(value.publicIpEnabled ?? true);
   const [publicIpCheckMinutes, setPublicIpCheckMinutes] = useState(
@@ -288,11 +289,13 @@ function StatsCard({
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setSeconds(String(value.refreshSeconds));
+    setBackgroundNetwork(value.backgroundNetwork === true);
     setPublicIpEnabled(value.publicIpEnabled ?? true);
     setPublicIpCheckMinutes(String(value.publicIpCheckMinutes ?? 60));
-  }, [value.refreshSeconds, value.publicIpEnabled, value.publicIpCheckMinutes]);
+  }, [value.refreshSeconds, value.publicIpEnabled, value.publicIpCheckMinutes, value.backgroundNetwork]);
   const dirty =
     seconds !== String(value.refreshSeconds) ||
+    backgroundNetwork !== (value.backgroundNetwork === true) ||
     publicIpEnabled !== (value.publicIpEnabled ?? true) ||
     publicIpCheckMinutes !== String(value.publicIpCheckMinutes ?? 60);
 
@@ -300,6 +303,7 @@ function StatsCard({
     e.preventDefault();
     setSaving(true);
     const result = await window.api.settings.stats.update({
+      backgroundNetwork,
       refreshSeconds: Number(seconds) || 5,
       publicIpEnabled,
       publicIpCheckMinutes: Number(publicIpCheckMinutes) || 60,
@@ -312,8 +316,8 @@ function StatsCard({
     <form className="settings-card" onSubmit={handleSave}>
       <h3>Stats</h3>
       <p className="settings-card-hint">
-        How often the Stats tab polls CPU/memory/storage/network, and whether it looks up your
-        public IP (a request to a third-party service).
+        Detailed stats refresh while this tab is visible. Storage and battery refresh at most
+        once per minute. Public IP uses a third-party service.
       </p>
       <div className="settings-field-row">
         <label>Refresh seconds</label>
@@ -332,6 +336,10 @@ function StatsCard({
           onChange={(e) => setPublicIpEnabled(e.target.checked)}
         />
         Check public IP
+      </label>
+      <label className="settings-checkbox-label">
+        <input type="checkbox" checked={backgroundNetwork} onChange={(e) => setBackgroundNetwork(e.target.checked)} />
+        Keep network history while other tabs are open or the window is hidden
       </label>
       <div className="settings-field-row">
         <label>Check every (minutes)</label>

@@ -6,6 +6,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
 import fs from "node:fs";
+import { readHandler } from "./services/requests";
 import path from "node:path";
 
 import { getDockerContainers, startContainer, stopContainer } from "./services/docker";
@@ -89,10 +90,8 @@ import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
 import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
 import { capture } from "./services/capture";
-import { getClaudeUsage, listClaudeSessions } from "./services/claudeUsage";
+import { getClaudeUsage, listClaudeSessions, getCodexUsage, listCodexSessions } from "./services/usageWorker";
 import {
-  getCodexUsage,
-  listCodexSessions,
   validateCodexResumeTarget,
 } from "./services/codexUsage";
 import { getOpenRouterUsage } from "./services/openrouter";
@@ -347,7 +346,7 @@ function createWindow(): void {
 // ---- IPC handlers: each one is something the UI can invoke by name. ----
 
 // Docker container status, plus starting/stopping a container.
-ipcMain.handle("docker:list", async () => {
+readHandler("docker:list", async () => {
   return getDockerContainers();
 });
 ipcMain.handle("docker:start", async (_evt, name: string) => {
@@ -356,7 +355,7 @@ ipcMain.handle("docker:start", async (_evt, name: string) => {
 ipcMain.handle("docker:stop", async (_evt, name: string) => {
   return stopContainer(name);
 });
-ipcMain.handle("docker:checkUpdates", async () => {
+readHandler("docker:checkUpdates", async () => {
   return checkForImageUpdates();
 });
 ipcMain.handle("docker:updateContainer", async (_evt, name: string) => {
@@ -366,24 +365,24 @@ ipcMain.handle("docker:updateContainer", async (_evt, name: string) => {
 // Host machine stats for the Stats tab: system vitals, storage, network
 // throughput, and public IP (the last one deliberately its own channel —
 // see services/systemStats.ts — since it's the one call to a third party).
-ipcMain.handle("stats:system", async () => {
+readHandler("stats:system", async () => {
   return getSystemStats();
 });
-ipcMain.handle("stats:storage", async () => {
+readHandler("stats:storage", async () => {
   return getStorageStats();
 });
-ipcMain.handle("stats:network", async () => {
+readHandler("stats:network", async () => {
   return getNetworkStats();
 });
-ipcMain.handle("stats:publicIp", async () => {
+readHandler("stats:publicIp", async () => {
   return getPublicIp();
 });
-ipcMain.handle("stats:topProcesses", async () => {
+readHandler("stats:topProcesses", async () => {
   return getTopMemoryProcesses();
 });
 
 // Currently-playing track, read from the local Spotify.app via AppleScript.
-ipcMain.handle("spotify:nowPlaying", async () => {
+readHandler("spotify:nowPlaying", async () => {
   return getNowPlaying();
 });
 
@@ -405,7 +404,7 @@ ipcMain.handle("grimoire:saveFinanceReviewLog", async (_evt, content: string) =>
 });
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
-ipcMain.handle("todoist:tasks", async () => {
+readHandler("todoist:tasks", async () => {
   return getDueTasks(getTodoistSettings());
 });
 ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
@@ -458,14 +457,14 @@ ipcMain.handle("open:url", async (_evt, url: string) => {
 ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
 });
-ipcMain.handle("claude:usage", () => getClaudeUsage());
-ipcMain.handle("claude:sessions", (_evt, limit?: number) => listClaudeSessions(limit));
+readHandler("claude:usage", () => getClaudeUsage());
+readHandler("claude:sessions", (_evt, limit?: number) => listClaudeSessions(limit));
 // `claude -r <id>` resumes by session id; the id is the transcript filename.
 ipcMain.handle("claude:resume", async (_evt, sessionId: string, cwd: string) => {
   return openInTerminal(cwd, `claude -r ${sessionId}`);
 });
-ipcMain.handle("codex:usage", () => getCodexUsage());
-ipcMain.handle("codex:sessions", (_evt, limit?: number) => listCodexSessions(limit));
+readHandler("codex:usage", () => getCodexUsage());
+readHandler("codex:sessions", (_evt, limit?: number) => listCodexSessions(limit));
 ipcMain.handle("codex:resume", async (_evt, sessionId: string, cwd: string) => {
   const reason = validateCodexResumeTarget(sessionId, cwd);
   if (reason) return { ok: false, reason };
@@ -484,7 +483,7 @@ ipcMain.handle("cursor:open", async (_evt, dirPath: string) => {
 
 // Google Calendar: a day's events (defaults to today), plus the one-time
 // OAuth connect flow.
-ipcMain.handle("calendar:events", async (_evt, date?: string) => {
+readHandler("calendar:events", async (_evt, date?: string) => {
   return getEventsForDay(getGoogleCalendarSettings(), date);
 });
 ipcMain.handle("calendar:connect", async () => {
@@ -508,7 +507,7 @@ ipcMain.handle("links:reorder", (_evt, kind: LinkListKind, orderedIds: number[])
 
 // Readwise Reader: latest saved documents, paginated 15 at a time, plus
 // archiving/deleting a document.
-ipcMain.handle("reader:list", (_evt, page: number, forceRefresh?: boolean) => {
+readHandler("reader:list", (_evt, page: number, forceRefresh?: boolean) => {
   if (forceRefresh) resetReaderCache();
   return listReaderDocuments(getReaderSettings(), page);
 });
@@ -523,17 +522,17 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
 // review-requested PRs across all of them.
 // Same repo list as github:status — a row contributes to whichever widget its
 // fields support (owner+repo → GitHub, localPath → here).
-ipcMain.handle("git:status", () => getGitStatuses(listGithubRepoSettings()));
+readHandler("git:status", () => getGitStatuses(listGithubRepoSettings()));
 
 // OpenRouter: usage by model + by API key name for the selected period, plus
 // remaining credit balance.
-ipcMain.handle("openrouter:usage", (_evt, period: OpenRouterPeriod) =>
+readHandler("openrouter:usage", (_evt, period: OpenRouterPeriod) =>
   getOpenRouterUsage(getOpenRouterSettings(), period)
 );
 
 // OpenAI: usage by model + cost by line item for the selected period. No
 // credit balance — see services/openai.ts for why.
-ipcMain.handle("openai:usage", (_evt, period: OpenAIPeriod) =>
+readHandler("openai:usage", (_evt, period: OpenAIPeriod) =>
   getOpenAIUsage(getOpenAISettings(), period)
 );
 
@@ -579,22 +578,22 @@ ipcMain.handle("capture:submit", (_evt, target: CaptureTarget, text: string) => 
 ipcMain.handle("capture:cancel", () => hideCaptureWindow());
 ipcMain.handle("capture:hotkeyStatus", () => captureHotkeyStatus());
 
-ipcMain.handle("github:status", () =>
+readHandler("github:status", () =>
   getGitHubStatus({ ...getGithubScalarSettings(), repos: listGithubRepoSettings() })
 );
 
 // YNAB: account balances, unapproved transactions, and this month's
 // scheduled transactions for the configured plan.
-ipcMain.handle("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
-ipcMain.handle("ynab:unapprovedTransactions", () =>
+readHandler("ynab:accounts", () => getYnabAccounts(getYnabSettings()));
+readHandler("ynab:unapprovedTransactions", () =>
   getYnabUnapprovedTransactions(getYnabSettings())
 );
-ipcMain.handle("ynab:scheduledTransactions", () =>
+readHandler("ynab:scheduledTransactions", () =>
   getYnabScheduledTransactions(getYnabSettings())
 );
-ipcMain.handle("ynab:categories", () => getYnabCategories(getYnabSettings()));
-ipcMain.handle("ynab:payees", () => getYnabPayees(getYnabSettings()));
-ipcMain.handle("ynab:currentMonth", () => getYnabCurrentMonth(getYnabSettings()));
+readHandler("ynab:categories", () => getYnabCategories(getYnabSettings()));
+readHandler("ynab:payees", () => getYnabPayees(getYnabSettings()));
+readHandler("ynab:currentMonth", () => getYnabCurrentMonth(getYnabSettings()));
 ipcMain.handle("ynab:approveTransaction", (_evt, transactionId: string) =>
   approveYnabTransaction(getYnabSettings(), transactionId)
 );
@@ -658,8 +657,8 @@ ipcMain.handle("notes:vaults", () => listVaultSettings());
 ipcMain.handle("notes:browse", (_evt, vaultLabel: string, subPath?: string) =>
   browseVault(vaultLabel, subPath)
 );
-ipcMain.handle("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(vaultLabel));
-ipcMain.handle("notes:read", (_evt, vaultLabel: string, filePath: string) =>
+readHandler("notes:index", (_evt, vaultLabel: string) => buildVaultIndex(vaultLabel));
+readHandler("notes:read", (_evt, vaultLabel: string, filePath: string) =>
   readNoteFile(vaultLabel, filePath)
 );
 ipcMain.handle(
@@ -762,8 +761,8 @@ ipcMain.handle("process:start", (_evt, id: string) => {
   return result;
 });
 ipcMain.handle("process:stop", (_evt, id: string) => stopProcess(id));
-ipcMain.handle("process:status", (_evt, id: string) => getProcessStatus(id));
-ipcMain.handle("process:statusAll", () => getAllProcessStatus());
+readHandler("process:status", (_evt, id: string) => getProcessStatus(id));
+readHandler("process:statusAll", () => getAllProcessStatus());
 
 // Settings: everything that used to live in config.json, now SQLite-backed
 // and editable live from the Settings overlay (gear icon). Scalar sections

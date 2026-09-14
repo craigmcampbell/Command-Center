@@ -113,15 +113,15 @@ export function browseVault(vaultLabel: string, subPath = ""): NoteBrowseResult 
 // resolution as browseVault. Sorted by path, so a caller matching by
 // basename against duplicate names across folders gets a deterministic
 // "first by path" pick rather than whatever order the filesystem returns.
-export function buildVaultIndex(vaultLabel: string): VaultNoteIndexResult {
+async function indexVault(vaultLabel: string): Promise<VaultNoteIndexResult> {
   const resolved = resolveInVault(vaultLabel, "");
   if (!resolved.ok) return { ok: false, reason: resolved.reason, entries: [] };
 
   const entries: VaultNoteIndexEntry[] = [];
-  function walk(absDir: string, relDir: string) {
+  async function walk(absDir: string, relDir: string) {
     let dirEntries: fs.Dirent[];
     try {
-      dirEntries = fs.readdirSync(absDir, { withFileTypes: true });
+      dirEntries = await fs.promises.readdir(absDir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -129,7 +129,7 @@ export function buildVaultIndex(vaultLabel: string): VaultNoteIndexResult {
       if (e.name.startsWith(".")) continue;
       const rel = relDir ? `${relDir}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        walk(path.join(absDir, e.name), rel);
+        await walk(path.join(absDir, e.name), rel);
       } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
         entries.push({ basename: e.name.slice(0, -3), path: rel });
       }
@@ -137,13 +137,26 @@ export function buildVaultIndex(vaultLabel: string): VaultNoteIndexResult {
   }
 
   try {
-    walk(resolved.absPath, "");
+    await walk(resolved.absPath, "");
   } catch {
     return { ok: false, reason: "Couldn't index that vault", entries: [] };
   }
 
   entries.sort((a, b) => a.path.localeCompare(b.path));
   return { ok: true, entries };
+}
+
+const vaultIndexes = new Map<string, { at: number; result: Promise<VaultNoteIndexResult> }>();
+export function buildVaultIndex(vaultLabel: string): Promise<VaultNoteIndexResult> {
+  const resolved = resolveInVault(vaultLabel, "");
+  if (!resolved.ok) return Promise.resolve({ ok: false, reason: resolved.reason, entries: [] });
+  const key = resolved.absPath;
+  const cached = vaultIndexes.get(key);
+  if (cached && Date.now() - cached.at < 30_000) return cached.result;
+  const result = indexVault(vaultLabel);
+  vaultIndexes.set(key, { at: Date.now(), result });
+  while (vaultIndexes.size > 8) vaultIndexes.delete(vaultIndexes.keys().next().value!);
+  return result;
 }
 
 function mtimeOf(absPath: string): number | null {

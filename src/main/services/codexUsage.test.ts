@@ -234,3 +234,20 @@ describe("Codex resume validation", () => {
     expect(validateCodexResumeTarget(ACTIVE_ID, path.join(root, "missing"))).toContain("no longer exists");
   });
 });
+
+it("retains context and exact counts across appended events and partial writes", async () => {
+  const root = makeRoot();
+  const file = path.join(root, "sessions", "2026", "09", "01", `${ACTIVE_ID}.jsonl`);
+  writeJsonl(file, [sessionMeta(ACTIVE_ID, "/tmp/project", new Date(NOW).toISOString()), turn(new Date(NOW).toISOString(), "/tmp/project", "gpt-5")]);
+  expect((await getCodexUsage(root, NOW)).today.requests).toBe(0);
+  const event = JSON.stringify(token(new Date(NOW + 1).toISOString(), { input_tokens: 10, cached_input_tokens: 5, output_tokens: 3, reasoning_output_tokens: 2 }));
+  fs.appendFileSync(file, event.slice(0, 30));
+  expect((await getCodexUsage(root, NOW)).today.requests).toBe(0);
+  fs.appendFileSync(file, event.slice(30) + '\n');
+  const usage = await getCodexUsage(root, NOW);
+  expect(usage.today.requests).toBe(1);
+  expect(usage.today.tokens.input + usage.today.tokens.output).toBe(13);
+  expect(usage.byModel[0].label).toBe("gpt-5");
+  fs.writeFileSync(file, '');
+  expect((await getCodexUsage(root, NOW)).today.requests).toBe(0);
+});

@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // Google Calendar via OAuth 2.0 (loopback + PKCE, the flow Google documents
 // for installed/desktop apps). Requires a Desktop-app OAuth client (Client
 // ID + Secret) from Google Cloud Console, stored in config.json. Tokens are
@@ -69,7 +70,7 @@ async function exchangeCodeForTokens(
   verifier: string,
   redirectUri: string
 ): Promise<TokenCache> {
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithTimeout(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -94,7 +95,7 @@ async function refreshAccessToken(
   config: GoogleCalendarConfig,
   refreshToken: string
 ): Promise<TokenCache> {
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithTimeout(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -247,7 +248,7 @@ export async function getEventsForDay(
 
   let res: Response;
   try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   } catch {
     return { ok: false, reason: "Couldn't reach Google Calendar", events: [], date };
   }

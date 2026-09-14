@@ -84,6 +84,7 @@ export function initTray(h: TrayHandlers): void {
 }
 
 export function updateTray(next: TraySummary): void {
+  if (JSON.stringify(summary) === JSON.stringify(next)) return;
   summary = next;
   render();
 }

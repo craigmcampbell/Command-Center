@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // YNAB REST API (https://api.ynab.com/v1): account balances, unapproved
 // transactions, and this month's scheduled transactions. Fails soft, like the
 // other services — every exported function returns { ok, reason?, ... }
@@ -18,7 +19,7 @@ import type { ActionResult } from "../../shared/types";
 const API_ROOT = "https://api.ynab.com/v1";
 
 function ynabFetch(url: string, token: string, init?: RequestInit): Promise<Response> {
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,

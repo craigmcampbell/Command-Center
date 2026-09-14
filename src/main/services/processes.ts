@@ -13,13 +13,14 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import type { ActionResult, ProcessConfig, ProcessStatus } from "../../shared/types";
 
-const MAX_TRACKED_LOG_CHUNKS = 500; // ring-buffer cap, bounds memory for chatty processes
+const MAX_LOG_BYTES = 512 * 1024; // per process, including large output chunks
 const STATUS_LOG_CHUNKS = 100; // how much of the tail a status poll actually returns
 const STOP_ESCALATE_MS = 3000; // SIGTERM grace period before escalating to SIGKILL
 
 interface TrackedProcess {
   child: ChildProcess | null;
   logs: string[];
+  logBytes: number;
   exitCode: number | null;
 }
 
@@ -28,9 +29,11 @@ const tracked = new Map<string, TrackedProcess>();
 function appendLog(id: string, chunk: string): void {
   const t = tracked.get(id);
   if (!t) return;
+  if (Buffer.byteLength(chunk) > MAX_LOG_BYTES) chunk = Buffer.from(chunk).subarray(-(MAX_LOG_BYTES - 3)).toString();
   t.logs.push(chunk);
-  if (t.logs.length > MAX_TRACKED_LOG_CHUNKS) {
-    t.logs.splice(0, t.logs.length - MAX_TRACKED_LOG_CHUNKS);
+  t.logBytes += Buffer.byteLength(chunk);
+  while (t.logBytes > MAX_LOG_BYTES && t.logs.length) {
+    t.logBytes -= Buffer.byteLength(t.logs.shift()!);
   }
 }
 
@@ -66,7 +69,7 @@ export function startProcess(procConfig: ProcessConfig): ActionResult {
     return { ok: false, reason: (err as Error).message };
   }
 
-  const entry: TrackedProcess = { child, logs: [], exitCode: null };
+  const entry: TrackedProcess = { child, logs: [], logBytes: 0, exitCode: null };
   tracked.set(procConfig.id, entry);
 
   child.stdout?.on("data", (buf: Buffer) => appendLog(procConfig.id, buf.toString()));
@@ -133,7 +136,9 @@ export function getStatus(id: string): ProcessStatus {
 }
 
 export function getAllStatus(): ProcessStatus[] {
-  return Array.from(tracked.keys()).map(getStatus);
+  return Array.from(tracked, ([id, entry]) => ({
+    id, running: !!entry.child, exitCode: entry.exitCode, logs: [],
+  }));
 }
 
 // Called on app quit so closing the dashboard never leaves an orphaned

@@ -160,6 +160,7 @@ export interface AppConfig {
 }
 
 export interface StatsSettings {
+  backgroundNetwork?: boolean;
   refreshSeconds: number;
   publicIpEnabled?: boolean;
   publicIpCheckMinutes?: number;

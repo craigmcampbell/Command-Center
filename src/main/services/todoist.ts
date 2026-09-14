@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // Talks to the Todoist API (v1) for due/overdue tasks, tasks with deadlines,
 // and for completing or creating them. Requires a personal API token (Todoist Settings ->
 // Integrations -> Developer) stored in config.json. Fails soft, like the
@@ -35,7 +36,7 @@ async function fetchAllActiveTasks(apiToken: string): Promise<TaskPageResult> {
     url.searchParams.set("limit", "200");
     if (cursor) url.searchParams.set("cursor", cursor);
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: { Authorization: `Bearer ${apiToken}` },
     });
     if (!response.ok) return { ok: false, status: response.status };
@@ -60,7 +61,7 @@ export async function getDueTasks(
   try {
     [taskPages, projectsRes] = await Promise.all([
       fetchAllActiveTasks(apiToken),
-      fetch(PROJECTS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
+      fetchWithTimeout(PROJECTS_URL, { headers: { Authorization: `Bearer ${apiToken}` } }),
     ]);
   } catch {
     return { ok: false, reason: "Couldn't reach Todoist", tasks: [], projects: [] };
@@ -149,7 +150,7 @@ export async function setTaskDueDate(
 
   try {
     const res = date
-      ? await fetch(`${API_ROOT}/tasks/${taskId}`, {
+      ? await fetchWithTimeout(`${API_ROOT}/tasks/${taskId}`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiToken}`,
@@ -157,7 +158,7 @@ export async function setTaskDueDate(
           },
           body: JSON.stringify({ due_date: date }),
         })
-      : await fetch(`${API_ROOT}/sync`, {
+      : await fetchWithTimeout(`${API_ROOT}/sync`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiToken}`,
@@ -191,7 +192,7 @@ export async function moveTask(
   }
 
   try {
-    const res = await fetch(`${API_ROOT}/tasks/${taskId}/move`, {
+    const res = await fetchWithTimeout(`${API_ROOT}/tasks/${taskId}/move`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiToken}`,
@@ -220,7 +221,7 @@ export async function completeTask(
   }
 
   try {
-    const res = await fetch(`${API_ROOT}/tasks/${taskId}/close`, {
+    const res = await fetchWithTimeout(`${API_ROOT}/tasks/${taskId}/close`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiToken}` },
     });
@@ -246,7 +247,7 @@ export async function createTask(
   }
 
   try {
-    const res = await fetch(`${API_ROOT}/tasks`, {
+    const res = await fetchWithTimeout(`${API_ROOT}/tasks`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiToken}`,

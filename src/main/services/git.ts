@@ -117,6 +117,8 @@ function parseLastCommit(stdout: string): GitRepoStatus["lastCommit"] {
   return { hash, subject: subject ?? "", relative: relative ?? "" };
 }
 
+const commitCache = new Map<string, { head: string; commit: GitRepoStatus["lastCommit"] }>();
+
 async function getRepoStatus(repo: GitHubRepoConfig): Promise<GitRepoStatus> {
   const path = repo.localPath as string;
   const base: GitRepoStatus = {
@@ -141,13 +143,24 @@ async function getRepoStatus(repo: GitHubRepoConfig): Promise<GitRepoStatus> {
 
   // Only worth asking once we know it's a real repo. A fresh repo with no
   // commits yet fails this call, which is fine — lastCommit stays undefined.
-  const log = await git(path, ["log", "-1", "--format=%h%x00%s%x00%cr"]);
+  const head = status.stdout.match(/^# branch.oid (.+)$/m)?.[1] ?? "";
+  const cached = commitCache.get(path);
+  let commit = cached?.head === head ? cached.commit : undefined;
+  if (!cached || cached.head !== head) {
+    const log = await git(path, ["log", "-1", "--format=%h%x00%s%x00%cI"]);
+    commit = log.ok ? parseLastCommit(log.stdout) : undefined;
+    if (log.ok) commitCache.set(path, { head, commit });
+  }
+  if (commit) {
+    const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(commit.relative)) / 60_000));
+    commit = { ...commit, relative: minutes < 60 ? `${minutes} minutes ago` : minutes < 1440 ? `${Math.floor(minutes / 60)} hours ago` : `${Math.floor(minutes / 1440)} days ago` };
+  }
 
   return {
     ...base,
     ok: true,
     ...parsePorcelainV2(status.stdout),
-    lastCommit: log.ok ? parseLastCommit(log.stdout) : undefined,
+    lastCommit: commit,
   };
 }
 
@@ -155,7 +168,16 @@ export async function getGitStatuses(repos: GitHubRepoConfig[]): Promise<GitStat
   const local = repos.filter((r) => r.localPath);
   if (local.length === 0) return { ok: true, repos: [] };
 
-  const statuses = await Promise.all(local.map(getRepoStatus));
+  const activePaths = new Set(local.map((repo) => repo.localPath));
+  for (const key of commitCache.keys()) if (!activePaths.has(key)) commitCache.delete(key);
+  const statuses = new Array<GitRepoStatus>(local.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(3, local.length) }, async () => {
+    while (cursor < local.length) {
+      const index = cursor++;
+      statuses[index] = await getRepoStatus(local[index]);
+    }
+  }));
 
   // If every repo failed for the same "git isn't here" reason, that's one
   // global problem, not N per-repo ones — say it once.

@@ -136,7 +136,10 @@ export default function MarkdownPane({
   vaultIndex,
   conflict,
 }: MarkdownPaneProps) {
-  const fm = splitFrontmatter(value);
+  const fm = useMemo(() => splitFrontmatter(value), [value]);
+  const previewHtml = useMemo(() => mode === "preview" ? renderMarkdown(value, {
+    interactiveTasks: true, resolveWikilink, includeFrontmatter: false,
+  }) : "", [value, mode, resolveWikilink]);
   // State, not a ref: the toolbar has to re-render once the view exists to
   // enable its buttons, and a ref assignment wouldn't trigger that.
   // onViewReady fires from the editor's mount effect and again with null on
@@ -207,11 +210,7 @@ export default function MarkdownPane({
               })
             }
             dangerouslySetInnerHTML={{
-              __html: renderMarkdown(value, {
-                interactiveTasks: true,
-                resolveWikilink,
-                includeFrontmatter: false,
-              }),
+              __html: previewHtml,
             }}
           />
         </div>
