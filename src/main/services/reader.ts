@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // Talks to the Readwise Reader API (v3) for the "latest saved" list, plus
 // archiving/deleting a document. Requires a personal API token
 // (https://readwise.io/access_token) stored in config.json. Fails soft, like
@@ -33,6 +34,8 @@ interface Cache {
   nextCursor: string | null;
   exhausted: boolean;
   token: string;
+  fetchedAt: number;
+  pending?: Promise<void>;
 }
 
 let cache: Cache | null = null;
@@ -56,8 +59,8 @@ function toReaderDocument(d: RawDoc): ReaderDocument {
   };
 }
 
-function buildResult(page: number): ReaderResult {
-  const sorted = [...(cache?.docs ?? [])].sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+function buildResult(page: number, snapshot = cache): ReaderResult {
+  const sorted = [...(snapshot?.docs ?? [])].sort((a, b) => b.saved_at.localeCompare(a.saved_at));
   const start = page * PAGE_SIZE;
   const pageDocs = sorted.slice(start, start + PAGE_SIZE);
 
@@ -65,7 +68,7 @@ function buildResult(page: number): ReaderResult {
     ok: true,
     documents: pageDocs.map(toReaderDocument),
     page,
-    hasNext: sorted.length > start + PAGE_SIZE || !(cache?.exhausted ?? true),
+    hasNext: sorted.length > start + PAGE_SIZE || !(snapshot?.exhausted ?? true),
     hasPrev: page > 0,
   };
 }
@@ -78,7 +81,7 @@ async function fetchPage(
   url.searchParams.set("limit", String(FETCH_LIMIT));
   if (cursor) url.searchParams.set("pageCursor", cursor);
 
-  const res = await fetch(url, { headers: { Authorization: `Token ${apiToken}` } });
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Token ${apiToken}` } });
   if (!res.ok) {
     throw new Error(
       res.status === 401 || res.status === 403
@@ -104,24 +107,30 @@ export async function listReaderDocuments(
 ): Promise<ReaderResult> {
   if (!apiToken) return failResult(page, "No Readwise API token configured");
 
-  if (!cache || cache.token !== apiToken) {
-    cache = { docs: [], nextCursor: null, exhausted: false, token: apiToken };
+  if (!cache || cache.token !== apiToken || Date.now() - cache.fetchedAt > 5 * 60_000) {
+    cache = { docs: [], nextCursor: null, exhausted: false, token: apiToken, fetchedAt: Date.now() };
   }
 
+  const snapshot = cache;
   const needed = (page + 1) * PAGE_SIZE;
   try {
-    while (cache.docs.length < needed && !cache.exhausted) {
-      const { docs, nextCursor } = await fetchPage(apiToken, cache.nextCursor);
-      const existingIds = new Set(cache.docs.map((d) => d.id));
-      cache.docs.push(...docs.filter((d) => !existingIds.has(d.id)));
-      cache.nextCursor = nextCursor;
-      if (!nextCursor) cache.exhausted = true;
+    while (snapshot.docs.length < needed && !snapshot.exhausted) {
+      if (!snapshot.pending) {
+        snapshot.pending = (async () => {
+          const { docs, nextCursor } = await fetchPage(apiToken, snapshot.nextCursor);
+          const existingIds = new Set(snapshot.docs.map((d) => d.id));
+          snapshot.docs.push(...docs.filter((d) => !existingIds.has(d.id)));
+          snapshot.nextCursor = nextCursor;
+          if (!nextCursor) snapshot.exhausted = true;
+        })().finally(() => { snapshot.pending = undefined; });
+      }
+      await snapshot.pending;
     }
   } catch (err) {
     return failResult(page, (err as Error).message || "Couldn't reach Readwise");
   }
 
-  return buildResult(page);
+  return buildResult(page, snapshot);
 }
 
 // Moves a document to Reader's Archive location — reversible from within
@@ -134,7 +143,7 @@ export async function archiveDocument(
   if (!apiToken) return failResult(page, "No Readwise API token configured");
 
   try {
-    const res = await fetch(`${API_ROOT}/update/${encodeURIComponent(id)}/`, {
+    const res = await fetchWithTimeout(`${API_ROOT}/update/${encodeURIComponent(id)}/`, {
       method: "PATCH",
       headers: {
         Authorization: `Token ${apiToken}`,
@@ -166,7 +175,7 @@ export async function deleteDocument(
   if (!apiToken) return failResult(page, "No Readwise API token configured");
 
   try {
-    const res = await fetch(`${API_ROOT}/delete/${encodeURIComponent(id)}/`, {
+    const res = await fetchWithTimeout(`${API_ROOT}/delete/${encodeURIComponent(id)}/`, {
       method: "DELETE",
       headers: { Authorization: `Token ${apiToken}` },
     });

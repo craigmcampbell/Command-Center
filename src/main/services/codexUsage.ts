@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import readline from "node:readline";
+import { indexedFile, findTranscripts, pruneIndex } from "./transcriptIndex";
 import Database from "better-sqlite3";
 import type {
   CodexQuotaSnapshot,
@@ -38,12 +38,10 @@ interface ParsedFile {
   entries: UsageEntry[];
   quotas: CodexQuotaSnapshot[];
   session?: SessionMeta;
+  context?: { cwd: string; model: string };
 }
 
-interface CacheSlot extends ParsedFile {
-  size: number;
-  mtimeMs: number;
-}
+
 
 interface ScanResult {
   files: ParsedFile[];
@@ -62,7 +60,7 @@ interface ThreadRow {
   updated_at_ms: number;
 }
 
-const cache = new Map<string, CacheSlot>();
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function codexHome(override?: string): string {
@@ -106,20 +104,6 @@ function projectLabel(cwd: string): string {
   return cwd ? path.basename(cwd) : "unknown";
 }
 
-function findJsonl(dir: string, out: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) findJsonl(full, out);
-    else if (entry.name.endsWith(".jsonl")) out.push(full);
-  }
-  return out;
-}
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -170,121 +154,100 @@ function parseQuota(value: unknown, reportedAt: number, nowMs: number): CodexQuo
 }
 
 async function parseFile(file: string, nowMs: number): Promise<ParsedFile> {
-  const entries: UsageEntry[] = [];
-  const quotas: CodexQuotaSnapshot[] = [];
-  let session: SessionMeta | undefined;
-  let cwd = "";
-  let model = "unknown";
-
-  const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (
-      !line.includes('"token_count"') &&
-      !line.includes('"session_meta"') &&
-      !line.includes('"turn_context"')
-    ) {
-      continue;
-    }
-
-    let record: Record<string, unknown>;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = record.payload as Record<string, unknown> | undefined;
-    if (!payload) continue;
-
-    if (record.type === "session_meta") {
-      cwd = typeof payload.cwd === "string" ? payload.cwd : cwd;
-      const id =
-        typeof payload.session_id === "string"
-          ? payload.session_id
-          : typeof payload.id === "string"
-            ? payload.id
-            : "";
-      if (id) session = { id, cwd, model: undefined, updatedAt: 0 };
-      continue;
-    }
-    if (record.type === "turn_context") {
-      if (typeof payload.cwd === "string") cwd = payload.cwd;
-      if (typeof payload.model === "string") model = payload.model;
-      if (session) {
-        session.cwd = cwd || session.cwd;
-        session.model = model === "unknown" ? session.model : model;
+  const parsed = await indexedFile<ParsedFile>(file, async (lines, previous) => {
+    const entries = previous?.entries ?? [];
+    const quotas = previous?.quotas ?? [];
+    let session = previous?.session;
+    let cwd = previous?.context?.cwd ?? "";
+    let model = previous?.context?.model ?? "unknown";
+    for await (const line of lines) {
+      if (
+        !line.includes('"token_count"') &&
+        !line.includes('"session_meta"') &&
+        !line.includes('"turn_context"')
+      ) {
+        continue;
       }
-      continue;
+
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const payload = record.payload as Record<string, unknown> | undefined;
+      if (!payload) continue;
+
+      if (record.type === "session_meta") {
+        cwd = typeof payload.cwd === "string" ? payload.cwd : cwd;
+        const id =
+          typeof payload.session_id === "string"
+            ? payload.session_id
+            : typeof payload.id === "string"
+              ? payload.id
+              : "";
+        if (id) session = { id, cwd, model: undefined, updatedAt: 0 };
+        continue;
+      }
+      if (record.type === "turn_context") {
+        if (typeof payload.cwd === "string") cwd = payload.cwd;
+        if (typeof payload.model === "string") model = payload.model;
+        if (session) {
+          session.cwd = cwd || session.cwd;
+          session.model = model === "unknown" ? session.model : model;
+        }
+        continue;
+      }
+      if (record.type !== "event_msg" || payload.type !== "token_count") continue;
+
+      const timestampMs = Date.parse(typeof record.timestamp === "string" ? record.timestamp : "");
+      if (!Number.isFinite(timestampMs)) continue;
+      const quota = parseQuota(payload.rate_limits, timestampMs, nowMs);
+      if (quota && (!quotas[0] || quota.reportedAt >= quotas[0].reportedAt)) quotas.splice(0, quotas.length, quota);
+
+      const info = payload.info as Record<string, unknown> | undefined;
+      const raw = info?.last_token_usage as Record<string, unknown> | undefined;
+      if (!raw) continue;
+      const tokens: CodexTokenTotals = {
+        input: numberValue(raw.input_tokens),
+        cachedInput: numberValue(raw.cached_input_tokens),
+        cacheWriteInput: numberValue(raw.cache_write_input_tokens),
+        output: numberValue(raw.output_tokens),
+        reasoningOutput: numberValue(raw.reasoning_output_tokens),
+      };
+      if (totalTokens(tokens) === 0) continue;
+      const tuple = [tokens.input, tokens.cachedInput, tokens.cacheWriteInput, tokens.output, tokens.reasoningOutput];
+      entries.push({
+        dedupeKey: `${timestampMs}:${tuple.join(":")}`,
+        date: localDate(timestampMs),
+        timestampMs,
+        cwd,
+        model,
+        tokens,
+      });
     }
-    if (record.type !== "event_msg" || payload.type !== "token_count") continue;
 
-    const timestampMs = Date.parse(typeof record.timestamp === "string" ? record.timestamp : "");
-    if (!Number.isFinite(timestampMs)) continue;
-    const quota = parseQuota(payload.rate_limits, timestampMs, nowMs);
-    if (quota) quotas.push(quota);
-
-    const info = payload.info as Record<string, unknown> | undefined;
-    const raw = info?.last_token_usage as Record<string, unknown> | undefined;
-    if (!raw) continue;
-    const tokens: CodexTokenTotals = {
-      input: numberValue(raw.input_tokens),
-      cachedInput: numberValue(raw.cached_input_tokens),
-      cacheWriteInput: numberValue(raw.cache_write_input_tokens),
-      output: numberValue(raw.output_tokens),
-      reasoningOutput: numberValue(raw.reasoning_output_tokens),
-    };
-    if (totalTokens(tokens) === 0) continue;
-    const tuple = [tokens.input, tokens.cachedInput, tokens.cacheWriteInput, tokens.output, tokens.reasoningOutput];
-    entries.push({
-      dedupeKey: `${timestampMs}:${tuple.join(":")}`,
-      date: localDate(timestampMs),
-      timestampMs,
-      cwd,
-      model,
-      tokens,
-    });
+    return { entries, quotas, session, context: { cwd, model } };
+  });
+  if (parsed.session) parsed.session.updatedAt = (await fs.promises.stat(file)).mtimeMs;
+  for (const quota of parsed.quotas) {
+    if (quota.primary) quota.primary.stale = quota.primary.resetsAt <= nowMs;
+    if (quota.secondary) quota.secondary.stale = quota.secondary.resetsAt <= nowMs;
   }
-
-  if (session) {
-    try {
-      session.updatedAt = fs.statSync(file).mtimeMs;
-    } catch {
-      // Keep zero; callers will still have the session id/cwd as a fallback.
-    }
-  }
-  return { entries, quotas, session };
+  return parsed;
 }
 
 async function scan(root: string, nowMs: number, includeArchived = true): Promise<ScanResult> {
   const started = Date.now();
-  const paths = findJsonl(path.join(root, "sessions"));
-  if (includeArchived) findJsonl(path.join(root, "archived_sessions"), paths);
+  const roots = [path.join(root, "sessions"), ...(includeArchived ? [path.join(root, "archived_sessions")] : [])];
+  const paths: string[] = [];
+  for (const dir of roots) await findTranscripts(dir, paths);
   const files: ParsedFile[] = [];
-
   for (const file of paths) {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(file);
-    } catch {
-      continue;
-    }
-    const cached = cache.get(file);
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-      // Staleness is relative to now, so refresh it even when parsing is cached.
-      const quotas = cached.quotas.map((quota) => ({
-        ...quota,
-        primary: quota.primary ? { ...quota.primary, stale: quota.primary.resetsAt <= nowMs } : undefined,
-        secondary: quota.secondary
-          ? { ...quota.secondary, stale: quota.secondary.resetsAt <= nowMs }
-          : undefined,
-      }));
-      files.push({ ...cached, quotas });
-      continue;
-    }
-    const parsed = await parseFile(file, nowMs);
-    const slot: CacheSlot = { ...parsed, size: stat.size, mtimeMs: stat.mtimeMs };
-    cache.set(file, slot);
-    files.push(slot);
+    try { files.push(await parseFile(file, nowMs)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
+  pruneIndex(roots, paths);
   return { files, scanMs: Date.now() - started };
 }
 

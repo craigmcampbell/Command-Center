@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // Talks to OpenAI's organization Admin API for usage-by-model and cost-by-
 // line-item. Requires an Admin API key (created separately from a normal
 // project API key, under the org's Settings → Organization → Admin keys) —
@@ -83,7 +84,7 @@ function failResult(period: OpenAIPeriod, reason: string): OpenAIUsageResult {
 }
 
 async function fetchJson(path: string, adminApiKey: string): Promise<unknown> {
-  const res = await fetch(`${API_ROOT}${path}`, {
+  const res = await fetchWithTimeout(`${API_ROOT}${path}`, {
     headers: { Authorization: `Bearer ${adminApiKey}` },
   });
   if (!res.ok) {

@@ -85,6 +85,14 @@ function parseBattery(text: string): SystemStatsResult["battery"] {
   };
 }
 
+let batteryCache: { at: number; text: string } | undefined;
+async function readBattery(): Promise<string> {
+  if (batteryCache && Date.now() - batteryCache.at < 60_000) return batteryCache.text;
+  const text = await run("pmset", ["-g", "batt"]).catch(() => "");
+  batteryCache = { at: Date.now(), text };
+  return text;
+}
+
 export async function getSystemStats(): Promise<SystemStatsResult> {
   if (process.platform !== "darwin") {
     return {
@@ -111,7 +119,7 @@ export async function getSystemStats(): Promise<SystemStatsResult> {
       readCpuPercent(),
       run("vm_stat", []),
       run("sysctl", ["vm.swapusage"]).catch(() => ""),
-      run("pmset", ["-g", "batt"]).catch(() => ""),
+      readBattery(),
     ]);
 
     const { pageSize, pages } = parseVmStat(vmStatText);

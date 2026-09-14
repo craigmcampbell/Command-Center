@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // Talks to OpenRouter's API for usage-by-model, usage-by-key, and remaining
 // credit balance. Requires a Management API key (created separately from a
 // normal inference key, under OpenRouter's dashboard) — every endpoint used
@@ -84,7 +85,7 @@ function failResult(period: OpenRouterPeriod, reason: string): OpenRouterUsageRe
 }
 
 async function fetchJson(path: string, managementApiKey: string): Promise<unknown> {
-  const res = await fetch(`${API_ROOT}${path}`, {
+  const res = await fetchWithTimeout(`${API_ROOT}${path}`, {
     headers: { Authorization: `Bearer ${managementApiKey}` },
   });
   if (!res.ok) {

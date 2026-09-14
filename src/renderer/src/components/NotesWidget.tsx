@@ -156,12 +156,21 @@ export default function NotesWidget({
       const openItems = validOpenIds
         .map((id) => nav.find((n) => n.id === id))
         .filter((n): n is NoteNavItem => !!n);
-      await Promise.all(openItems.map(loadNoteContent));
+      const activeItem = openItems.find((item) => item.id === initialActiveId);
+      if (activeItem) await loadNoteContent(activeItem);
       openItems.forEach((item) => ensureVaultIndex(item.vaultLabel));
 
       setLoaded(true);
     })();
   }, [loadNoteContent, ensureVaultIndex, setNavNotes]);
+
+  // Restored inactive tabs load only when selected, including a tab selected
+  // after closing its neighbor. Never expose an editable empty placeholder.
+  useEffect(() => {
+    if (!loaded || activeId === null || activeId in contents || activeId in noteErrors) return;
+    const item = navNotes.find((note) => note.id === activeId);
+    if (item) void loadNoteContent(item);
+  }, [loaded, activeId, contents, noteErrors, navNotes, loadNoteContent]);
 
   // The command palette asks to open a note by handing one down rather than
   // reaching into this widget's state, which stays deliberately unlifted.
@@ -281,6 +290,8 @@ export default function NotesWidget({
     setOpenIds(remaining);
     setActiveId(nextActive);
     await window.api.notes.session.set(remaining, nextActive);
+    setContents((previous) => { const next = { ...previous }; delete next[id]; return next; });
+    delete mtimes.current[id];
   }
 
   async function removeFromNav(id: number) {
@@ -327,6 +338,10 @@ export default function NotesWidget({
     autosave.schedule(item.id, text);
   }
 
+  const activeItem = navNotes.find((n) => n.id === activeId) ?? null;
+  const activeVault = activeItem?.vaultLabel;
+  const resolveActiveWikilink = useCallback((target: string) => activeVault ? resolveWikilink(activeVault, target) : null, [activeVault, resolveWikilink]);
+
   if (!loaded) {
     return (
       <Panel title="Notes">
@@ -336,7 +351,6 @@ export default function NotesWidget({
   }
 
   const groups = groupByVault(vaults, navNotes);
-  const activeItem = navNotes.find((n) => n.id === activeId) ?? null;
   const activeError = activeItem ? noteErrors[activeItem.id] : undefined;
 
   return (
@@ -432,6 +446,8 @@ export default function NotesWidget({
 
               {activeError ? (
                 <p className="muted notes-empty">{activeError}</p>
+              ) : !(activeItem.id in contents) ? (
+                <p className="muted notes-empty">Loading note…</p>
               ) : (
                 <MarkdownPane
                   mode={mode}
@@ -448,7 +464,7 @@ export default function NotesWidget({
                         }
                       : null
                   }
-                  resolveWikilink={(target) => resolveWikilink(activeItem.vaultLabel, target)}
+                  resolveWikilink={resolveActiveWikilink}
                   onOpenWikilink={(filePath, label) =>
                     openByPath(activeItem.vaultLabel, filePath, label)
                   }

@@ -1,0 +1,44 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { startPolling } from "./polling";
+afterEach(() => vi.useRealTimers());
+it("waits for completion and stops permanently when hidden or unmounted", async () => {
+  vi.useFakeTimers();
+  let resolve!: () => void;
+  const load = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
+  const stop = startPolling(load, 1000);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(load).toHaveBeenCalledTimes(1);
+  stop();
+  resolve();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(load).toHaveBeenCalledTimes(1);
+});
+it("waits for a previous visibility cycle before collecting again", async () => {
+  vi.useFakeTimers();
+  const shared = { current: null as Promise<unknown> | null };
+  let resolve!: () => void;
+  const first = startPolling(() => new Promise<void>((done) => { resolve = done; }), 1000, 0, shared);
+  await vi.advanceTimersByTimeAsync(0);
+  first();
+  const load = vi.fn(async () => undefined);
+  const second = startPolling(load, 1000, 0, shared);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(load).not.toHaveBeenCalled();
+  resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(load).toHaveBeenCalledTimes(1);
+  second();
+});
+it("backs off failures and resumes the normal cadence after success", async () => {
+  vi.useFakeTimers();
+  const load = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+  const stop = startPolling(load, 1000);
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(load).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(load).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(load).toHaveBeenCalledTimes(3);
+  stop();
+});

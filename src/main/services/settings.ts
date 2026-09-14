@@ -197,6 +197,7 @@ export function updateDockerSettings(values: DockerSettings): DockerSettings {
 }
 
 const DEFAULT_STATS_SETTINGS: StatsSettings = {
+  backgroundNetwork: false,
   refreshSeconds: 5,
   publicIpEnabled: true,
   publicIpCheckMinutes: 60,

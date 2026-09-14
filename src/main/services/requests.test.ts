@@ -1,0 +1,22 @@
+import { expect, it, vi } from 'vitest';
+const handlers = vi.hoisted(() => new Map<string, (...args: any[]) => Promise<unknown>>());
+vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => Promise<unknown>) => handlers.set(channel, handler) } }));
+import { readHandler } from './requests';
+it('shares equal in-flight reads and releases the slot after failure', async () => {
+  let reject!: (error: Error) => void;
+  const load = vi.fn(() => new Promise((_resolve, fail) => { reject = fail; }));
+  readHandler('test:read', load);
+  const handler = handlers.get('test:read')!;
+  const a = handler({}, 1);
+  const b = handler({}, 1);
+  expect(a).toBe(b);
+  await Promise.resolve();
+  expect(load).toHaveBeenCalledTimes(1);
+  reject(new Error('offline'));
+  await expect(a).rejects.toThrow('offline');
+  const c = handler({}, 1);
+  await Promise.resolve();
+  expect(load).toHaveBeenCalledTimes(2);
+  reject(new Error('offline'));
+  await expect(c).rejects.toThrow('offline');
+});

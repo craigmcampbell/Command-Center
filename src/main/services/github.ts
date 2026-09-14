@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http";
 // GitHub REST API: latest Actions run + open PRs per configured repo, plus a
 // single cross-repo "review requested" search. Fails soft, like the other
 // services. Personal access token lives in config.json's `github.token`,
@@ -16,7 +17,7 @@ const API_ROOT = "https://api.github.com";
 const USER_AGENT = "command-center-app";
 
 function githubFetch(url: string, token: string): Promise<Response> {
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${token}`,
       "User-Agent": USER_AGENT,

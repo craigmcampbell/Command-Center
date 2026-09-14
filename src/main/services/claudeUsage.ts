@@ -15,15 +15,13 @@
 //  3. DATE-SCOPED RATES. See claudePricing.ts — intro pricing means a message's
 //     cost depends on when it happened.
 //
-// Performance: the prefilter below is why this needs no worker process and no
-// persistent cache. Transcripts are mostly enormous attachment lines; skipping
-// any line without `"usage"` before JSON.parse takes a full 391MB / 43-file
-// scan to well under a second.
+// Parsing runs in a worker and uses a persistent append index. The prefilter
+// still avoids decoding large attachment records on the initial scan.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import readline from "node:readline";
+import { indexedFile, findTranscripts, pruneIndex } from "./transcriptIndex";
 import { costOf, planFor, rateFor } from "./claudePricing";
 import type {
   ClaudeSession,
@@ -59,15 +57,6 @@ interface ParsedFile {
   session?: SessionMeta; // only for top-level session transcripts
 }
 
-// Cache key includes size and mtime: transcripts are append-only, so a file
-// whose size hasn't changed cannot have new usage in it. This is what keeps a
-// refresh cheap as the transcript directory grows.
-interface CacheSlot extends ParsedFile {
-  size: number;
-  mtimeMs: number;
-}
-const cache = new Map<string, CacheSlot>();
-
 // Claude Code records the signed-in account in ~/.claude.json. This is only
 // used to name the plan and put the API-equivalent figure in proportion —
 // there is no local record of quota remaining, so this can't show how much of
@@ -101,22 +90,6 @@ function localDate(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Recursive walk; fs.promises.glob needs Node 22 and Electron 33 ships Node 20. */
-function findTranscripts(dir: string, out: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) findTranscripts(full, out);
-    else if (entry.name.endsWith(".jsonl")) out.push(full);
-  }
-  return out;
-}
-
 // A session transcript is <projects>/<project>/<uuid>.jsonl. Anything deeper
 // (the subagents/ folder) belongs to the session named by its parent directory
 // and must never be listed as a session of its own.
@@ -131,110 +104,95 @@ function sessionIdForFile(file: string): { id: string; isSessionFile: boolean } 
 
 async function parseFile(file: string): Promise<ParsedFile> {
   const { id: sessionId, isSessionFile } = sessionIdForFile(file);
-  const entries: UsageEntry[] = [];
-  let title: string | undefined;
-  let lastPrompt: string | undefined;
-  let cwd = "";
+  const result = await indexedFile<ParsedFile>(file, async (lines, previous) => {
+    const entries = previous?.entries ?? [];
+    let title = previous?.session?.title;
+    let lastPrompt = previous?.session?.lastPrompt;
+    let cwd = previous?.session?.cwd ?? "";
+    for await (const line of lines) {
+      // The prefilter. Transcripts are dominated by huge attachment lines;
+      // parsing them all is the difference between ~1s and a very long wait.
+      const hasUsage = line.includes('"usage"');
+      const isMeta = isSessionFile && (line.includes('"custom-title"') || line.includes('"last-prompt"'));
+      if (!hasUsage && !isMeta) continue;
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(file),
-    crlfDelay: Infinity,
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue; // a partially-written trailing line while Claude Code is running
+      }
+
+      const type = record.type;
+      if (type === "custom-title") {
+        title = (record.customTitle as string) || title;
+        continue;
+      }
+      if (type === "last-prompt") {
+        lastPrompt = (record.lastPrompt as string) || lastPrompt;
+        continue;
+      }
+      if (type !== "assistant") continue;
+
+      const message = record.message as Record<string, unknown> | undefined;
+      const usage = message?.usage as Record<string, unknown> | undefined;
+      if (!usage) continue;
+
+      if (typeof record.cwd === "string" && record.cwd) cwd = record.cwd;
+
+      // Cache creation is reported both as a flat total and split by TTL. Prefer
+      // the split (the two are priced differently); fall back to the flat number,
+      // treating it as 5-minute, which is the default TTL.
+      const split = usage.cache_creation as Record<string, number> | undefined;
+      const flatWrite = (usage.cache_creation_input_tokens as number) ?? 0;
+
+      entries.push({
+        requestId: (record.requestId as string) ?? "",
+        messageId: (message?.id as string) ?? "",
+        date: localDate((record.timestamp as string) ?? ""),
+        model: (message?.model as string) ?? "unknown",
+        cwd: (record.cwd as string) ?? "",
+        sessionId,
+        tokens: {
+          input: (usage.input_tokens as number) ?? 0,
+          // thinking_tokens are already inside output_tokens — adding them would
+          // double-count.
+          output: (usage.output_tokens as number) ?? 0,
+          cacheRead: (usage.cache_read_input_tokens as number) ?? 0,
+          cacheWrite5m: split ? (split.ephemeral_5m_input_tokens ?? 0) : flatWrite,
+          cacheWrite1h: split ? (split.ephemeral_1h_input_tokens ?? 0) : 0,
+        },
+      });
+    }
+
+    return { entries, session: isSessionFile ? { id: sessionId, cwd, title, lastPrompt, updatedAt: 0 } : undefined };
   });
-
-  for await (const line of rl) {
-    // The prefilter. Transcripts are dominated by huge attachment lines;
-    // parsing them all is the difference between ~1s and a very long wait.
-    const hasUsage = line.includes('"usage"');
-    const isMeta = isSessionFile && (line.includes('"custom-title"') || line.includes('"last-prompt"'));
-    if (!hasUsage && !isMeta) continue;
-
-    let record: Record<string, unknown>;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue; // a partially-written trailing line while Claude Code is running
-    }
-
-    const type = record.type;
-    if (type === "custom-title") {
-      title = (record.customTitle as string) || title;
-      continue;
-    }
-    if (type === "last-prompt") {
-      lastPrompt = (record.lastPrompt as string) || lastPrompt;
-      continue;
-    }
-    if (type !== "assistant") continue;
-
-    const message = record.message as Record<string, unknown> | undefined;
-    const usage = message?.usage as Record<string, unknown> | undefined;
-    if (!usage) continue;
-
-    if (typeof record.cwd === "string" && record.cwd) cwd = record.cwd;
-
-    // Cache creation is reported both as a flat total and split by TTL. Prefer
-    // the split (the two are priced differently); fall back to the flat number,
-    // treating it as 5-minute, which is the default TTL.
-    const split = usage.cache_creation as Record<string, number> | undefined;
-    const flatWrite = (usage.cache_creation_input_tokens as number) ?? 0;
-
-    entries.push({
-      requestId: (record.requestId as string) ?? "",
-      messageId: (message?.id as string) ?? "",
-      date: localDate((record.timestamp as string) ?? ""),
-      model: (message?.model as string) ?? "unknown",
-      cwd: (record.cwd as string) ?? "",
-      sessionId,
-      tokens: {
-        input: (usage.input_tokens as number) ?? 0,
-        // thinking_tokens are already inside output_tokens — adding them would
-        // double-count.
-        output: (usage.output_tokens as number) ?? 0,
-        cacheRead: (usage.cache_read_input_tokens as number) ?? 0,
-        cacheWrite5m: split ? (split.ephemeral_5m_input_tokens ?? 0) : flatWrite,
-        cacheWrite1h: split ? (split.ephemeral_1h_input_tokens ?? 0) : 0,
-      },
-    });
-  }
-
-  const parsed: ParsedFile = { entries };
-  if (isSessionFile) {
-    let updatedAt = 0;
-    try {
-      updatedAt = fs.statSync(file).mtimeMs;
-    } catch {
-      // fall through with 0
-    }
-    parsed.session = { id: sessionId, cwd, title, lastPrompt, updatedAt };
-  }
-  return parsed;
+  if (result.session) result.session.updatedAt = (await fs.promises.stat(file)).mtimeMs;
+  return result;
 }
 
-async function scan(): Promise<{ files: ParsedFile[]; scanMs: number }> {
-  const started = Date.now();
-  const files: ParsedFile[] = [];
-
-  for (const file of findTranscripts(PROJECTS_DIR)) {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(file);
-    } catch {
-      continue;
+// Share traversal and aggregation inputs between the paired usage/session calls.
+let recentScan: { until: number; value: Promise<{ files: ParsedFile[]; scanMs: number }> } | undefined;
+function scan(): Promise<{ files: ParsedFile[]; scanMs: number }> {
+  if (recentScan && recentScan.until > Date.now()) return recentScan.value;
+  const value = (async () => {
+    const started = Date.now();
+    const paths = await findTranscripts(PROJECTS_DIR);
+    const files: ParsedFile[] = [];
+    for (const file of paths) {
+      try { files.push(await parseFile(file)); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     }
-
-    const cached = cache.get(file);
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-      files.push(cached);
-      continue;
-    }
-
-    const parsed = await parseFile(file);
-    const slot: CacheSlot = { ...parsed, size: stat.size, mtimeMs: stat.mtimeMs };
-    cache.set(file, slot);
-    files.push(slot);
-  }
-
-  return { files, scanMs: Date.now() - started };
+    pruneIndex([PROJECTS_DIR], paths);
+    return { files, scanMs: Date.now() - started };
+  })();
+  const slot = { until: Infinity, value };
+  recentScan = slot;
+  void value.then(() => {
+    slot.until = Date.now() + 2000;
+    setTimeout(() => { if (recentScan === slot) recentScan = undefined; }, 2000).unref();
+  }, () => { if (recentScan === slot) recentScan = undefined; });
+  return value;
 }
 
 /**

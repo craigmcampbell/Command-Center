@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   main: {
+    build: { rollupOptions: { input: { index: "src/main/index.ts", "usage-worker": "src/main/usage-worker.ts" } } },
     plugins: [externalizeDepsPlugin()],
   },
   preload: {
