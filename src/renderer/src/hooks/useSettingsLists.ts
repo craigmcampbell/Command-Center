@@ -1,4 +1,5 @@
-// Thin CRUD wrappers over window.api.settings.{vaults,githubRepos,processes},
+// Thin CRUD wrappers over
+// window.api.settings.{vaults,githubRepos,processes,youtubeChannels,subreddits},
 // same shape as useLinkList.ts: each mutator calls the IPC method and hands
 // the freshly-returned full list back to the caller's setter. Used only by
 // SettingsPage, which owns the array state locally.
@@ -8,7 +9,9 @@ import type {
   GitHubRepoConfig,
   GitHubRepoInput,
   ProcessConfig,
+  SubredditConfig,
   VaultConfig,
+  YouTubeChannelConfig,
 } from "../../../shared/types";
 
 export function useVaultSettingsList(onChange: (items: VaultConfig[]) => void) {
@@ -92,6 +95,68 @@ export function useProcessSettingsList(onChange: (items: ProcessConfig[]) => voi
     async (reorderedItems: ProcessConfig[]) => {
       onChange(reorderedItems);
       onChange(await window.api.settings.processes.reorder(reorderedItems.map((i) => i.id)));
+    },
+    [onChange]
+  );
+  return { add, update, remove, reorder };
+}
+
+export function useYouTubeChannelSettingsList(
+  onChange: (items: YouTubeChannelConfig[]) => void
+) {
+  const add = useCallback(
+    async (label: string, channelId: string) => {
+      onChange(await window.api.settings.youtubeChannels.add(label, channelId));
+    },
+    [onChange]
+  );
+  const update = useCallback(
+    async (id: number, label: string, channelId: string) => {
+      onChange(await window.api.settings.youtubeChannels.update(id, label, channelId));
+    },
+    [onChange]
+  );
+  const remove = useCallback(
+    async (id: number) => {
+      onChange(await window.api.settings.youtubeChannels.remove(id));
+    },
+    [onChange]
+  );
+  const reorder = useCallback(
+    async (reorderedItems: YouTubeChannelConfig[]) => {
+      onChange(reorderedItems);
+      onChange(
+        await window.api.settings.youtubeChannels.reorder(reorderedItems.map((i) => i.id))
+      );
+    },
+    [onChange]
+  );
+  return { add, update, remove, reorder };
+}
+
+export function useSubredditSettingsList(onChange: (items: SubredditConfig[]) => void) {
+  const add = useCallback(
+    async (subreddit: string) => {
+      onChange(await window.api.settings.subreddits.add(subreddit));
+    },
+    [onChange]
+  );
+  const update = useCallback(
+    async (id: number, subreddit: string) => {
+      onChange(await window.api.settings.subreddits.update(id, subreddit));
+    },
+    [onChange]
+  );
+  const remove = useCallback(
+    async (id: number) => {
+      onChange(await window.api.settings.subreddits.remove(id));
+    },
+    [onChange]
+  );
+  const reorder = useCallback(
+    async (reorderedItems: SubredditConfig[]) => {
+      onChange(reorderedItems);
+      onChange(await window.api.settings.subreddits.reorder(reorderedItems.map((i) => i.id)));
     },
     [onChange]
   );

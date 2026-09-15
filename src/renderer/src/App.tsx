@@ -22,6 +22,10 @@ import type {
   ProcessConfig,
   ProcessStatus,
   ReaderResult,
+  ReaderFeedResult,
+  GitHubReleasesResult,
+  RedditResult,
+  YouTubeResult,
   TodoistResult,
   CalendarResult,
   YnabAccountsResult,
@@ -63,6 +67,10 @@ import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRou
 import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
+import ReaderFeedWidget from "./components/ReaderFeedWidget";
+import GitHubReleasesWidget from "./components/GitHubReleasesWidget";
+import YouTubeWidget from "./components/YouTubeWidget";
+import RedditWidget from "./components/RedditWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
 import HabitsWidget from "./components/HabitsWidget";
 import NotesWidget from "./components/NotesWidget";
@@ -84,12 +92,18 @@ type TabId =
   | "notes"
   | "finances"
   | "ai"
-  | "stats";
+  | "stats"
+  | "social";
 
 // The AI tab's own sub-navigation (Claude / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
 // openRouterPeriod — since three subtabs don't need reorder/rename.
 type AiSubTab = "claude" | "openrouter" | "openai";
+
+// The Reader tab's own two halves: what you saved, and what your RSS
+// subscriptions delivered. Local UI state like AiSubTab — two fixed halves
+// don't need reorder/rename.
+type ReaderSubTab = "saved" | "feed";
 
 // Fallback order/labels for the very first render, before settings.getAll()
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
@@ -104,6 +118,10 @@ const DEFAULT_TABS: TabConfig[] = [
   { id: "finances", label: "Finances", sortOrder: 6 },
   { id: "ai", label: "AI", sortOrder: 7 },
   { id: "stats", label: "Stats", sortOrder: 8 },
+  // Appended, not slotted in: ensureTabDefaults() inserts a missing tab at
+  // maxOrder + 1, so a mid-list position here would disagree with what an
+  // existing install's DB actually holds. Drag-to-reorder handles placement.
+  { id: "social", label: "Social", sortOrder: 9 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -164,6 +182,13 @@ export default function App() {
   const [fileLinks, setFileLinks] = useState<LinkItem[]>([]);
   const [reader, setReader] = useState<ReaderResult | null>(null);
   const [readerPage, setReaderPage] = useState(0);
+  const [readerSubTab, setReaderSubTab] = useState<ReaderSubTab>("saved");
+  const [readerFeed, setReaderFeed] = useState<ReaderFeedResult | null>(null);
+  const [readerFeedPage, setReaderFeedPage] = useState(0);
+  const [readerFeedSource, setReaderFeedSource] = useState<string | null>(null);
+  const [githubReleases, setGithubReleases] = useState<GitHubReleasesResult | null>(null);
+  const [youtube, setYouTube] = useState<YouTubeResult | null>(null);
+  const [reddit, setReddit] = useState<RedditResult | null>(null);
   const [appRefreshMinutes, setAppRefreshMinutes] = useState(DEFAULT_REFRESH_MINUTES);
   const [dockerRefreshSeconds, setDockerRefreshSeconds] = useState(DEFAULT_DOCKER_REFRESH_SECONDS);
   const [dockerUpdates, setDockerUpdates] = useState<DockerUpdateCheckResult | null>(null);
@@ -299,6 +324,23 @@ export default function App() {
     setReaderPage(page);
     setReader(await window.api.reader.list(page, forceRefresh));
   }, []);
+  const loadReaderFeed = useCallback(
+    async (page: number, source: string | null, forceRefresh = false) => {
+      setReaderFeedPage(page);
+      setReaderFeedSource(source);
+      setReaderFeed(await window.api.reader.feed(page, source, forceRefresh));
+    },
+    []
+  );
+  const loadGithubReleases = useCallback(async (forceRefresh = false) => {
+    setGithubReleases(await window.api.github.releases(forceRefresh));
+  }, []);
+  const loadYouTube = useCallback(async (forceRefresh = false) => {
+    setYouTube(await window.api.youtube.list(forceRefresh));
+  }, []);
+  const loadReddit = useCallback(async (forceRefresh = false) => {
+    setReddit(await window.api.reddit.list(forceRefresh));
+  }, []);
   const loadOpenRouter = useCallback(async () => {
     setOpenRouterUsage(await window.api.openrouter.usage(openRouterPeriod));
   }, [openRouterPeriod]);
@@ -346,6 +388,10 @@ export default function App() {
         loadCards(),
         loadOpenRouter(),
         loadOpenAI(),
+        loadYouTube(true),
+        loadReddit(true),
+        loadReaderFeed(readerFeedPage, readerFeedSource, true),
+        loadGithubReleases(true),
       ]);
       setLastRefreshedAt(new Date());
     } finally {
@@ -371,6 +417,12 @@ export default function App() {
     loadCards,
     loadOpenRouter,
     loadOpenAI,
+    loadYouTube,
+    loadReddit,
+    loadReaderFeed,
+    readerFeedPage,
+    readerFeedSource,
+    loadGithubReleases,
   ]);
 
   const newScratchpadNote = useCallback(async () => {
@@ -473,7 +525,16 @@ export default function App() {
   usePolling(loadCodex, localInterval, foreground && activeTab === "ai" && aiSubTab === "openai");
   usePolling(loadClaude, localInterval, foreground && activeTab === "ai" && aiSubTab === "claude");
   usePolling(async () => { await Promise.all([loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]); setLastRefreshedAt(new Date()); }, localInterval, foreground && activeTab === "home", 0);
-  usePolling(() => loadReader(readerPage), localInterval, foreground && activeTab === "reader");
+  usePolling(() => loadReader(readerPage), localInterval, foreground && activeTab === "reader" && readerSubTab === "saved");
+  usePolling(
+    () => loadReaderFeed(readerFeedPage, readerFeedSource),
+    localInterval,
+    foreground && activeTab === "reader" && readerSubTab === "feed",
+    0,
+    readerFeedSource
+  );
+  usePolling(loadGithubReleases, localInterval, foreground && activeTab === "development", 800);
+  usePolling(async () => { await Promise.all([loadYouTube(), loadReddit()]); }, localInterval, foreground && activeTab === "social", 400);
   usePolling(async () => { await Promise.all([loadFinanceReviewLog(), loadBills(), loadCards()]); }, localInterval, foreground && activeTab === "finances");
 
   // ---- alerts + tray, derived from state the widgets already poll ----
@@ -614,6 +675,9 @@ export default function App() {
               onChange={setClaudeProjects}
             />
           </div>
+          <div className="slot slot-releases">
+            <GitHubReleasesWidget data={githubReleases} />
+          </div>
           <div className="slot slot-processes">
             <ManagedProcessesWidget
               configs={processConfigs}
@@ -625,9 +689,54 @@ export default function App() {
       )}
 
       {activeTab === "reader" && (
-        <main className="grid grid-reader">
-          <div className="slot slot-reader">
-            <ReaderWidget data={reader} onNavigate={(page) => loadReader(page)} onChange={setReader} />
+        <>
+          <div className="ai-subtabs" role="tablist" aria-label="Reader view">
+            {([
+              { id: "saved", label: "Saved" },
+              { id: "feed", label: "Feed" },
+            ] as { id: ReaderSubTab; label: string }[]).map((sub) => (
+              <button
+                key={sub.id}
+                type="button"
+                role="tab"
+                aria-selected={readerSubTab === sub.id}
+                className={`ai-subtab ${readerSubTab === sub.id ? "active" : ""}`}
+                onClick={() => setReaderSubTab(sub.id)}
+              >
+                {sub.label}
+              </button>
+            ))}
+          </div>
+          {readerSubTab === "saved" && (
+            <main className="grid grid-reader">
+              <div className="slot slot-reader">
+                <ReaderWidget data={reader} onNavigate={(page) => loadReader(page)} onChange={setReader} />
+              </div>
+            </main>
+          )}
+          {readerSubTab === "feed" && (
+            <main className="grid grid-reader">
+              <div className="slot slot-reader">
+                <ReaderFeedWidget
+                  data={readerFeed}
+                  source={readerFeedSource}
+                  onNavigate={(page) => loadReaderFeed(page, readerFeedSource)}
+                  onSource={(src) => loadReaderFeed(0, src)}
+                  onChange={setReaderFeed}
+                />
+              </div>
+            </main>
+          )}
+        </>
+      )}
+
+      {activeTab === "social" && (
+        <main className="grid grid-social">
+          <div className="slot slot-youtube">
+            <YouTubeWidget data={youtube} />
+          </div>
+          <div className="slot slot-reddit">
+            <RedditWidget data={reddit} />
           </div>
         </main>
       )}

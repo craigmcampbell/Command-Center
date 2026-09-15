@@ -13,6 +13,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { getDatabase } from "./db";
+import { normalizeSubreddit } from "../../shared/subreddit";
 import type {
   AppConfig,
   GrimoireConfig,
@@ -31,7 +32,9 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   StatsSettings,
+  SubredditConfig,
   TabConfig,
+  YouTubeChannelConfig,
 } from "../../shared/types";
 
 // The renderer's fixed TabId set + its original default labels/order — kept
@@ -53,6 +56,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "finances", label: "Finances" },
   { id: "ai", label: "AI" },
   { id: "stats", label: "Stats" },
+  { id: "social", label: "Social" },
 ];
 
 export function initSettings(): void {
@@ -99,6 +103,17 @@ export function initSettings(): void {
     url TEXT,
     auto_open_url INTEGER,
     open_delay_ms INTEGER,
+    sort_order INTEGER NOT NULL
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS youtube_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS subreddits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subreddit TEXT NOT NULL,
     sort_order INTEGER NOT NULL
   )`);
   db.exec(`CREATE TABLE IF NOT EXISTS tabs (
@@ -495,6 +510,129 @@ export function reorderGithubRepos(orderedIds: number[]): GitHubRepoConfig[] {
   return githubRepoRowsToItems();
 }
 
+// ---- youtube channels ----
+
+function youtubeChannelRowsToItems(): YouTubeChannelConfig[] {
+  return getDatabase()
+    .prepare(
+      `SELECT id, label, channel_id as channelId, sort_order as sortOrder
+       FROM youtube_channels ORDER BY sort_order ASC`
+    )
+    .all() as YouTubeChannelConfig[];
+}
+
+export function listYouTubeChannelSettings(): YouTubeChannelConfig[] {
+  return youtubeChannelRowsToItems();
+}
+
+export function addYouTubeChannel(label: string, channelId: string): YouTubeChannelConfig[] {
+  const db = getDatabase();
+  // A duplicate channel would put the same video in the strip twice, which
+  // React sees as a duplicate key. Ignore the add rather than erroring —
+  // the row the user wants is already there.
+  const existing = youtubeChannelRowsToItems();
+  if (existing.some((c) => c.channelId === channelId)) return existing;
+  const { maxOrder } = db
+    .prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM youtube_channels`)
+    .get() as { maxOrder: number };
+  db.prepare(
+    `INSERT INTO youtube_channels (label, channel_id, sort_order) VALUES (?, ?, ?)`
+  ).run(label, channelId, maxOrder + 1);
+  return youtubeChannelRowsToItems();
+}
+
+export function updateYouTubeChannel(
+  id: number,
+  label: string,
+  channelId: string
+): YouTubeChannelConfig[] {
+  const existing = youtubeChannelRowsToItems();
+  if (existing.some((c) => c.id !== id && c.channelId === channelId)) return existing;
+  getDatabase()
+    .prepare(`UPDATE youtube_channels SET label = ?, channel_id = ? WHERE id = ?`)
+    .run(label, channelId, id);
+  return youtubeChannelRowsToItems();
+}
+
+export function removeYouTubeChannel(id: number): YouTubeChannelConfig[] {
+  getDatabase().prepare(`DELETE FROM youtube_channels WHERE id = ?`).run(id);
+  return youtubeChannelRowsToItems();
+}
+
+export function reorderYouTubeChannels(orderedIds: number[]): YouTubeChannelConfig[] {
+  const db = getDatabase();
+  const update = db.prepare(`UPDATE youtube_channels SET sort_order = ? WHERE id = ?`);
+  const updateAll = db.transaction((ids: number[]) => {
+    ids.forEach((id, i) => update.run(i, id));
+  });
+  updateAll(orderedIds);
+  return youtubeChannelRowsToItems();
+}
+
+// ---- subreddits ----
+//
+// Stored as bare names ("rust", not "r/rust") — shared/subreddit.ts holds the
+// single definition of what's acceptable, applied here on write so the table
+// can't accumulate rows the API would reject.
+
+function subredditRowsToItems(): SubredditConfig[] {
+  return getDatabase()
+    .prepare(
+      `SELECT id, subreddit, sort_order as sortOrder FROM subreddits ORDER BY sort_order ASC`
+    )
+    .all() as SubredditConfig[];
+}
+
+export function listSubredditSettings(): SubredditConfig[] {
+  return subredditRowsToItems();
+}
+
+// Subreddit names are case-insensitive on Reddit's side, so "Rust" and "rust"
+// would be two tabs showing the same posts — and a duplicate React key.
+function sameSubreddit(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+export function addSubreddit(subreddit: string): SubredditConfig[] {
+  const name = normalizeSubreddit(subreddit);
+  if (!name) return subredditRowsToItems();
+  const existing = subredditRowsToItems();
+  if (existing.some((s) => sameSubreddit(s.subreddit, name))) return existing;
+  const db = getDatabase();
+  const { maxOrder } = db
+    .prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM subreddits`)
+    .get() as { maxOrder: number };
+  db.prepare(`INSERT INTO subreddits (subreddit, sort_order) VALUES (?, ?)`).run(
+    name,
+    maxOrder + 1
+  );
+  return subredditRowsToItems();
+}
+
+export function updateSubreddit(id: number, subreddit: string): SubredditConfig[] {
+  const name = normalizeSubreddit(subreddit);
+  if (!name) return subredditRowsToItems();
+  const existing = subredditRowsToItems();
+  if (existing.some((s) => s.id !== id && sameSubreddit(s.subreddit, name))) return existing;
+  getDatabase().prepare(`UPDATE subreddits SET subreddit = ? WHERE id = ?`).run(name, id);
+  return subredditRowsToItems();
+}
+
+export function removeSubreddit(id: number): SubredditConfig[] {
+  getDatabase().prepare(`DELETE FROM subreddits WHERE id = ?`).run(id);
+  return subredditRowsToItems();
+}
+
+export function reorderSubreddits(orderedIds: number[]): SubredditConfig[] {
+  const db = getDatabase();
+  const update = db.prepare(`UPDATE subreddits SET sort_order = ? WHERE id = ?`);
+  const updateAll = db.transaction((ids: number[]) => {
+    ids.forEach((id, i) => update.run(i, id));
+  });
+  updateAll(orderedIds);
+  return subredditRowsToItems();
+}
+
 // ---- processes ----
 
 interface ProcessRow {
@@ -646,6 +784,8 @@ export function getAllSettings(): AppConfig {
     ynab: getYnabSettings(),
     openrouter: getOpenRouterSettings(),
     openai: getOpenAISettings(),
+    youtubeChannels: listYouTubeChannelSettings(),
+    subreddits: listSubredditSettings(),
     tabs: listTabSettings(),
     spotify: getSpotifySettings(),
   };

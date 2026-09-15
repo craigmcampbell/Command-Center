@@ -130,6 +130,21 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("reader:list", page, forceRefresh),
     archive: (id: string, page: number) => ipcRenderer.invoke("reader:archive", id, page),
     delete: (id: string, page: number) => ipcRenderer.invoke("reader:delete", id, page),
+    feed: (page: number, source?: string | null, forceRefresh?: boolean) =>
+      ipcRenderer.invoke("reader:feed", page, source, forceRefresh),
+    feedToInbox: (id: string, page: number, source?: string | null) =>
+      ipcRenderer.invoke("reader:feedToInbox", id, page, source),
+    feedMarkSeen: (ids: string[], page: number, source?: string | null) =>
+      ipcRenderer.invoke("reader:feedMarkSeen", ids, page, source),
+  },
+
+  youtube: {
+    list: (forceRefresh?: boolean) => ipcRenderer.invoke("youtube:list", forceRefresh),
+    resolveChannel: (input: string) => ipcRenderer.invoke("youtube:resolveChannel", input),
+  },
+
+  reddit: {
+    list: (forceRefresh?: boolean) => ipcRenderer.invoke("reddit:list", forceRefresh),
   },
 
   scratchpad: {
@@ -172,6 +187,7 @@ const api: CommandCenterApi = {
 
   github: {
     status: () => ipcRenderer.invoke("github:status"),
+    releases: (forceRefresh?: boolean) => ipcRenderer.invoke("github:releases", forceRefresh),
   },
 
   git: {
@@ -364,6 +380,25 @@ const api: CommandCenterApi = {
     },
     openai: {
       update: (values: OpenAIScalarConfig) => ipcRenderer.invoke("settings:openai:update", values),
+    },
+    youtubeChannels: {
+      list: () => ipcRenderer.invoke("settings:youtubeChannels:list"),
+      add: (label: string, channelId: string) =>
+        ipcRenderer.invoke("settings:youtubeChannels:add", label, channelId),
+      update: (id: number, label: string, channelId: string) =>
+        ipcRenderer.invoke("settings:youtubeChannels:update", id, label, channelId),
+      remove: (id: number) => ipcRenderer.invoke("settings:youtubeChannels:remove", id),
+      reorder: (orderedIds: number[]) =>
+        ipcRenderer.invoke("settings:youtubeChannels:reorder", orderedIds),
+    },
+    subreddits: {
+      list: () => ipcRenderer.invoke("settings:subreddits:list"),
+      add: (subreddit: string) => ipcRenderer.invoke("settings:subreddits:add", subreddit),
+      update: (id: number, subreddit: string) =>
+        ipcRenderer.invoke("settings:subreddits:update", id, subreddit),
+      remove: (id: number) => ipcRenderer.invoke("settings:subreddits:remove", id),
+      reorder: (orderedIds: number[]) =>
+        ipcRenderer.invoke("settings:subreddits:reorder", orderedIds),
     },
     vaults: {
       list: () => ipcRenderer.invoke("settings:vaults:list"),

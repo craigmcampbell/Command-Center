@@ -38,14 +38,20 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   ProcessConfig,
+  SubredditConfig,
   VaultConfig,
   YnabScalarConfig,
+  YouTubeChannelConfig,
 } from "../../../shared/types";
 import { validateAccelerator } from "../../../shared/accelerator";
+import { normalizeSubreddit } from "../../../shared/subreddit";
+import { parseChannelInput } from "../../../shared/youtubeChannel";
 import {
   useGithubRepoSettingsList,
   useProcessSettingsList,
+  useSubredditSettingsList,
   useVaultSettingsList,
+  useYouTubeChannelSettingsList,
 } from "../hooks/useSettingsLists";
 import {
   IconCheck,
@@ -65,6 +71,7 @@ type SectionId =
   | "vaults"
   | "githubRepos"
   | "processes"
+  | "social"
   | "data";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
@@ -74,6 +81,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "vaults", label: "Vaults" },
   { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
+  { id: "social", label: "Social" },
   { id: "data", label: "Data" },
 ];
 
@@ -1384,6 +1392,362 @@ function VaultsSection({ vaults, onChange }: { vaults: VaultConfig[]; onChange: 
   );
 }
 
+// ---- Social section ----
+//
+// Two array lists in one section rather than two more entries in the nav —
+// they're the two halves of a single tab's configuration. Both follow the
+// Vaults shape above: dnd-kit reorder, inline edit, add form at the bottom.
+
+// Channels are named by whatever the user can actually see — an @handle, or a
+// pasted channel URL — and resolved to the `UC…` id the feed needs once, here,
+// rather than on every poll. parseChannelInput gates the button without a
+// network call; the resolve confirms the channel actually exists.
+function ChannelFields({
+  channel,
+  label,
+  onChannel,
+  onLabel,
+  autoFocus,
+}: {
+  channel: string;
+  label: string;
+  onChannel: (v: string) => void;
+  onLabel: (v: string) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <>
+      <input
+        className="settings-input"
+        value={channel}
+        onChange={(e) => onChannel(e.target.value)}
+        placeholder="@handle, channel URL, or UC…"
+        autoFocus={autoFocus}
+      />
+      <input
+        className="settings-input"
+        value={label}
+        onChange={(e) => onLabel(e.target.value)}
+        placeholder="Label (optional)"
+      />
+    </>
+  );
+}
+
+function YouTubeChannelEditForm({
+  item,
+  onSave,
+  onCancel,
+}: {
+  item: YouTubeChannelConfig;
+  onSave: (label: string, channelId: string) => void;
+  onCancel: () => void;
+}) {
+  const [channel, setChannel] = useState(item.channelId);
+  const [label, setLabel] = useState(item.label);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const valid = parseChannelInput(channel) !== null;
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    setError("");
+    const res = await window.api.youtube.resolveChannel(channel);
+    setBusy(false);
+    if (!res.ok || !res.channelId) {
+      setError(res.reason || "Couldn't resolve that channel");
+      return;
+    }
+    onSave(label.trim() || res.title || res.channelId, res.channelId);
+  }
+
+  return (
+    <form className="settings-array-form" onSubmit={handleSubmit}>
+      <ChannelFields channel={channel} label={label} onChannel={setChannel} onLabel={setLabel} autoFocus />
+      <button type="submit" className="settings-array-save" disabled={!valid || busy} aria-label="Save">
+        <IconCheck />
+      </button>
+      <button type="button" className="settings-array-cancel" onClick={onCancel} aria-label="Cancel">
+        <IconX />
+      </button>
+      {error && <span className="settings-array-error">{error}</span>}
+    </form>
+  );
+}
+
+function YouTubeChannelRow({
+  item,
+  onSave,
+  onDelete,
+}: {
+  item: YouTubeChannelConfig;
+  onSave: (label: string, channelId: string) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+  });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+
+  if (editing) {
+    return (
+      <div ref={setNodeRef} style={style} className="settings-array-row editing">
+        <YouTubeChannelEditForm
+          item={item}
+          onSave={(label, channelId) => {
+            onSave(label, channelId);
+            setEditing(false);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={`settings-array-row ${isDragging ? "dragging" : ""}`}>
+      <button className="drag-handle" {...attributes} {...listeners} aria-label="Reorder">
+        <IconGrip />
+      </button>
+      <div className="settings-array-row-main">
+        <span className="settings-array-row-label">{item.label}</span>
+        <span className="settings-array-row-sub">{item.channelId}</span>
+      </div>
+      <span className="row-actions">
+        <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
+          <IconPencil />
+        </button>
+        <button className="row-action danger" onClick={onDelete} aria-label="Delete">
+          <IconTrash />
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function YouTubeChannelsSection({
+  channels,
+  onChange,
+}: {
+  channels: YouTubeChannelConfig[];
+  onChange: (c: YouTubeChannelConfig[]) => void;
+}) {
+  const { add, update, remove, reorder } = useYouTubeChannelSettingsList(onChange);
+  const [channel, setChannel] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const valid = parseChannelInput(channel) !== null;
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = channels.findIndex((i) => i.id === active.id);
+    const newIndex = channels.findIndex((i) => i.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    reorder(arrayMove(channels, oldIndex, newIndex));
+  }
+
+  async function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    setError("");
+    const res = await window.api.youtube.resolveChannel(channel);
+    setBusy(false);
+    if (!res.ok || !res.channelId) {
+      setError(res.reason || "Couldn't resolve that channel");
+      return;
+    }
+    // An empty label takes the channel's own name, so pasting a handle is the
+    // whole interaction.
+    add(label.trim() || res.title || res.channelId, res.channelId);
+    setChannel("");
+    setLabel("");
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>YouTube channels</h3>
+      <p className="settings-card-hint">
+        Paste a channel @handle, its URL, or a UC… ID — all three work, and the label fills in
+        from the channel's own name if you leave it blank. Read from YouTube's public feed, so no
+        API key is needed; it carries the ~15 most recent uploads per channel with Shorts mixed in.
+      </p>
+      {channels.length === 0 ? (
+        <p className="muted">No channels configured.</p>
+      ) : (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={channels.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+            {channels.map((c) => (
+              <YouTubeChannelRow
+                key={c.id}
+                item={c}
+                onSave={(label, channelId) => update(c.id, label, channelId)}
+                onDelete={() => remove(c.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      )}
+      <form className="settings-array-form" onSubmit={handleAdd}>
+        <ChannelFields channel={channel} label={label} onChannel={setChannel} onLabel={setLabel} />
+        <button type="submit" disabled={!valid || busy} aria-label="Add">
+          <IconPlus />
+        </button>
+      </form>
+      {error && <p className="settings-array-error">{error}</p>}
+      {busy && <p className="muted">Looking up the channel…</p>}
+    </div>
+  );
+}
+
+function SubredditEditForm({
+  item,
+  onSave,
+  onCancel,
+}: {
+  item: SubredditConfig;
+  onSave: (subreddit: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(item.subreddit);
+  const normalized = normalizeSubreddit(name);
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!normalized) return;
+    onSave(normalized);
+  }
+  return (
+    <form className="settings-array-form" onSubmit={handleSubmit}>
+      <input className="settings-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="rust" autoFocus />
+      <button type="submit" className="settings-array-save" disabled={!normalized} aria-label="Save">
+        <IconCheck />
+      </button>
+      <button type="button" className="settings-array-cancel" onClick={onCancel} aria-label="Cancel">
+        <IconX />
+      </button>
+    </form>
+  );
+}
+
+function SubredditRow({
+  item,
+  onSave,
+  onDelete,
+}: {
+  item: SubredditConfig;
+  onSave: (subreddit: string) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+  });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+
+  if (editing) {
+    return (
+      <div ref={setNodeRef} style={style} className="settings-array-row editing">
+        <SubredditEditForm
+          item={item}
+          onSave={(subreddit) => {
+            onSave(subreddit);
+            setEditing(false);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={`settings-array-row ${isDragging ? "dragging" : ""}`}>
+      <button className="drag-handle" {...attributes} {...listeners} aria-label="Reorder">
+        <IconGrip />
+      </button>
+      <div className="settings-array-row-main">
+        <span className="settings-array-row-label">r/{item.subreddit}</span>
+      </div>
+      <span className="row-actions">
+        <button className="row-action" onClick={() => setEditing(true)} aria-label="Edit">
+          <IconPencil />
+        </button>
+        <button className="row-action danger" onClick={onDelete} aria-label="Delete">
+          <IconTrash />
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function SubredditsSection({
+  subreddits,
+  onChange,
+}: {
+  subreddits: SubredditConfig[];
+  onChange: (s: SubredditConfig[]) => void;
+}) {
+  const { add, update, remove, reorder } = useSubredditSettingsList(onChange);
+  const [name, setName] = useState("");
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // Same normalizer main applies on write, so the form can't accept something
+  // the write would silently drop.
+  const normalized = normalizeSubreddit(name);
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = subreddits.findIndex((i) => i.id === active.id);
+    const newIndex = subreddits.findIndex((i) => i.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    reorder(arrayMove(subreddits, oldIndex, newIndex));
+  }
+
+  function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    if (!normalized) return;
+    add(normalized);
+    setName("");
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>Subreddits</h3>
+      <p className="settings-card-hint">
+        One tab each in the Reddit widget, in this order. No API key or account needed —
+        posts are read the same way a browser tab would.
+      </p>
+      {subreddits.length === 0 ? (
+        <p className="muted">No subreddits configured.</p>
+      ) : (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={subreddits.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+            {subreddits.map((s) => (
+              <SubredditRow
+                key={s.id}
+                item={s}
+                onSave={(subreddit) => update(s.id, subreddit)}
+                onDelete={() => remove(s.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      )}
+      <form className="settings-array-form" onSubmit={handleAdd}>
+        <input className="settings-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="rust — or r/rust" />
+        <button type="submit" disabled={!normalized} aria-label="Add">
+          <IconPlus />
+        </button>
+      </form>
+    </div>
+  );
+}
+
 // ---- Repositories section ----
 
 // A row is valid with a label, a branch, and at least one of the two sides it
@@ -2084,6 +2448,23 @@ export default function SettingsPage({
                     onProcessConfigsChange(processes);
                   }}
                 />
+              )}
+
+              {section === "social" && (
+                <>
+                  <YouTubeChannelsSection
+                    channels={data.youtubeChannels ?? []}
+                    onChange={(youtubeChannels) =>
+                      setData((prev) => (prev ? { ...prev, youtubeChannels } : prev))
+                    }
+                  />
+                  <SubredditsSection
+                    subreddits={data.subreddits ?? []}
+                    onChange={(subreddits) =>
+                      setData((prev) => (prev ? { ...prev, subreddits } : prev))
+                    }
+                  />
+                </>
               )}
             </div>
           </div>
