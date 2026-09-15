@@ -2830,6 +2830,7 @@ body {
 }
 .link-row:hover .row-actions,
 .reader-row:hover .row-actions,
+.feed-row:hover .row-actions,
 .launch-chip-wrap:hover .chip-actions,
 .notes-nav-item:hover .row-actions,
 .settings-array-row:hover .row-actions {
@@ -4783,6 +4784,115 @@ body {
   color: var(--accent);
 }
 
+/* ---- Railway billing tab ---- */
+
+.grid-railway {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "railway-usage";
+}
+.slot-railway-usage {
+  grid-area: railway-usage;
+}
+.railway-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.railway-section {
+  margin-top: 18px;
+}
+.railway-section-title {
+  margin: 0 0 9px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.railway-workspaces {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.railway-workspace {
+  padding: 12px;
+  border: 1px solid var(--panel-edge-soft);
+  border-radius: 9px;
+}
+.railway-workspace-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.railway-workspace-head h3 {
+  margin: 0 0 3px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.railway-workspace-head > div > span,
+.railway-workspace-cost span {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.railway-workspace-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+.railway-workspace-cost strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 500;
+}
+.railway-workspace-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 10px;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.railway-warning {
+  margin: 9px 0 0;
+  color: var(--warn);
+  font-size: 11px;
+}
+.railway-line-items {
+  display: flex;
+  flex-direction: column;
+}
+.railway-line-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px 100px;
+  gap: 12px;
+  padding: 7px 2px;
+  border-top: 1px solid var(--panel-edge-soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+.railway-line-item span:not(:first-child) {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.railway-line-item-head {
+  border-top: none;
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.railway-footnote {
+  margin: 12px 0 0;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .grid-openai {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-areas:
@@ -4935,6 +5045,9 @@ body {
   .codex-quota-grid,
   .claude-stats,
   .openai-stats {
+    grid-template-columns: 1fr;
+  }
+  .railway-workspaces {
     grid-template-columns: 1fr;
   }
 }
@@ -5382,13 +5495,8 @@ body {
 .feed-row.busy {
   opacity: 0.5;
 }
-
-/* Unread is the default reading state here, so it's marked by a quiet accent
-   rail rather than by making read items look disabled. */
-.feed-row.unread {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
-  margin-left: -12px;
+.feed-row .row-actions {
+  opacity: 1;
 }
 
 .feed-thumb {

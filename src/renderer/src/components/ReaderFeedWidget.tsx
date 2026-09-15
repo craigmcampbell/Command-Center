@@ -1,13 +1,14 @@
 // The RSS half of the Reader tab: Readwise's `feed` location, which the saved
-// -articles widget filters out. Three actions beyond reading — filter by
-// source, move an item to the inbox, and mark what's loaded as read.
+// -articles widget filters out. Unread only — already-opened items never
+// reach this list. Actions beyond reading: filter by source, mark one item
+// (or the page) as read, move an item to the inbox.
 //
 // Titles, summaries and image URLs come from arbitrary publishers, so they go
 // in as React text children and every URL through safeUrl().
 
 import { useState } from "react";
 import Panel from "./Panel";
-import { IconArchive, IconChevronLeft, IconChevronRight } from "./icons";
+import { IconArchive, IconCheck, IconChevronLeft, IconChevronRight } from "./icons";
 import { safeUrl } from "../lib/urls";
 import type { ReaderFeedItem, ReaderFeedResult } from "../../../shared/types";
 
@@ -35,6 +36,16 @@ function FeedRow({
   const [thumbBroken, setThumbBroken] = useState(false);
   const thumb = item.imageUrl && !thumbBroken ? safeUrl(item.imageUrl) : null;
 
+  async function markRead() {
+    setBusy(true);
+    const res = await window.api.reader.feedMarkSeen([item.id], page, source);
+    if (res.ok) onChange(res);
+    else {
+      window.alert(res.reason || "Couldn't mark that as read.");
+      setBusy(false);
+    }
+  }
+
   async function toInbox() {
     setBusy(true);
     const res = await window.api.reader.feedToInbox(item.id, page, source);
@@ -46,7 +57,7 @@ function FeedRow({
   }
 
   return (
-    <div className={`feed-row ${item.unread ? "unread" : ""} ${busy ? "busy" : ""}`}>
+    <div className={`feed-row ${busy ? "busy" : ""}`}>
       {thumb && (
         <img
           className="feed-thumb"
@@ -68,6 +79,15 @@ function FeedRow({
         </div>
       </div>
       <span className="row-actions">
+        <button
+          className="row-action"
+          onClick={markRead}
+          disabled={busy}
+          aria-label="Mark as read"
+          title="Mark as read"
+        >
+          <IconCheck size={13} />
+        </button>
         <button
           className="row-action"
           onClick={toInbox}
@@ -118,7 +138,7 @@ export default function ReaderFeedWidget({
   } else if (data.items.length === 0) {
     body = (
       <p className="muted">
-        {source ? `Nothing from ${source}.` : "No feed items — subscribe to feeds in Readwise Reader."}
+        {source ? `Nothing unread from ${source}.` : "Caught up — no unread feed items."}
       </p>
     );
   } else {

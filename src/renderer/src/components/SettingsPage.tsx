@@ -38,6 +38,7 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  RailwayScalarConfig,
   ProcessConfig,
   SubredditConfig,
   VaultConfig,
@@ -103,6 +104,7 @@ interface SettingsPageProps {
   onOpenRouterRefreshSecondsChange: (seconds?: number) => void;
   onOpenAIRefreshSecondsChange: (seconds?: number) => void;
   onFirecrawlRefreshSecondsChange: (seconds?: number) => void;
+  onRailwayRefreshSecondsChange: (seconds?: number) => void;
 }
 
 function slugify(label: string): string {
@@ -1235,6 +1237,70 @@ function FirecrawlCard({
   );
 }
 
+function RailwayCard({
+  value,
+  onSaved,
+}: {
+  value: RailwayScalarConfig;
+  onSaved: (v: RailwayScalarConfig) => void;
+}) {
+  const [accountToken, setAccountToken] = useState(value.accountToken ?? "");
+  const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setAccountToken(value.accountToken ?? "");
+    setRefreshSeconds(String(value.refreshSeconds ?? 900));
+  }, [value.accountToken, value.refreshSeconds]);
+  const dirty =
+    accountToken !== (value.accountToken ?? "") ||
+    refreshSeconds !== String(value.refreshSeconds ?? 900);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.railway.update({
+      accountToken: accountToken || undefined,
+      refreshSeconds: Number(refreshSeconds) || 900,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Railway</h3>
+      <p className="settings-card-hint">
+        Account or workspace token from Railway&apos;s account settings. Account tokens combine
+        every accessible workspace; workspace tokens show their own workspace. Project tokens
+        use different authentication and are not supported.
+      </p>
+      <div className="settings-field-row">
+        <label>API token</label>
+        <SecretField
+          value={accountToken}
+          onChange={setAccountToken}
+          placeholder="•••••••••••••••"
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={refreshSeconds}
+          onChange={(e) => setRefreshSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function YnabScalarCard({
   value,
   onSaved,
@@ -2314,6 +2380,7 @@ export default function SettingsPage({
   onOpenRouterRefreshSecondsChange,
   onOpenAIRefreshSecondsChange,
   onFirecrawlRefreshSecondsChange,
+  onRailwayRefreshSecondsChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -2487,6 +2554,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, firecrawl: v } : prev));
                       onFirecrawlRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <RailwayCard
+                    value={data.railway ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, railway: v } : prev));
+                      onRailwayRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
                 </>

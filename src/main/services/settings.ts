@@ -32,6 +32,7 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  RailwayScalarConfig,
   StatsSettings,
   SubredditConfig,
   TabConfig,
@@ -369,6 +370,13 @@ export function getFirecrawlSettings(): FirecrawlScalarConfig {
 }
 export function updateFirecrawlSettings(values: FirecrawlScalarConfig): FirecrawlScalarConfig {
   setRaw("firecrawl", values);
+  return values;
+}
+export function getRailwaySettings(): RailwayScalarConfig {
+  return getRaw<RailwayScalarConfig>("railway") ?? {};
+}
+export function updateRailwaySettings(values: RailwayScalarConfig): RailwayScalarConfig {
+  setRaw("railway", values);
   return values;
 }
 
@@ -793,6 +801,7 @@ export function getAllSettings(): AppConfig {
     openrouter: getOpenRouterSettings(),
     openai: getOpenAISettings(),
     firecrawl: getFirecrawlSettings(),
+    railway: getRailwaySettings(),
     youtubeChannels: listYouTubeChannelSettings(),
     subreddits: listSubredditSettings(),
     tabs: listTabSettings(),
@@ -875,6 +884,7 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   seedRawIfEmpty("openrouter", {});
   seedRawIfEmpty("openai", {});
   seedRawIfEmpty("firecrawl", {});
+  seedRawIfEmpty("railway", {});
   seedRawIfEmpty("spotify", { enabled: true });
 
   seedVaultsIfEmpty(pick<{ label: string; path: string }[]>("vaults") ?? []);

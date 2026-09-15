@@ -76,7 +76,7 @@ describe("listReaderFeed", () => {
     });
   });
 
-  it("treats a never-opened document as unread and an opened one as read", async () => {
+  it("omits already-opened documents, leaving only unread", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -89,7 +89,8 @@ describe("listReaderFeed", () => {
       )
     );
     const res = await listReaderFeed(CONFIG, 0);
-    expect(res.items.map((i) => i.unread)).toEqual([false, true]); // id 2 sorts first
+    expect(res.items.map((i) => i.id)).toEqual(["1"]);
+    expect(res.items[0].unread).toBe(true);
   });
 
   it("reports every source seen, alphabetically", async () => {
@@ -113,24 +114,70 @@ describe("listReaderFeed", () => {
     ]);
   });
 
-  it("keeps pulling pages so a filtered source can still fill a page", async () => {
-    // Only one matching item per upstream page: filtering to the quiet source
-    // must keep fetching rather than returning a near-empty page.
-    let cursor = 0;
+  it("counts sources from unread items only", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        cursor += 1;
-        const results = [doc(String(cursor), "quiet.com"), ...Array.from({ length: 20 }, (_, i) => doc(`${cursor}${i}x`, "loud.com"))];
-        return new Response(
-          JSON.stringify({ results, nextPageCursor: cursor < 20 ? `c${cursor}` : null })
-        );
-      })
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              doc("1", "zebra.com"),
+              doc("2", "Apple.com", "2026-09-12T00:00:00+00:00"),
+              doc("3", "zebra.com"),
+              doc("4", "mid.com"),
+            ],
+            nextPageCursor: null,
+          })
+        )
+      )
     );
+    const res = await listReaderFeed(CONFIG, 0);
+    expect(res.sources).toEqual([
+      { name: "mid.com", count: 1 },
+      { name: "zebra.com", count: 2 },
+    ]);
+  });
+
+  it("caps a filtered source scan at one upstream page per request", async () => {
+    // Only one matching item per upstream page. Chasing 15 matches in one
+    // request would exceed Readwise's 20/minute token-wide rate limit.
+    let cursor = 0;
+    const fetch = vi.fn(async () => {
+      cursor += 1;
+      const results = [
+        doc(String(cursor), "quiet.com"),
+        ...Array.from({ length: 20 }, (_, i) => doc(`${cursor}${i}x`, "loud.com")),
+      ];
+      return new Response(JSON.stringify({ results, nextPageCursor: `c${cursor}` }));
+    });
+    vi.stubGlobal("fetch", fetch);
     const res = await listReaderFeed(CONFIG, 0, "quiet.com");
     expect(res.ok).toBe(true);
-    expect(res.items).toHaveLength(15);
+    expect(res.items).toHaveLength(1);
     expect(res.items.every((i) => i.siteName === "quiet.com")).toBe(true);
+    expect(res.hasNext).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not chase unread items through many mostly-read pages", async () => {
+    let cursor = 0;
+    const fetch = vi.fn(async () => {
+      cursor += 1;
+      const results = [
+        doc(String(cursor), "a.com"),
+        ...Array.from({ length: 20 }, (_, i) =>
+          doc(`${cursor}${i}x`, "a.com", "2026-09-12T00:00:00+00:00")
+        ),
+      ];
+      return new Response(JSON.stringify({ results, nextPageCursor: `c${cursor}` }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const res = await listReaderFeed(CONFIG, 0);
+    expect(res.ok).toBe(true);
+    expect(res.items).toHaveLength(1);
+    expect(res.items.every((i) => i.unread)).toBe(true);
+    expect(res.hasNext).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a rejected token as a reason rather than throwing", async () => {
@@ -170,7 +217,7 @@ describe("feed actions", () => {
     expect(fetch).toHaveBeenCalledTimes(1); // no refetch
   });
 
-  it("marks items seen in batches of 50 and flips them locally", async () => {
+  it("marks items seen in batches of 50 and drops them from the unread list", async () => {
     const many = Array.from({ length: 120 }, (_, i) => doc(String(i + 1), "a.com"));
     await seed(many);
     const batches: number[] = [];
@@ -187,7 +234,52 @@ describe("feed actions", () => {
     const ids = many.map((d) => d.id);
     const res = await markFeedItemsSeen(CONFIG, ids, 0);
     expect(batches).toEqual([50, 50, 20]); // the API's per-request cap
-    expect(res.items.every((i) => !i.unread)).toBe(true);
+    expect(res.items).toEqual([]);
+  });
+
+  it("drops a single marked item and slides the next unread onto the page", async () => {
+    const many = Array.from({ length: 16 }, (_, i) => doc(String(i + 1), "a.com"));
+    await seed(many);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        expect(String(input)).toContain("/bulk_update/");
+        return new Response("{}");
+      })
+    );
+    const res = await markFeedItemsSeen(CONFIG, ["16"], 0);
+    expect(res.ok).toBe(true);
+    expect(res.items).toHaveLength(15);
+    expect(res.items.map((i) => i.id)).not.toContain("16");
+    expect(res.items[0].id).toBe("15");
+    expect(res.items.at(-1)?.id).toBe("1");
+  });
+
+  it("does not let a just-marked item slide back in from a stale refill", async () => {
+    const firstPage = Array.from({ length: 15 }, (_, i) => doc(String(i + 1), "a.com"));
+    let listCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        if (String(input).includes("/bulk_update/")) return new Response("{}");
+        listCalls += 1;
+        if (listCalls === 1) {
+          return new Response(JSON.stringify({ results: firstPage, nextPageCursor: "c1" }));
+        }
+        // API hasn't flipped first_opened_at yet, but 16 is a real new unread.
+        return new Response(
+          JSON.stringify({
+            results: [doc("15", "a.com"), doc("16", "a.com")],
+            nextPageCursor: null,
+          })
+        );
+      })
+    );
+    await listReaderFeed(CONFIG, 0);
+    const res = await markFeedItemsSeen(CONFIG, ["15"], 0);
+    expect(res.items.map((i) => i.id)).not.toContain("15");
+    expect(res.items.map((i) => i.id)).toContain("16");
+    expect(res.items).toHaveLength(15);
   });
 
   it("does nothing, and sends nothing, when there's nothing to mark", async () => {

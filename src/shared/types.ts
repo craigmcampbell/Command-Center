@@ -96,6 +96,13 @@ export interface FirecrawlScalarConfig {
   refreshSeconds?: number;
 }
 
+// Railway account and workspace tokens both use the Bearer header. The
+// persisted field keeps its original name for settings compatibility.
+export interface RailwayScalarConfig {
+  accountToken?: string;
+  refreshSeconds?: number;
+}
+
 // A labeled Obsidian vault root for the Notes tab. Separate from
 // grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
 // point the Notes tab at several vaults, including that same one.
@@ -163,6 +170,7 @@ export interface AppConfig {
   openrouter?: OpenRouterScalarConfig;
   openai?: OpenAIScalarConfig;
   firecrawl?: FirecrawlScalarConfig;
+  railway?: RailwayScalarConfig;
   youtubeChannels?: YouTubeChannelConfig[];
   subreddits?: SubredditConfig[];
   tabs?: TabConfig[];
@@ -592,6 +600,47 @@ export interface FirecrawlUsageResult {
   creditsUsedThisPeriod?: number;
 }
 
+export interface RailwayUsageLineItem {
+  key: string;
+  label: string;
+  currentUsageDollars: number;
+  estimatedUsageDollars?: number;
+}
+
+export interface RailwayUsageLimit {
+  softLimit: number | null;
+  hardLimit: number | null;
+  isOverLimit: boolean;
+}
+
+export interface RailwayWorkspaceUsage {
+  id: string;
+  name: string;
+  billingPeriodStart: string | null;
+  billingPeriodEnd: string | null;
+  currentUsageDollars: number;
+  estimatedBillDollars?: number;
+  creditBalance: number;
+  remainingUsageCreditBalance: number;
+  appliedCredits: number;
+  usageLimit?: RailwayUsageLimit;
+  lineItems: RailwayUsageLineItem[];
+  reason?: string;
+}
+
+export interface RailwayUsageResult {
+  ok: boolean;
+  reason?: string;
+  workspaces: RailwayWorkspaceUsage[];
+  currentUsageDollars: number;
+  estimatedBillDollars?: number;
+  creditBalance: number;
+  remainingUsageCreditBalance: number;
+  appliedCredits: number;
+  lineItems: RailwayUsageLineItem[];
+  scanMs: number;
+}
+
 // A resumable Claude Code session. `id` is the transcript's filename, which is
 // exactly what `claude -r <id>` takes.
 export interface ClaudeSession {
@@ -1006,6 +1055,8 @@ export interface ReaderFeedItem {
   publishedDate?: string;
   savedAt: string;
   readingTime?: string;
+  // Always true in list results: already-opened documents are filtered out
+  // before paging. Kept so the page-level mark can still key off it.
   unread: boolean;
 }
 
@@ -1543,6 +1594,9 @@ export interface CommandCenterApi {
   firecrawl: {
     usage: () => Promise<FirecrawlUsageResult>;
   };
+  railway: {
+    usage: () => Promise<RailwayUsageResult>;
+  };
   notifications: {
     show: (alert: AppAlert) => Promise<void>;
     health: () => Promise<NotificationHealth>;
@@ -1695,6 +1749,9 @@ export interface CommandCenterApi {
     };
     firecrawl: {
       update: (values: FirecrawlScalarConfig) => Promise<FirecrawlScalarConfig>;
+    };
+    railway: {
+      update: (values: RailwayScalarConfig) => Promise<RailwayScalarConfig>;
     };
     youtubeChannels: {
       list: () => Promise<YouTubeChannelConfig[]>;
