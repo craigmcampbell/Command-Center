@@ -37,6 +37,7 @@ import type {
   NotificationSettings,
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
+  FirecrawlScalarConfig,
   ProcessConfig,
   SubredditConfig,
   VaultConfig,
@@ -101,6 +102,7 @@ interface SettingsPageProps {
   onTodoistShowTimeTrackingChange: (show: boolean) => void;
   onOpenRouterRefreshSecondsChange: (seconds?: number) => void;
   onOpenAIRefreshSecondsChange: (seconds?: number) => void;
+  onFirecrawlRefreshSecondsChange: (seconds?: number) => void;
 }
 
 function slugify(label: string): string {
@@ -1155,6 +1157,64 @@ function OpenAICard({
           onChange={setAdminApiKey}
           placeholder="•••••••••••••••"
         />
+      </div>
+      <div className="settings-field-row">
+        <label>Refresh seconds</label>
+        <input
+          className="settings-input"
+          type="number"
+          min={1}
+          value={refreshSeconds}
+          onChange={(e) => setRefreshSeconds(e.target.value)}
+        />
+      </div>
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function FirecrawlCard({
+  value,
+  onSaved,
+}: {
+  value: FirecrawlScalarConfig;
+  onSaved: (v: FirecrawlScalarConfig) => void;
+}) {
+  const [apiKey, setApiKey] = useState(value.apiKey ?? "");
+  const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setApiKey(value.apiKey ?? "");
+    setRefreshSeconds(String(value.refreshSeconds ?? 900));
+  }, [value.apiKey, value.refreshSeconds]);
+  const dirty =
+    apiKey !== (value.apiKey ?? "") || refreshSeconds !== String(value.refreshSeconds ?? 900);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    const result = await window.api.settings.firecrawl.update({
+      apiKey: apiKey || undefined,
+      refreshSeconds: Number(refreshSeconds) || 900,
+    });
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Firecrawl</h3>
+      <p className="settings-card-hint">
+        API key from the Firecrawl dashboard. Powers the AI tab's Firecrawl widget (remaining
+        credits, plan allotment, billing period).
+      </p>
+      <div className="settings-field-row">
+        <label>API key</label>
+        <SecretField value={apiKey} onChange={setApiKey} placeholder="•••••••••••••••" />
       </div>
       <div className="settings-field-row">
         <label>Refresh seconds</label>
@@ -2253,6 +2313,7 @@ export default function SettingsPage({
   onTodoistShowTimeTrackingChange,
   onOpenRouterRefreshSecondsChange,
   onOpenAIRefreshSecondsChange,
+  onFirecrawlRefreshSecondsChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [data, setData] = useState<AppConfig | null>(null);
@@ -2419,6 +2480,13 @@ export default function SettingsPage({
                     onSaved={(v) => {
                       setData((prev) => (prev ? { ...prev, openai: v } : prev));
                       onOpenAIRefreshSecondsChange(v.refreshSeconds);
+                    }}
+                  />
+                  <FirecrawlCard
+                    value={data.firecrawl ?? {}}
+                    onSaved={(v) => {
+                      setData((prev) => (prev ? { ...prev, firecrawl: v } : prev));
+                      onFirecrawlRefreshSecondsChange(v.refreshSeconds);
                     }}
                   />
                 </>

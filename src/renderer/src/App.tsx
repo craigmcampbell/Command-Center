@@ -42,6 +42,7 @@ import type {
   OpenRouterPeriod,
   OpenAIUsageResult,
   OpenAIPeriod,
+  FirecrawlUsageResult,
   StatsSettings,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
@@ -65,6 +66,7 @@ import CodexUsageWidget, { CodexBreakdown } from "./components/CodexUsageWidget"
 import CodexSessionsWidget from "./components/CodexSessionsWidget";
 import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
 import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
+import FirecrawlUsageWidget, { FirecrawlBreakdown } from "./components/FirecrawlUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ReaderFeedWidget from "./components/ReaderFeedWidget";
@@ -95,10 +97,10 @@ type TabId =
   | "stats"
   | "social";
 
-// The AI tab's own sub-navigation (Claude / OpenRouter / OpenAI). Not
+// The AI tab's own sub-navigation (Claude / Firecrawl / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
-// openRouterPeriod — since three subtabs don't need reorder/rename.
-type AiSubTab = "claude" | "openrouter" | "openai";
+// openRouterPeriod — since four subtabs don't need reorder/rename.
+type AiSubTab = "claude" | "firecrawl" | "openrouter" | "openai";
 
 // The Reader tab's own two halves: what you saved, and what your RSS
 // subscriptions delivered. Local UI state like AiSubTab — two fixed halves
@@ -140,6 +142,7 @@ const DEFAULT_OPENROUTER_REFRESH_SECONDS = 900;
 // Same rationale as OpenRouter's: usage/cost data, not real-time, and this
 // one's the admin usage + costs endpoints rather than a rate-limited key.
 const DEFAULT_OPENAI_REFRESH_SECONDS = 900;
+const DEFAULT_FIRECRAWL_REFRESH_SECONDS = 900;
 
 function tickClock(): string {
   return new Date()
@@ -244,6 +247,10 @@ export default function App() {
   const [openAIUsage, setOpenAIUsage] = useState<OpenAIUsageResult | null>(null);
   const [openAIPeriod, setOpenAIPeriod] = useState<OpenAIPeriod>("30d");
   const [openAIRefreshSeconds, setOpenAIRefreshSeconds] = useState(DEFAULT_OPENAI_REFRESH_SECONDS);
+  const [firecrawlUsage, setFirecrawlUsage] = useState<FirecrawlUsageResult | null>(null);
+  const [firecrawlRefreshSeconds, setFirecrawlRefreshSeconds] = useState(
+    DEFAULT_FIRECRAWL_REFRESH_SECONDS
+  );
   const [aiSubTab, setAiSubTab] = useState<AiSubTab>("claude");
 
   const loadDocker = useCallback(async () => {
@@ -347,6 +354,9 @@ export default function App() {
   const loadOpenAI = useCallback(async () => {
     setOpenAIUsage(await window.api.openai.usage(openAIPeriod));
   }, [openAIPeriod]);
+  const loadFirecrawl = useCallback(async () => {
+    setFirecrawlUsage(await window.api.firecrawl.usage());
+  }, []);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
@@ -388,6 +398,7 @@ export default function App() {
         loadCards(),
         loadOpenRouter(),
         loadOpenAI(),
+        loadFirecrawl(),
         loadYouTube(true),
         loadReddit(true),
         loadReaderFeed(readerFeedPage, readerFeedSource, true),
@@ -417,6 +428,7 @@ export default function App() {
     loadCards,
     loadOpenRouter,
     loadOpenAI,
+    loadFirecrawl,
     loadYouTube,
     loadReddit,
     loadReaderFeed,
@@ -490,6 +502,7 @@ export default function App() {
       setYnabRefreshSeconds(cfg.ynab?.refreshSeconds || DEFAULT_YNAB_REFRESH_SECONDS);
       setOpenRouterRefreshSeconds(cfg.openrouter?.refreshSeconds || DEFAULT_OPENROUTER_REFRESH_SECONDS);
       setOpenAIRefreshSeconds(cfg.openai?.refreshSeconds || DEFAULT_OPENAI_REFRESH_SECONDS);
+      setFirecrawlRefreshSeconds(cfg.firecrawl?.refreshSeconds || DEFAULT_FIRECRAWL_REFRESH_SECONDS);
       setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
       setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
@@ -522,6 +535,7 @@ export default function App() {
   useEffect(() => { if (!spotifyEnabled) setNowPlaying(null); }, [spotifyEnabled]);
   usePolling(loadOpenRouter, openRouterRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "openrouter", 0, openRouterPeriod);
   usePolling(loadOpenAI, openAIRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "openai", 100, openAIPeriod);
+  usePolling(loadFirecrawl, firecrawlRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "firecrawl", 50);
   usePolling(loadCodex, localInterval, foreground && activeTab === "ai" && aiSubTab === "openai");
   usePolling(loadClaude, localInterval, foreground && activeTab === "ai" && aiSubTab === "claude");
   usePolling(async () => { await Promise.all([loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]); setLastRefreshedAt(new Date()); }, localInterval, foreground && activeTab === "home", 0);
@@ -811,6 +825,7 @@ export default function App() {
             {(
               [
                 { id: "claude", label: "Claude" },
+                { id: "firecrawl", label: "Firecrawl" },
                 { id: "openrouter", label: "OpenRouter" },
                 { id: "openai", label: "OpenAI" },
               ] as { id: AiSubTab; label: string }[]
@@ -849,6 +864,21 @@ export default function App() {
               </div>
               <div className="slot slot-claude-sessions">
                 <ClaudeSessionsWidget data={claudeSessions} />
+              </div>
+            </main>
+          )}
+
+          {aiSubTab === "firecrawl" && (
+            <main className="grid grid-firecrawl">
+              <div className="slot slot-firecrawl-usage">
+                <FirecrawlUsageWidget data={firecrawlUsage} />
+              </div>
+              <div className="slot slot-firecrawl-keys">
+                <FirecrawlBreakdown
+                  title="By API key this period"
+                  rows={firecrawlUsage?.byKey ?? []}
+                  emptyLabel="No per-key usage this period."
+                />
               </div>
             </main>
           )}
@@ -974,6 +1004,9 @@ export default function App() {
         }
         onOpenAIRefreshSecondsChange={(seconds) =>
           setOpenAIRefreshSeconds(seconds ?? DEFAULT_OPENAI_REFRESH_SECONDS)
+        }
+        onFirecrawlRefreshSecondsChange={(seconds) =>
+          setFirecrawlRefreshSeconds(seconds ?? DEFAULT_FIRECRAWL_REFRESH_SECONDS)
         }
       />
     </>

@@ -1,6 +1,9 @@
 // Explicit deadlines include response body reads. Backoff is per origin and only
 // applies to GETs; writes are never silently replayed or suppressed.
 const failures = new Map<string, { count: number; until: number }>();
+export function resetFetchBackoff(): void {
+  failures.clear();
+}
 export async function fetchWithTimeout(input: string | URL, init: RequestInit = {}): Promise<Response> {
   const origin = new URL(input).origin;
   const read = !init.method || init.method === "GET";

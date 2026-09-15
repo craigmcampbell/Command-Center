@@ -31,6 +31,7 @@ import type {
   YnabScalarConfig,
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
+  FirecrawlScalarConfig,
   StatsSettings,
   SubredditConfig,
   TabConfig,
@@ -361,6 +362,13 @@ export function getOpenAISettings(): OpenAIScalarConfig {
 }
 export function updateOpenAISettings(values: OpenAIScalarConfig): OpenAIScalarConfig {
   setRaw("openai", values);
+  return values;
+}
+export function getFirecrawlSettings(): FirecrawlScalarConfig {
+  return getRaw<FirecrawlScalarConfig>("firecrawl") ?? {};
+}
+export function updateFirecrawlSettings(values: FirecrawlScalarConfig): FirecrawlScalarConfig {
+  setRaw("firecrawl", values);
   return values;
 }
 
@@ -784,6 +792,7 @@ export function getAllSettings(): AppConfig {
     ynab: getYnabSettings(),
     openrouter: getOpenRouterSettings(),
     openai: getOpenAISettings(),
+    firecrawl: getFirecrawlSettings(),
     youtubeChannels: listYouTubeChannelSettings(),
     subreddits: listSubredditSettings(),
     tabs: listTabSettings(),
@@ -865,6 +874,7 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   // so it always seeds from the empty default.
   seedRawIfEmpty("openrouter", {});
   seedRawIfEmpty("openai", {});
+  seedRawIfEmpty("firecrawl", {});
   seedRawIfEmpty("spotify", { enabled: true });
 
   seedVaultsIfEmpty(pick<{ label: string; path: string }[]>("vaults") ?? []);

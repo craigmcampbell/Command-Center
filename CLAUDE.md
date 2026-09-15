@@ -44,7 +44,8 @@ Three walled-off parts — this separation is the security model, keep it intact
     its own tables in its own `init*()`.
   - `services/settings.ts` — all app configuration, SQLite-backed. Scalar sections
     (`grimoire`, `docker`, `app`, `todoist`, `googleCalendar`, `reader`, `github`'s
-    non-array fields) are JSON blobs in a generic `settings(key, value)` table — no
+    non-array fields, `openrouter`, `openai`, `firecrawl`) are JSON blobs in a
+    generic `settings(key, value)` table — no
     schema migration needed when a section's shape changes, only the TS type. The
     array sections (`vaults`, `github_repos`, `processes`, `youtube_channels`,
     `subreddits`) get their own tables with full list/add/update/remove/reorder
@@ -140,6 +141,13 @@ Three walled-off parts — this separation is the security model, keep it intact
     `~/.claude/projects`. See "Claude Code usage" below — the three correctness
     constraints there are easy to break and produce plausible-looking numbers
     when broken.
+  - `services/firecrawl.ts` — team credit usage from Firecrawl's v2 API,
+    given the current `firecrawl` settings section. `GET /v2/team/credit-usage`
+    is remaining / plan / billing period; remaining can exceed planCredits
+    because the plan allotment excludes coupons, packs, and auto-recharge.
+    Actual spend is `GET /v2/team/credit-usage/historical` (month buckets, plus
+    `?byApiKey=true` for the by-key panel). Historical is additive — if it
+    fails, remaining/plan still show. Fails soft with no key.
   - `services/windowState.ts` — remembers the dashboard window's size, position
     and maximized/fullscreen state in a `window` settings blob. Uses
     `getNormalBounds()`, **not** `getBounds()`: while maximized or fullscreen the
@@ -254,9 +262,13 @@ lives in `App.tsx` same as always.
 - **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
   and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
   transactions with inline category/memo editing.
-- **Claude** — Claude Code token/cost usage (today, 7d, 30d, with a per-day bar
-  strip), by-project and by-model breakdowns, and recent sessions with Resume.
-  See "Claude Code usage" below.
+- **AI** — four sub-tabs over Claude / Firecrawl / OpenRouter / OpenAI:
+  **Claude** (local Claude Code token/cost usage — today, 7d, 30d, by-project
+  and by-model, recent sessions with Resume; see "Claude Code usage" below),
+  **Firecrawl** (remaining credits, this-period spend, month history, by API key),
+  **OpenRouter** (usage-by-model / by-key + credit balance), **OpenAI** (local
+  Codex subscription telemetry plus Admin API usage/cost; see "Codex
+  subscription usage" below).
 - **Social** — recent YouTube uploads across configured channels (one
   side-scrolling, date-ordered strip) and recent posts per subreddit (one
   sub-tab each). See "Social tab" below.
@@ -892,7 +904,7 @@ Scalar sections (API tokens, refresh intervals, vault path) each render as their
 own card with an explicit **Save** button and a dirty-state check — no
 autosave-per-keystroke, so a half-typed token never gets persisted mid-edit and
 picked up by a background poll. Secrets (Todoist token, Google Calendar client
-secret, Readwise token, GitHub token) render as masked `type="password"` fields
+secret, Readwise token, GitHub token, Firecrawl API key) render as masked `type="password"` fields
 with an eye-icon reveal toggle (`IconEye`/`IconEyeOff` in `components/icons.tsx`);
 stored in plaintext in the settings DB, same trust level as the old gitignored
 `config.json`. Array sections (Vaults, GitHub Repos, Processes, and Social's
@@ -962,6 +974,9 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   review username into Settings → Integrations → GitHub, and list repos to track under
   Settings → Repositories. Without a token the widget fails soft with "No GitHub token
   configured".
+- **Firecrawl widget setup**: put an API key from the Firecrawl dashboard into
+  Settings → Integrations → Firecrawl. Without one the widget fails soft with
+  "No Firecrawl API key configured".
 - **Git widget setup**: give a row under Settings → Repositories a **local path**. That
   section backs both widgets: `owner`/`repo` put a row in the GitHub widget, a local
   path puts it in the Git widget, and either alone is valid — so a local-only scratch
