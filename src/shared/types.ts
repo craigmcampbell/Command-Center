@@ -154,6 +154,8 @@ export interface AppConfig {
   ynab?: YnabScalarConfig;
   openrouter?: OpenRouterScalarConfig;
   openai?: OpenAIScalarConfig;
+  youtubeChannels?: YouTubeChannelConfig[];
+  subreddits?: SubredditConfig[];
   tabs?: TabConfig[];
   spotify?: { enabled: boolean };
   stats?: StatsSettings;
@@ -850,6 +852,132 @@ export interface ReaderResult {
   hasPrev: boolean;
 }
 
+// One release from a repo you've starred. `id` is repo@tag rather than the
+// release's own node id, so it stays stable and readable as a React key.
+export interface GitHubRelease {
+  id: string;
+  repo: string;
+  repoUrl: string;
+  name: string;
+  tagName: string;
+  url: string;
+  publishedAt: string;
+  isPrerelease: boolean;
+  description?: string;
+}
+
+export interface GitHubReleasesResult {
+  ok: boolean;
+  reason?: string;
+  releases: GitHubRelease[];
+}
+
+// ---- Social tab: YouTube ----
+
+export interface YouTubeChannelConfig {
+  id: number;
+  // Purely a display fallback: the Atom feed carries the channel's real title,
+  // so this only shows before the first successful fetch and in Settings.
+  label: string;
+  channelId: string;
+  sortOrder: number;
+}
+
+export interface YouTubeVideo {
+  id: string;
+  title: string;
+  channelId: string;
+  channelTitle: string;
+  url: string;
+  thumbnailUrl: string;
+  publishedAt: string; // ISO 8601, straight from the feed
+}
+
+// Per-channel failures ride alongside the videos rather than failing the whole
+// result — same shape of compromise as services/git.ts's per-repo `ok: false`
+// rows, so one dead channel id can't blank the strip.
+export interface YouTubeChannelFailure {
+  channelId: string;
+  label: string;
+  reason: string;
+}
+
+export interface YouTubeResult {
+  ok: boolean;
+  reason?: string;
+  videos: YouTubeVideo[]; // merged across every channel, newest first
+  failures: YouTubeChannelFailure[];
+}
+
+// ---- Social tab: Reddit ----
+
+export interface SubredditConfig {
+  id: number;
+  subreddit: string; // bare name, no "r/" prefix — see normalizeSubreddit()
+  sortOrder: number;
+}
+
+export interface RedditPost {
+  id: string;
+  title: string;
+  author: string;
+  subreddit: string;
+  permalink: string; // absolute https://www.reddit.com/... — the discussion
+  url: string; // what the post points at (its permalink, for a self post)
+  domain: string;
+  score: number;
+  numComments: number;
+  createdUtc: number; // seconds since epoch, as Reddit reports it
+  thumbnailUrl?: string;
+  flair?: string;
+  isSelf: boolean;
+  over18: boolean;
+}
+
+// One entry per configured subreddit, each independently fail-soft so a single
+// bad subreddit name shows its reason inside its own tab.
+export interface RedditSubredditFeed {
+  subreddit: string;
+  ok: boolean;
+  reason?: string;
+  posts: RedditPost[];
+}
+
+export interface RedditResult {
+  ok: boolean;
+  reason?: string; // whole-widget failures only: no credentials, or no token
+  subreddits: RedditSubredditFeed[];
+}
+
+// One RSS item from Readwise Reader's `feed` location. Richer than
+// ReaderDocument because feed items carry an AI summary and cover image that
+// the saved-articles list doesn't show.
+export interface ReaderFeedItem {
+  id: string;
+  title: string;
+  author: string;
+  siteName: string;
+  url: string;
+  sourceUrl?: string;
+  summary?: string;
+  imageUrl?: string;
+  publishedDate?: string;
+  savedAt: string;
+  readingTime?: string;
+  unread: boolean;
+}
+
+export interface ReaderFeedResult {
+  ok: boolean;
+  reason?: string;
+  items: ReaderFeedItem[];
+  // Every source seen in what's loaded, for the in-widget filter.
+  sources: { name: string; count: number }[];
+  page: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
 export type HabitFrequencyType = "daily" | "weekly" | "times_per_week";
 export type HabitCompletionStatus = "done" | "skipped";
 
@@ -1306,6 +1434,24 @@ export interface CommandCenterApi {
     list: (page: number, forceRefresh?: boolean) => Promise<ReaderResult>;
     archive: (id: string, page: number) => Promise<ReaderResult>;
     delete: (id: string, page: number) => Promise<ReaderResult>;
+    feed: (
+      page: number,
+      source?: string | null,
+      forceRefresh?: boolean
+    ) => Promise<ReaderFeedResult>;
+    feedToInbox: (id: string, page: number, source?: string | null) => Promise<ReaderFeedResult>;
+    feedMarkSeen: (
+      ids: string[],
+      page: number,
+      source?: string | null
+    ) => Promise<ReaderFeedResult>;
+  };
+  youtube: {
+    list: (forceRefresh?: boolean) => Promise<YouTubeResult>;
+    resolveChannel: (input: string) => Promise<YouTubeChannelResolution>;
+  };
+  reddit: {
+    list: (forceRefresh?: boolean) => Promise<RedditResult>;
   };
   scratchpad: {
     get: () => Promise<string>;
@@ -1341,6 +1487,7 @@ export interface CommandCenterApi {
   };
   github: {
     status: () => Promise<GitHubStatusResult>;
+    releases: (forceRefresh?: boolean) => Promise<GitHubReleasesResult>;
   };
   git: {
     status: () => Promise<GitStatusResult>;
@@ -1501,6 +1648,20 @@ export interface CommandCenterApi {
     openai: {
       update: (values: OpenAIScalarConfig) => Promise<OpenAIScalarConfig>;
     };
+    youtubeChannels: {
+      list: () => Promise<YouTubeChannelConfig[]>;
+      add: (label: string, channelId: string) => Promise<YouTubeChannelConfig[]>;
+      update: (id: number, label: string, channelId: string) => Promise<YouTubeChannelConfig[]>;
+      remove: (id: number) => Promise<YouTubeChannelConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<YouTubeChannelConfig[]>;
+    };
+    subreddits: {
+      list: () => Promise<SubredditConfig[]>;
+      add: (subreddit: string) => Promise<SubredditConfig[]>;
+      update: (id: number, subreddit: string) => Promise<SubredditConfig[]>;
+      remove: (id: number) => Promise<SubredditConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<SubredditConfig[]>;
+    };
     vaults: {
       list: () => Promise<VaultConfig[]>;
       add: (label: string, path: string) => Promise<VaultConfig[]>;
@@ -1527,4 +1688,13 @@ export interface CommandCenterApi {
       reorder: (orderedIds: string[]) => Promise<TabConfig[]>;
     };
   };
+}
+
+// Result of turning whatever the user typed (an @handle, a channel ID, a
+// pasted URL) into the channel ID the feed needs. See shared/youtubeChannel.ts.
+export interface YouTubeChannelResolution {
+  ok: boolean;
+  reason?: string;
+  channelId?: string;
+  title?: string;
 }

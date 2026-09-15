@@ -84,7 +84,16 @@ import {
   archiveDocument,
   deleteDocument,
 } from "./services/reader";
+import { listYouTubeVideos, resolveYouTubeChannel } from "./services/youtube";
+import { listRedditPosts } from "./services/reddit";
 import { getGitHubStatus } from "./services/github";
+import { getGitHubReleases, resetGitHubReleasesCache } from "./services/githubReleases";
+import {
+  listReaderFeed,
+  moveFeedItemToInbox,
+  markFeedItemsSeen,
+  resetReaderFeedCache,
+} from "./services/readerFeed";
 import { getGitStatuses } from "./services/git";
 import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
@@ -186,6 +195,16 @@ import {
   updateOpenRouterSettings,
   getOpenAISettings,
   updateOpenAISettings,
+  listYouTubeChannelSettings,
+  addYouTubeChannel,
+  updateYouTubeChannel,
+  removeYouTubeChannel,
+  reorderYouTubeChannels,
+  listSubredditSettings,
+  addSubreddit,
+  updateSubreddit,
+  removeSubreddit,
+  reorderSubreddits,
   listVaultSettings,
   addVault,
   updateVault,
@@ -518,6 +537,35 @@ ipcMain.handle("reader:delete", (_evt, id: string, page: number) => {
   return deleteDocument(getReaderSettings(), id, page);
 });
 
+// Readwise Reader's RSS half — the `feed` location that reader:list filters
+// out. Same token, no extra configuration.
+readHandler("reader:feed", (_evt, page: number, source?: string | null, forceRefresh?: boolean) => {
+  if (forceRefresh) resetReaderFeedCache();
+  return listReaderFeed(getReaderSettings(), page, source ?? null, forceRefresh);
+});
+ipcMain.handle("reader:feedToInbox", (_evt, id: string, page: number, source?: string | null) =>
+  moveFeedItemToInbox(getReaderSettings(), id, page, source ?? null)
+);
+ipcMain.handle("reader:feedMarkSeen", (_evt, ids: string[], page: number, source?: string | null) =>
+  markFeedItemsSeen(getReaderSettings(), ids, page, source ?? null)
+);
+
+// Latest releases from starred repos — the counterpart to github:status.
+readHandler("github:releases", (_evt, forceRefresh?: boolean) => {
+  if (forceRefresh) resetGitHubReleasesCache();
+  return getGitHubReleases(getGithubScalarSettings(), forceRefresh);
+});
+
+// Social tab. Both read their configured lists fresh per call, so adding a
+// channel or subreddit in Settings takes effect on the next poll — no restart.
+readHandler("youtube:list", (_evt, forceRefresh?: boolean) =>
+  listYouTubeVideos(listYouTubeChannelSettings(), forceRefresh)
+);
+readHandler("youtube:resolveChannel", (_evt, input: string) => resolveYouTubeChannel(input));
+readHandler("reddit:list", (_evt, forceRefresh?: boolean) =>
+  listRedditPosts(listSubredditSettings(), forceRefresh)
+);
+
 // GitHub: latest CI run + open PR count per configured repo, plus
 // review-requested PRs across all of them.
 // Same repo list as github:status — a row contributes to whichever widget its
@@ -824,6 +872,30 @@ ipcMain.handle("settings:openrouter:update", (_evt, values: OpenRouterScalarConf
 );
 ipcMain.handle("settings:openai:update", (_evt, values: OpenAIScalarConfig) =>
   updateOpenAISettings(values)
+);
+
+ipcMain.handle("settings:youtubeChannels:list", () => listYouTubeChannelSettings());
+ipcMain.handle("settings:youtubeChannels:add", (_evt, label: string, channelId: string) =>
+  addYouTubeChannel(label, channelId)
+);
+ipcMain.handle(
+  "settings:youtubeChannels:update",
+  (_evt, id: number, label: string, channelId: string) =>
+    updateYouTubeChannel(id, label, channelId)
+);
+ipcMain.handle("settings:youtubeChannels:remove", (_evt, id: number) => removeYouTubeChannel(id));
+ipcMain.handle("settings:youtubeChannels:reorder", (_evt, orderedIds: number[]) =>
+  reorderYouTubeChannels(orderedIds)
+);
+
+ipcMain.handle("settings:subreddits:list", () => listSubredditSettings());
+ipcMain.handle("settings:subreddits:add", (_evt, subreddit: string) => addSubreddit(subreddit));
+ipcMain.handle("settings:subreddits:update", (_evt, id: number, subreddit: string) =>
+  updateSubreddit(id, subreddit)
+);
+ipcMain.handle("settings:subreddits:remove", (_evt, id: number) => removeSubreddit(id));
+ipcMain.handle("settings:subreddits:reorder", (_evt, orderedIds: number[]) =>
+  reorderSubreddits(orderedIds)
 );
 
 ipcMain.handle("settings:vaults:list", () => listVaultSettings());

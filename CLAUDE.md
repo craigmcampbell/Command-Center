@@ -46,9 +46,9 @@ Three walled-off parts — this separation is the security model, keep it intact
     (`grimoire`, `docker`, `app`, `todoist`, `googleCalendar`, `reader`, `github`'s
     non-array fields) are JSON blobs in a generic `settings(key, value)` table — no
     schema migration needed when a section's shape changes, only the TS type. The
-    three array sections (`vaults`, `github_repos`, `processes`) get their own
-    tables with full list/add/update/remove/reorder CRUD, same shape as
-    `services/links.ts`. `readLegacyConfigFile()` + `seedSettingsFromLegacyConfig()`
+    array sections (`vaults`, `github_repos`, `processes`, `youtube_channels`,
+    `subreddits`) get their own tables with full list/add/update/remove/reorder
+    CRUD, same shape as `services/links.ts`. `readLegacyConfigFile()` + `seedSettingsFromLegacyConfig()`
     run once at boot: read `config.json` if present (dev: repo root; packaged: an
     existing install's userData copy) or fall back to bundled `config.example.json`
     defaults, and seed any table/row that's still empty — idempotent, safe every
@@ -82,6 +82,24 @@ Three walled-off parts — this separation is the security model, keep it intact
     given the current `reader` settings section. Cursor-paginated upstream, so this
     keeps a small in-memory cache and does the sort-by-saved-date + 15-per-page
     slicing itself.
+  - `services/githubReleases.ts` — latest release from each repo you've
+    **starred**, via a single GraphQL query. Starring is the subscription, so
+    there's nothing to configure; it reuses `github.ts`'s token. GraphQL rather
+    than REST is load-bearing: REST has no "releases across starred repos"
+    endpoint, so it would take one `/user/starred` call plus one
+    `/releases/latest` per repo — 100+ requests per poll against a budget
+    shared with the GitHub widget. Note GraphQL reports failures as a **200
+    with an `errors` array**, so a bad scope never shows up as a non-2xx.
+    Results are windowed to 90 days: without that the list is "every starred
+    repo's last release", which is inventory, not news.
+  - `services/readerFeed.ts` — the RSS half of Readwise Reader (`location=feed`),
+    which `reader.ts` deliberately filters out. Same token, no new integration:
+    subscriptions are managed in Reader itself. Filters **server-side**, unlike
+    `reader.ts` which pages everything and discards feed items client-side —
+    fine at that file's scale, hopeless here, since a real account holds
+    thousands of feed items. Also does move-to-inbox (`location: "new"`) and
+    mark-as-read, the latter through the API's `bulk_update` endpoint in
+    batches of 50 (its own cap).
   - `services/github.ts` — GitHub REST API for latest Actions run + open PR count
     per configured repo, plus a cross-repo review-requested search, given the
     current `github` scalar settings + `github_repos` table combined. Skips rows
@@ -229,14 +247,19 @@ lives in `App.tsx` same as always.
 - **Home** — Due & Overdue, Today's Log, Today's Schedule (Google Calendar), Active
   Missions, Local Apps, Learning, File Links.
 - **Development** — GitHub (CI + PRs), Git (local working-tree status),
-  Services (Docker), Claude Code, Processes (managed local processes).
-- **Reader** — latest Readwise Reader documents, paginated.
+  Services (Docker), Claude Code, Releases (latest releases from starred
+  repos), Processes (managed local processes).
+- **Reader** — two sub-tabs over the same Readwise account: **Saved** (the
+  articles you've saved, paginated) and **Feed** (your RSS subscriptions).
 - **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
   and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
   transactions with inline category/memo editing.
 - **Claude** — Claude Code token/cost usage (today, 7d, 30d, with a per-day bar
   strip), by-project and by-model breakdowns, and recent sessions with Resume.
   See "Claude Code usage" below.
+- **Social** — recent YouTube uploads across configured channels (one
+  side-scrolling, date-ordered strip) and recent posts per subreddit (one
+  sub-tab each). See "Social tab" below.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
   five-touch-point widget pattern.
@@ -560,6 +583,127 @@ schema-change fallback. The state database is opened read-only and closed per
 read. Resume validates the UUID and working directory before launching
 `codex resume <id>` through the existing terminal service.
 
+## Social tab
+
+Two widgets, two very different answers to the same question — "can this read
+a public feed without registering an app?"
+
+**YouTube: yes, so it doesn't.** `services/youtube.ts` reads the public
+per-channel Atom feed (`youtube.com/feeds/videos.xml?channel_id=UC…`). No API
+key, no quota, no OAuth — the same call as `services/spotify.ts` preferring
+local AppleScript to the Spotify Web API. The cost, accepted knowingly: only
+the ~15 most recent uploads per channel, no duration or view count, and Shorts
+indistinguishable from regular uploads. Getting any of those means the Data
+API v3, a key in Settings, and daily quota for metadata this widget doesn't
+show.
+
+**The feed needs a channel ID, but nobody knows their own channel ID.** So
+Settings accepts an @handle, a pasted channel URL (`/@handle`, `/channel/UC…`,
+and the legacy `/c/` and `/user/` forms), or a raw ID, and
+`resolveYouTubeChannel` turns it into an ID **once, at add time** — the channel
+page is 1–2MB, so it must never be fetched on a poll. An empty label fills in
+from the channel's own name, so pasting a handle is the whole interaction.
+
+**Playlists work too.** The same feed serves them under `playlist_id` instead
+of `channel_id`, and `feedUrl()` picks between the two from the id's shape —
+a channel id is always `UC` + 22 characters, so nothing else needs to remember
+which kind a row is and no column was added for it. `parseChannelInput` also
+accepts a `?list=` link, including the `/watch?v=…&list=…` form that "share"
+gives you from inside a playlist. In a playlist feed the per-entry
+`<author><name>` varies, which is exactly what a card should show.
+
+**Read the ID from `<link rel="canonical">`, never from the first
+`"channelId":"UC…"` in the page.** That first match belongs to whatever channel
+the page happens to reference first — verified live against @LinusTechTips and
+@fireship, where it is a *different channel entirely*. Using it would silently
+build a feed of someone else's videos, which looks like it works. Resolving a
+bare ID goes to the feed instead, which is far smaller and also yields the real
+channel name. An unknown handle gets a **200 soft-404** with no canonical link,
+so a missing match means "no such channel", not a parse failure.
+
+**Reddit: also yes, but only because this is Electron.** Reddit doesn't block
+anonymous reads — it blocks clients that don't *look like a browser*. Verified
+2026-09-13 from this machine: plain HTTP gets **403** on `/r/<sub>.json` and
+**429** on the second `.rss` request even at 20s spacing, regardless of the
+User-Agent string sent. The block is on the TLS handshake and the missing
+session, not on the UA header.
+
+Glance/Dynacat work around that with [uTLS](https://github.com/refraction-networking/utls)
+to forge a Firefox TLS fingerprint, then regex a JS challenge off the homepage
+and trade the "solution" (the challenge is literally `x => x + x`) for a `loid`
+cookie. **We need none of it** — we ship a real Chromium, so Reddit doesn't
+even serve us the challenge page. `services/reddit.ts` instead:
+
+1. Keeps its own `persist:reddit` session partition — reddit.com cookies and
+   nothing else, clearable without touching anything else.
+2. Warms it once by loading `reddit.com` in a **hidden BrowserWindow**, letting
+   Chromium run Reddit's own JS and collect a normal logged-out session cookie,
+   exactly as opening a tab would.
+3. Then reads `/r/<sub>/new.json` with plain `session.fetch`.
+
+The cookies persist to disk, so the warm-up happens on first run and then only
+when the session lapses. Measured: ~800ms cold including warm-up, ~400ms warm,
+reproducible across three consecutive wiped partitions.
+
+**A plain `fetch` to reddit.com is not a substitute for the window.** It gets an
+8KB interstitial and only a useless `edgebucket` cookie, and every subsequent
+`.json` request 403s. The JS has to actually run. That's the whole mechanism —
+don't "simplify" the hidden window away.
+
+Details worth not losing:
+
+- **The warm-up is coalesced** (`ensureWarm`). Without it the concurrent
+  per-subreddit fetches would each open their own hidden window when they all
+  403 together. Caught by a test, not by eye.
+- **A 403/429 re-warms once and retries**, because the session can lapse; a
+  second block is a real failure.
+- **The hidden window is hardened** — `nodeIntegration: false`,
+  `contextIsolation: true`, `sandbox: true`, no preload — and destroyed in a
+  `finally`. It renders a remote page, so it gets the same treatment any
+  untrusted content would.
+- **Destroying it can't quit the app**: `window-all-closed` only fires when
+  *every* window is gone, and the dashboard window is hidden rather than
+  destroyed on close (see "Notifications + tray"). Worth knowing if that ever
+  changes.
+- **Every configured subreddit is fetched per call**, not just the active
+  sub-tab, which buys instant sub-tab switching.
+- **A nonexistent subreddit returns 200 with an empty listing**, not a 404 — so
+  it reads as "No recent posts" rather than an error. That's accurate, not a
+  bug to fix.
+- **Failure granularity is per row in both widgets** (`git.ts`'s model): one
+  dead channel id or subreddit shows its own reason without blanking the
+  widget, but a failure common to all of them — every channel unreachable, a
+  session that won't establish — is reported once at the top level.
+
+**This is an unofficial path and Reddit can change it.** The stable documented
+alternative is the OAuth `client_credentials` grant (a "script" app's id +
+secret). It was built, tested, and then deliberately removed in favour of
+needing no setup at all — so recover it from git history rather than
+reinventing it if this ever breaks.
+
+**`parseYouTubeFeed` is a feed-specific extractor, not an XML parser.** There
+is no XML dependency in this repo and one machine-generated Atom feed doesn't
+earn one (same call as skipping `tree-kill` in `processes.ts`). It only
+understands this document shape; anything else — notably the HTML page YouTube
+serves for an unknown channel id — yields no entries rather than throwing,
+which is what the caller wants anyway. It's exported solely so it can be
+tested against a fixture without a network.
+
+**Everything both widgets render is attacker-controllable text off the open
+internet.** Titles, authors and flair go in as React text children, never
+`dangerouslySetInnerHTML`, and every thumbnail `src` and outbound URL goes
+through `safeUrl()` (`renderer/src/lib/urls.ts`) first. Reddit's `thumbnail`
+field also carries the sentinels `self`/`default`/`nsfw`/`spoiler` rather than
+a URL, which `toRedditPost` maps to `undefined`; a thumbnail that fails to
+load falls back to an empty well rather than the browser's broken-image icon,
+which reads as a rendering fault against this palette.
+
+`shared/subreddit.ts` holds `normalizeSubreddit` — the one definition of what
+counts as a subreddit name, used by the Settings form (inline validation), by
+the settings write, and again in `fetchListing` just before the name becomes a
+URL path segment. Same reason `shared/accelerator.ts` exists. That last check
+is what stops a `../` ever reaching a `/r/<name>/new` URL.
+
 ## Daily note template
 
 Settings → Grimoire takes a vault-relative `dailyTemplatePath`. When a daily
@@ -739,7 +883,7 @@ The gear icon in the header (`.refresh-control`, next to Refresh) opens
 `components/SettingsPage.tsx` — a full-screen overlay (same scrim+panel visual
 language as `CommandPalette`/`NoteBrowserModal`, closes via scrim-click/Escape/X)
 with a left section-nav (General, Grimoire, Integrations, Vaults, Repositories,
-Processes, Data) and a scrollable content pane. It's app-wide config management, not a
+Processes, Social, Data) and a scrollable content pane. It's app-wide config management, not a
 per-tab widget, so it skips the five-touch-point pattern — its data model is
 `services/settings.ts` end to end (see Architecture above), exposed through a
 `window.api.settings.*` namespace mirroring the `links`/`habits` CRUD shape.
@@ -751,12 +895,15 @@ picked up by a background poll. Secrets (Todoist token, Google Calendar client
 secret, Readwise token, GitHub token) render as masked `type="password"` fields
 with an eye-icon reveal toggle (`IconEye`/`IconEyeOff` in `components/icons.tsx`);
 stored in plaintext in the settings DB, same trust level as the old gitignored
-`config.json`. Array sections (Vaults, GitHub Repos, Processes) save immediately
-per row-action instead, matching `LinkLauncherWidget`'s inline add/edit/delete +
-`@dnd-kit` reorder convention — each backed by a small dedicated hook in
+`config.json`. Array sections (Vaults, GitHub Repos, Processes, and Social's
+YouTube channels + subreddits) save immediately per row-action instead, matching
+`LinkLauncherWidget`'s inline add/edit/delete + `@dnd-kit` reorder convention —
+each backed by a small dedicated hook in
 `renderer/src/hooks/useSettingsLists.ts` (`useVaultSettingsList`,
-`useGithubRepoSettingsList`, `useProcessSettingsList`), same shape as
-`useLinkList.ts`.
+`useGithubRepoSettingsList`, `useProcessSettingsList`,
+`useYouTubeChannelSettingsList`, `useSubredditSettingsList`), same shape as
+`useLinkList.ts`. Social is the one section holding two lists — they're the two
+halves of one tab's configuration, not two unrelated things to navigate between.
 
 Four values `App.tsx` already caches reactively — `processConfigs`,
 `appRefreshMinutes`, `dockerRefreshSeconds`, `githubRefreshSeconds` — get pushed
@@ -832,6 +979,15 @@ npm run typecheck     # tsc --noEmit across main+preload and renderer configs
   the widget shows "No processes configured". Prefer an explicit args list over a
   shell string where possible (matches `docker.ts`'s `execFile`-over-`exec`
   preference elsewhere in this codebase).
+- **Social tab setup**: add channels under Settings → Social → YouTube channels
+  — paste a @handle, a channel URL, or a `UC…` ID; all three resolve, and the
+  label fills itself in from the channel's name if left blank. No API key: it
+  reads YouTube's public feed. Subreddits go in the same
+  section, one per row, typed however you like (`rust`, `r/rust`, or a pasted
+  URL — all normalize to the bare name); their order is the sub-tab order.
+  Reddit needs no credentials, no account and no setup at all — see "Social
+  tab" above for how. Neither list is seeded from `config.json`; both are new
+  tables with no legacy ancestor.
 - **Packaged app is ad-hoc signed, not Gatekeeper-trusted** (no Apple Developer cert
   configured). First launch is still blocked as "unidentified developer" — right-click
   the app → Open once to bypass, or `xattr -cr "Command Center.app"`.
