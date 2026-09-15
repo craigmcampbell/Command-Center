@@ -24,6 +24,7 @@ import type {
   OpenRouterScalarConfig,
   OpenAIPeriod,
   OpenAIScalarConfig,
+  FirecrawlScalarConfig,
   ProcessConfig,
   StatsSettings,
   TraySummary,
@@ -200,6 +201,10 @@ const api: CommandCenterApi = {
 
   openai: {
     usage: (period: OpenAIPeriod) => ipcRenderer.invoke("openai:usage", period),
+  },
+
+  firecrawl: {
+    usage: () => ipcRenderer.invoke("firecrawl:usage"),
   },
 
   codex: {
@@ -380,6 +385,10 @@ const api: CommandCenterApi = {
     },
     openai: {
       update: (values: OpenAIScalarConfig) => ipcRenderer.invoke("settings:openai:update", values),
+    },
+    firecrawl: {
+      update: (values: FirecrawlScalarConfig) =>
+        ipcRenderer.invoke("settings:firecrawl:update", values),
     },
     youtubeChannels: {
       list: () => ipcRenderer.invoke("settings:youtubeChannels:list"),

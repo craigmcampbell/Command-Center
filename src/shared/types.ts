@@ -88,6 +88,14 @@ export interface OpenAIScalarConfig {
   refreshSeconds?: number;
 }
 
+// A Firecrawl API key from their dashboard. Powers the AI tab's Firecrawl
+// sub-tab: remaining credits, plan allotment, and billing period via
+// GET /v2/team/credit-usage. See services/firecrawl.ts.
+export interface FirecrawlScalarConfig {
+  apiKey?: string;
+  refreshSeconds?: number;
+}
+
 // A labeled Obsidian vault root for the Notes tab. Separate from
 // grimoire.vaultPath (the Home tab's daily-note/missions vault) — you can
 // point the Notes tab at several vaults, including that same one.
@@ -154,6 +162,7 @@ export interface AppConfig {
   ynab?: YnabScalarConfig;
   openrouter?: OpenRouterScalarConfig;
   openai?: OpenAIScalarConfig;
+  firecrawl?: FirecrawlScalarConfig;
   youtubeChannels?: YouTubeChannelConfig[];
   subreddits?: SubredditConfig[];
   tabs?: TabConfig[];
@@ -548,6 +557,39 @@ export interface OpenAIUsageResult {
   byModel: OpenAIUsageBucket[];
   byLineItem: OpenAICostBucket[];
   scanMs: number;
+}
+
+export interface FirecrawlPeriod {
+  startDate: string | null;
+  endDate: string | null;
+  creditsUsed: number;
+}
+
+export interface FirecrawlKeyBucket {
+  key: string;
+  label: string;
+  creditsUsed: number;
+}
+
+// Remaining can exceed planCredits: Firecrawl's plan allotment excludes
+// coupons, credit packs, and auto-recharge. Don't treat remaining - plan as
+// a bug. billingPeriodStart/End are nullable on the API.
+//
+// `periods` / `byKey` / `creditsUsedThisPeriod` come from
+// GET /v2/team/credit-usage/historical. If that call fails, remaining/plan
+// still show and these stay empty — same partial-result idea as OpenRouter's
+// creditBalance. creditsUsedThisPeriod is the matched billing period's
+// actual spend; plan - remaining is not a substitute (extras inflate remaining).
+export interface FirecrawlUsageResult {
+  ok: boolean;
+  reason?: string;
+  remainingCredits: number;
+  planCredits: number;
+  billingPeriodStart: string | null;
+  billingPeriodEnd: string | null;
+  periods: FirecrawlPeriod[];
+  byKey: FirecrawlKeyBucket[];
+  creditsUsedThisPeriod?: number;
 }
 
 // A resumable Claude Code session. `id` is the transcript's filename, which is
@@ -1498,6 +1540,9 @@ export interface CommandCenterApi {
   openai: {
     usage: (period: OpenAIPeriod) => Promise<OpenAIUsageResult>;
   };
+  firecrawl: {
+    usage: () => Promise<FirecrawlUsageResult>;
+  };
   notifications: {
     show: (alert: AppAlert) => Promise<void>;
     health: () => Promise<NotificationHealth>;
@@ -1647,6 +1692,9 @@ export interface CommandCenterApi {
     };
     openai: {
       update: (values: OpenAIScalarConfig) => Promise<OpenAIScalarConfig>;
+    };
+    firecrawl: {
+      update: (values: FirecrawlScalarConfig) => Promise<FirecrawlScalarConfig>;
     };
     youtubeChannels: {
       list: () => Promise<YouTubeChannelConfig[]>;

@@ -4627,6 +4627,56 @@ body {
   grid-area: openrouter-keys;
 }
 
+/* ---- Firecrawl tab ---- */
+
+.grid-firecrawl {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "firecrawl-usage"
+    "firecrawl-keys";
+}
+.slot-firecrawl-usage {
+  grid-area: firecrawl-usage;
+}
+.slot-firecrawl-keys {
+  grid-area: firecrawl-keys;
+}
+
+.firecrawl-period-value {
+  font-size: 16px;
+}
+
+.grid-firecrawl .claude-bars {
+  margin-top: 12px;
+}
+
+.firecrawl-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+.firecrawl-quota-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.firecrawl-quota-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--panel-edge-soft);
+}
+.firecrawl-quota-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
 /* Segmented period switcher — the app's first multi-way toggle group, so it
    gets its own small pattern rather than reusing .daily-nav-btn, which is a
    directional prev/next control, not a selector. */
@@ -4700,7 +4750,7 @@ body {
   color: var(--ink-dim);
 }
 
-/* ---- AI tab (Claude / OpenRouter / OpenAI subtabs) ---- */
+/* ---- AI tab (Claude / Firecrawl / OpenRouter / OpenAI subtabs) ---- */
 
 /* Second-level nav within the AI tab, above whichever provider's grid is
    active. Same segmented-pill language as .openrouter-period-toggle, but
