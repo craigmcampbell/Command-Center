@@ -9,6 +9,8 @@ import { fetchWithTimeout } from "./http";
 // Unlike reader.ts, this filters server-side with `location=feed`. That file
 // pages through everything and discards feed items client-side, which is fine
 // at its scale but hopeless here: a real account has thousands of feed items.
+// Already-read items are dropped the same way — the list API has no `seen`
+// filter, so unread is `first_opened_at == null`, applied as we ingest.
 
 import type {
   AppConfig,
@@ -21,6 +23,12 @@ const PAGE_SIZE = 15;
 const FETCH_LIMIT = 100;
 const BULK_LIMIT = 50; // the API's own cap per bulk_update request
 const CACHE_TTL_MS = 5 * 60_000;
+// Readwise allows only 20 list requests/minute per token. Unread is a
+// client-side filter, so a mostly-read account could otherwise burn through
+// dozens of cursor pages in one call and rate-limit both Reader sub-tabs.
+// Pull at most one 100-item upstream page per UI request; `hasNext` keeps
+// pagination available and later requests continue from the cached cursor.
+const MAX_FETCH_PAGES_PER_CALL = 1;
 
 interface RawDoc {
   id: string;
@@ -46,6 +54,10 @@ interface Cache {
   token: string;
   fetchedAt: number;
   pending?: Promise<void>;
+  // Ids marked seen this cache lifetime. The list API has no `seen` filter, so
+  // a refill fetch after mark-as-read can return the same docs still looking
+  // unopened; this set is what stops them sliding back onto the page.
+  seenIds: Set<string>;
 }
 
 let cache: Cache | null = null;
@@ -85,8 +97,6 @@ function toFeedItem(d: RawDoc): ReaderFeedItem {
     publishedDate: d.published_date || undefined,
     savedAt: d.saved_at,
     readingTime: d.reading_time || undefined,
-    // Readwise has no boolean for this: a document is unread precisely when it
-    // has never been opened.
     unread: !d.first_opened_at,
   };
 }
@@ -115,19 +125,75 @@ async function fetchPage(
   return { docs, nextCursor: data.nextPageCursor || null };
 }
 
-function sortedDocs(snapshot: Cache | null): RawDoc[] {
-  return [...(snapshot?.docs ?? [])].sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+function isUnread(d: RawDoc, seenIds: Set<string>): boolean {
+  // Readwise has no boolean for this: a document is unread precisely when it
+  // has never been opened, and hasn't been marked seen by us this session.
+  return !d.first_opened_at && !seenIds.has(d.id);
+}
+
+function matchingDocs(snapshot: Cache | null, source: string | null): RawDoc[] {
+  const seenIds = snapshot?.seenIds ?? new Set<string>();
+  return [...(snapshot?.docs ?? [])]
+    .filter((d) => isUnread(d, seenIds) && (!source || (d.site_name || "unknown") === source))
+    .sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+}
+
+function emptyCache(token: string): Cache {
+  return {
+    docs: [],
+    nextCursor: null,
+    exhausted: false,
+    token,
+    fetchedAt: Date.now(),
+    seenIds: new Set(),
+  };
+}
+
+function ingest(snapshot: Cache, docs: RawDoc[]): void {
+  const existing = new Set(snapshot.docs.map((d) => d.id));
+  snapshot.docs.push(
+    ...docs.filter((d) => !existing.has(d.id) && isUnread(d, snapshot.seenIds))
+  );
+}
+
+async function ensureFilled(
+  apiToken: string,
+  snapshot: Cache,
+  page: number,
+  source: string | null
+): Promise<void> {
+  // Unread and source filters are both applied client-side — the list API has
+  // no `seen` query param — so enough has to be loaded for the *filtered* list
+  // to fill the page. Otherwise a quiet source, or a feed that's mostly already
+  // read, shows an empty page while items sit unfetched upstream.
+  const needed = (page + 1) * PAGE_SIZE;
+  const enough = () => matchingDocs(snapshot, source).length >= needed;
+  let fetchedPages = 0;
+
+  while (!enough() && !snapshot.exhausted && fetchedPages < MAX_FETCH_PAGES_PER_CALL) {
+    if (!snapshot.pending) {
+      fetchedPages += 1;
+      snapshot.pending = (async () => {
+        const { docs, nextCursor } = await fetchPage(apiToken, snapshot.nextCursor);
+        ingest(snapshot, docs);
+        snapshot.nextCursor = nextCursor;
+        if (!nextCursor) snapshot.exhausted = true;
+      })().finally(() => {
+        snapshot.pending = undefined;
+      });
+    }
+    await snapshot.pending;
+  }
 }
 
 function buildResult(page: number, source: string | null, snapshot = cache): ReaderFeedResult {
-  const all = sortedDocs(snapshot);
-  // Every source seen so far, so the renderer can offer a filter without a
-  // second request. Counts are of what's loaded, not of the whole account.
-  // Sorted alphabetically rather than by volume: this is a list you scan for a
-  // name you already have in mind, and a busiest-first order moves entries
-  // around as new items arrive.
+  const unread = matchingDocs(snapshot, null);
+  // Source counts are of unread items loaded so far, not the whole account —
+  // matching what the list actually shows. Sorted alphabetically rather than
+  // by volume: this is a list you scan for a name you already have in mind,
+  // and a busiest-first order moves entries around as new items arrive.
   const counts = new Map<string, number>();
-  for (const d of all) {
+  for (const d of unread) {
     const name = d.site_name || "unknown";
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
@@ -136,7 +202,7 @@ function buildResult(page: number, source: string | null, snapshot = cache): Rea
     // sensitivity "base" so casing in a site name doesn't split the ordering.
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
-  const filtered = source ? all.filter((d) => (d.site_name || "unknown") === source) : all;
+  const filtered = source ? unread.filter((d) => (d.site_name || "unknown") === source) : unread;
   const start = page * PAGE_SIZE;
   const pageDocs = filtered.slice(start, start + PAGE_SIZE);
 
@@ -145,8 +211,13 @@ function buildResult(page: number, source: string | null, snapshot = cache): Rea
     items: pageDocs.map(toFeedItem),
     sources,
     page,
-    // More locally, or more still to pull from the API.
-    hasNext: filtered.length > start + PAGE_SIZE || !(snapshot?.exhausted ?? true),
+    // Only offer another page when it already exists locally, or this page is
+    // full and one bounded upstream fetch could continue it. A short page must
+    // not lead to an empty "next" page just because older read-heavy history
+    // still exists upstream.
+    hasNext:
+      filtered.length > start + PAGE_SIZE ||
+      (pageDocs.length === PAGE_SIZE && !(snapshot?.exhausted ?? true)),
     hasPrev: page > 0,
   };
 }
@@ -161,34 +232,12 @@ export async function listReaderFeed(
   if (forceRefresh) cache = null;
 
   if (!cache || cache.token !== apiToken || Date.now() - cache.fetchedAt > CACHE_TTL_MS) {
-    cache = { docs: [], nextCursor: null, exhausted: false, token: apiToken, fetchedAt: Date.now() };
+    cache = emptyCache(apiToken);
   }
   const snapshot = cache;
 
   try {
-    // A source filter is applied client-side, so enough has to be loaded for
-    // the *filtered* list to fill the page — otherwise filtering to a quiet
-    // source shows an empty page while items sit unfetched upstream.
-    const needed = (page + 1) * PAGE_SIZE;
-    const enough = () =>
-      (source
-        ? snapshot.docs.filter((d) => (d.site_name || "unknown") === source).length
-        : snapshot.docs.length) >= needed;
-
-    while (!enough() && !snapshot.exhausted) {
-      if (!snapshot.pending) {
-        snapshot.pending = (async () => {
-          const { docs, nextCursor } = await fetchPage(apiToken, snapshot.nextCursor);
-          const existing = new Set(snapshot.docs.map((d) => d.id));
-          snapshot.docs.push(...docs.filter((d) => !existing.has(d.id)));
-          snapshot.nextCursor = nextCursor;
-          if (!nextCursor) snapshot.exhausted = true;
-        })().finally(() => {
-          snapshot.pending = undefined;
-        });
-      }
-      await snapshot.pending;
-    }
+    await ensureFilled(apiToken, snapshot, page, source);
   } catch (err) {
     return failResult(page, (err as Error).message || "Couldn't reach Readwise");
   }
@@ -217,7 +266,14 @@ export async function moveFeedItemToInbox(
     return failResult(page, (err as Error).message || "Couldn't move that item");
   }
   // Drop it locally rather than refetching — same trick as reader.ts's archive.
-  if (cache) cache.docs = cache.docs.filter((d) => d.id !== id);
+  if (cache) {
+    cache.docs = cache.docs.filter((d) => d.id !== id);
+    try {
+      await ensureFilled(apiToken, cache, page, source);
+    } catch {
+      // Move took; a refill miss just means a short page until the next poll.
+    }
+  }
   return buildResult(page, source);
 }
 
@@ -253,8 +309,12 @@ export async function markFeedItemsSeen(
 
   const marked = new Set(ids);
   if (cache) {
-    for (const doc of cache.docs) {
-      if (marked.has(doc.id) && !doc.first_opened_at) doc.first_opened_at = new Date().toISOString();
+    for (const id of ids) cache.seenIds.add(id);
+    cache.docs = cache.docs.filter((d) => !marked.has(d.id));
+    try {
+      await ensureFilled(apiToken, cache, page, source);
+    } catch {
+      // Mark took; a refill miss just means a short page until the next poll.
     }
   }
   return buildResult(page, source);

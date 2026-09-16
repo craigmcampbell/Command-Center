@@ -106,6 +106,7 @@ import {
 import { getOpenRouterUsage } from "./services/openrouter";
 import { getOpenAIUsage } from "./services/openai";
 import { getFirecrawlUsage } from "./services/firecrawl";
+import { getRailwayUsage } from "./services/railway";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
 import {
   captureHotkeyStatus,
@@ -198,6 +199,8 @@ import {
   updateOpenAISettings,
   getFirecrawlSettings,
   updateFirecrawlSettings,
+  getRailwaySettings,
+  updateRailwaySettings,
   listYouTubeChannelSettings,
   addYouTubeChannel,
   updateYouTubeChannel,
@@ -251,6 +254,7 @@ import type {
   OpenAIScalarConfig,
   OpenAIPeriod,
   FirecrawlScalarConfig,
+  RailwayScalarConfig,
   StatsSettings,
 } from "../shared/types";
 
@@ -591,6 +595,9 @@ readHandler("openai:usage", (_evt, period: OpenAIPeriod) =>
 // Firecrawl: remaining credits + plan allotment + billing period.
 readHandler("firecrawl:usage", () => getFirecrawlUsage(getFirecrawlSettings()));
 
+// Railway: current-cycle billing and credits across every accessible workspace.
+readHandler("railway:usage", () => getRailwayUsage(getRailwaySettings()));
+
 // Transition detection happens in the renderer (that's where the polled state
 // lives); main's job is only to turn a decided alert into an OS notification.
 ipcMain.handle("notifications:show", (_evt, alert: AppAlert) => {
@@ -882,6 +889,9 @@ ipcMain.handle("settings:openai:update", (_evt, values: OpenAIScalarConfig) =>
 );
 ipcMain.handle("settings:firecrawl:update", (_evt, values: FirecrawlScalarConfig) =>
   updateFirecrawlSettings(values)
+);
+ipcMain.handle("settings:railway:update", (_evt, values: RailwayScalarConfig) =>
+  updateRailwaySettings(values)
 );
 
 ipcMain.handle("settings:youtubeChannels:list", () => listYouTubeChannelSettings());

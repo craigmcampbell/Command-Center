@@ -12,7 +12,17 @@ const channels = [...fs.readFileSync(path.join(project, 'src/preload/index.ts'),
 const note = (id) => ({ id, vaultLabel: 'Test', filePath: `${id}.md`, label: `Note ${id}`, sortOrder: id });
 for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) => {
   calls.push([channel, args]);
-  if (channel === 'settings:getAll') return { app: { refreshMinutes: 0 }, stats: { refreshSeconds: 1, publicIpEnabled: false }, spotify: { enabled: false }, docker: { updateChecksEnabled: false } };
+  if (channel === 'settings:getAll') return {
+    app: { refreshMinutes: 0 },
+    stats: { refreshSeconds: 1, publicIpEnabled: false },
+    spotify: { enabled: false },
+    docker: { updateChecksEnabled: false },
+    grimoire: { vaultPath: '', dailyLogDir: '', missionsDir: '' },
+    todoist: { apiToken: '' },
+    googleCalendar: { clientId: '', clientSecret: '' },
+    reader: { apiToken: '' },
+  };
+  if (channel === 'settings:railway:update') return args[0];
   if (channel === 'notes:vaults') return [{ id: 1, label: 'Test', path: '/tmp', sortOrder: 0 }];
   if (channel === 'notes:nav:list') return [note(1), note(2)];
   if (channel === 'notes:session:get') return { openNoteIds: [1,2], activeNoteId: 1 };
@@ -22,6 +32,17 @@ for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) =>
   if (channel === 'process:statusAll' || channel === 'links:list') return [];
   if (channel === 'docker:list') return { ok: true, containers: [] };
   if (channel === 'github:status') return { ok: true, repos: [], reviewRequested: [] };
+  if (channel === 'railway:usage') return {
+    ok: true,
+    workspaces: [{
+      id: 'workspace-1', name: 'Personal', billingPeriodStart: '2026-09-01T00:00:00Z',
+      billingPeriodEnd: '2026-10-01T00:00:00Z', currentUsageDollars: 12,
+      estimatedBillDollars: 18, creditBalance: 20, remainingUsageCreditBalance: 8,
+      appliedCredits: 4, lineItems: [],
+    }],
+    currentUsageDollars: 12, estimatedBillDollars: 18, creditBalance: 20,
+    remainingUsageCreditBalance: 8, appliedCredits: 4, lineItems: [], scanMs: 5,
+  };
   if (channel.startsWith('ynab:')) return { ok: false, reason: 'Test fixture', accounts: [], transactions: [], categories: [], payees: [] };
   if (channel === 'stats:system') return { ok: true, cpuPercent: 1, loadAvg: [0,0,0], uptimeSeconds: 10, memory: { usedBytes: 10, totalBytes: 100, freeBytes: 90, wiredBytes: 0, compressedBytes: 0, cachedBytes: 0, swapUsedBytes: 0, swapTotalBytes: 0 } };
   if (channel === 'stats:storage') return { ok: true, volumes: [] };
@@ -38,6 +59,26 @@ app.whenReady().then(async () => {
   const click = label => win.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find(e => e.textContent.trim() === ${JSON.stringify(label)}); if (!button) throw new Error('Missing button: '+${JSON.stringify(label)}); button.click(); })()`);
   await wait(1800);
   assert.equal(calls.filter(([c]) => c.startsWith('stats:')).length, 0, 'Home should not collect stats');
+  await win.webContents.executeJavaScript(`document.querySelector('.settings-trigger').click()`);
+  await wait(100);
+  await click('Integrations');
+  await wait(100);
+  assert.ok(await win.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-card h3')].some(e => e.textContent === 'Railway')`));
+  await win.webContents.executeJavaScript(`(() => {
+    const form = [...document.querySelectorAll('.settings-card')].find(e => e.querySelector('h3')?.textContent === 'Railway');
+    const input = form.querySelector('input[type="password"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'railway-test');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    form.requestSubmit();
+  })()`);
+  await wait(100);
+  assert.deepEqual(calls.find(([c]) => c === 'settings:railway:update')?.[1][0], { accountToken: 'railway-test', refreshSeconds: 900 });
+  await win.webContents.executeJavaScript(`document.querySelector('.settings-close').click()`);
+  await click('AI');
+  await click('Railway');
+  await wait(400);
+  assert.equal(calls.filter(([c]) => c === 'railway:usage').length, 1, 'Railway tab should load billing');
+  assert.ok(await win.webContents.executeJavaScript(`document.body.textContent.includes('Personal') && document.body.textContent.includes('$12.00')`));
   await click('Stats');
   await wait(2500);
   assert.ok(calls.filter(([c]) => c === 'stats:system').length >= 2, 'Visible Stats should poll');
@@ -61,7 +102,7 @@ app.whenReady().then(async () => {
   assert.ok(calls.filter(([c]) => c === 'process:statusAll').length >= 3, 'Background status continues');
   assert.equal(calls.filter(([c]) => c === 'ynab:accounts').length, 0, 'Off-tab finance details stay idle');
   assert.deepEqual(errors, []);
-  console.log('Renderer smoke passed: Home idle, visible/hidden Stats, restored note tabs, no console errors');
+  console.log('Renderer smoke passed: Home idle, Railway billing, visible/hidden Stats, restored note tabs, no console errors');
   win.destroy();
   fs.rmSync(userData, { recursive: true, force: true });
   app.exit(0);

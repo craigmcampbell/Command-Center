@@ -43,6 +43,7 @@ import type {
   OpenAIUsageResult,
   OpenAIPeriod,
   FirecrawlUsageResult,
+  RailwayUsageResult,
   StatsSettings,
 } from "../../shared/types";
 import DockerWidget from "./components/DockerWidget";
@@ -67,6 +68,7 @@ import CodexSessionsWidget from "./components/CodexSessionsWidget";
 import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
 import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
 import FirecrawlUsageWidget, { FirecrawlBreakdown } from "./components/FirecrawlUsageWidget";
+import RailwayUsageWidget from "./components/RailwayUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ReaderFeedWidget from "./components/ReaderFeedWidget";
@@ -100,7 +102,7 @@ type TabId =
 // The AI tab's own sub-navigation (Claude / Firecrawl / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
 // openRouterPeriod — since four subtabs don't need reorder/rename.
-type AiSubTab = "claude" | "firecrawl" | "openrouter" | "openai";
+type AiSubTab = "claude" | "firecrawl" | "openrouter" | "openai" | "railway";
 
 // The Reader tab's own two halves: what you saved, and what your RSS
 // subscriptions delivered. Local UI state like AiSubTab — two fixed halves
@@ -143,6 +145,7 @@ const DEFAULT_OPENROUTER_REFRESH_SECONDS = 900;
 // one's the admin usage + costs endpoints rather than a rate-limited key.
 const DEFAULT_OPENAI_REFRESH_SECONDS = 900;
 const DEFAULT_FIRECRAWL_REFRESH_SECONDS = 900;
+const DEFAULT_RAILWAY_REFRESH_SECONDS = 900;
 
 function tickClock(): string {
   return new Date()
@@ -251,6 +254,10 @@ export default function App() {
   const [firecrawlRefreshSeconds, setFirecrawlRefreshSeconds] = useState(
     DEFAULT_FIRECRAWL_REFRESH_SECONDS
   );
+  const [railwayUsage, setRailwayUsage] = useState<RailwayUsageResult | null>(null);
+  const [railwayRefreshSeconds, setRailwayRefreshSeconds] = useState(
+    DEFAULT_RAILWAY_REFRESH_SECONDS
+  );
   const [aiSubTab, setAiSubTab] = useState<AiSubTab>("claude");
 
   const loadDocker = useCallback(async () => {
@@ -357,6 +364,9 @@ export default function App() {
   const loadFirecrawl = useCallback(async () => {
     setFirecrawlUsage(await window.api.firecrawl.usage());
   }, []);
+  const loadRailway = useCallback(async () => {
+    setRailwayUsage(await window.api.railway.usage());
+  }, []);
 
   const navigateDaily = useCallback(async (date: string | null) => {
     setDailyDate(date);
@@ -399,6 +409,7 @@ export default function App() {
         loadOpenRouter(),
         loadOpenAI(),
         loadFirecrawl(),
+        loadRailway(),
         loadYouTube(true),
         loadReddit(true),
         loadReaderFeed(readerFeedPage, readerFeedSource, true),
@@ -429,6 +440,7 @@ export default function App() {
     loadOpenRouter,
     loadOpenAI,
     loadFirecrawl,
+    loadRailway,
     loadYouTube,
     loadReddit,
     loadReaderFeed,
@@ -503,6 +515,7 @@ export default function App() {
       setOpenRouterRefreshSeconds(cfg.openrouter?.refreshSeconds || DEFAULT_OPENROUTER_REFRESH_SECONDS);
       setOpenAIRefreshSeconds(cfg.openai?.refreshSeconds || DEFAULT_OPENAI_REFRESH_SECONDS);
       setFirecrawlRefreshSeconds(cfg.firecrawl?.refreshSeconds || DEFAULT_FIRECRAWL_REFRESH_SECONDS);
+      setRailwayRefreshSeconds(cfg.railway?.refreshSeconds || DEFAULT_RAILWAY_REFRESH_SECONDS);
       setGitRefreshSeconds(cfg.git?.refreshSeconds || DEFAULT_GIT_REFRESH_SECONDS);
       setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
@@ -536,6 +549,7 @@ export default function App() {
   usePolling(loadOpenRouter, openRouterRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "openrouter", 0, openRouterPeriod);
   usePolling(loadOpenAI, openAIRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "openai", 100, openAIPeriod);
   usePolling(loadFirecrawl, firecrawlRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "firecrawl", 50);
+  usePolling(loadRailway, railwayRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "railway", 50);
   usePolling(loadCodex, localInterval, foreground && activeTab === "ai" && aiSubTab === "openai");
   usePolling(loadClaude, localInterval, foreground && activeTab === "ai" && aiSubTab === "claude");
   usePolling(async () => { await Promise.all([loadDaily(), loadMissions(), loadTodoist(), loadCalendar()]); setLastRefreshedAt(new Date()); }, localInterval, foreground && activeTab === "home", 0);
@@ -828,6 +842,7 @@ export default function App() {
                 { id: "firecrawl", label: "Firecrawl" },
                 { id: "openrouter", label: "OpenRouter" },
                 { id: "openai", label: "OpenAI" },
+                { id: "railway", label: "Railway" },
               ] as { id: AiSubTab; label: string }[]
             ).map((sub) => (
               <button
@@ -955,6 +970,14 @@ export default function App() {
               </div>
             </main>
           )}
+
+          {aiSubTab === "railway" && (
+            <main className="grid grid-railway">
+              <div className="slot slot-railway-usage">
+                <RailwayUsageWidget data={railwayUsage} />
+              </div>
+            </main>
+          )}
         </>
       )}
 
@@ -1007,6 +1030,9 @@ export default function App() {
         }
         onFirecrawlRefreshSecondsChange={(seconds) =>
           setFirecrawlRefreshSeconds(seconds ?? DEFAULT_FIRECRAWL_REFRESH_SECONDS)
+        }
+        onRailwayRefreshSecondsChange={(seconds) =>
+          setRailwayRefreshSeconds(seconds ?? DEFAULT_RAILWAY_REFRESH_SECONDS)
         }
       />
     </>
