@@ -17,6 +17,15 @@ import type { AppConfig, ReaderDocument, ReaderResult } from "../../shared/types
 const API_ROOT = "https://readwise.io/api/v3";
 const PAGE_SIZE = 15;
 const FETCH_LIMIT = 100; // max allowed per Reader API call
+const CACHE_TTL_MS = 5 * 60_000;
+// Readwise allows only 20 list requests/minute per token, shared with the
+// Feed sub-tab (services/readerFeed.ts) via the same readwise.io origin's
+// circuit breaker in http.ts — a burst here that trips a 429 locks out both
+// sub-tabs for minutes. Pull at most one 100-item upstream page per UI
+// request; a deep or stale page just comes back short until a later
+// request (the next poll, or paging forward again) walks the cursor
+// further. Same mitigation as readerFeed.ts's MAX_FETCH_PAGES_PER_CALL.
+const MAX_FETCH_PAGES_PER_CALL = 1;
 
 interface RawDoc {
   id: string;
@@ -68,7 +77,13 @@ function buildResult(page: number, snapshot = cache): ReaderResult {
     ok: true,
     documents: pageDocs.map(toReaderDocument),
     page,
-    hasNext: sorted.length > start + PAGE_SIZE || !(snapshot?.exhausted ?? true),
+    // Only offer another page when it already exists locally, or this page is
+    // full and one bounded upstream fetch could continue it. A short page —
+    // e.g. one MAX_FETCH_PAGES_PER_CALL fetch wasn't enough to reach a deep
+    // page — must not advertise a next page that comes back empty.
+    hasNext:
+      sorted.length > start + PAGE_SIZE ||
+      (pageDocs.length === PAGE_SIZE && !(snapshot?.exhausted ?? true)),
     hasPrev: page > 0,
   };
 }
@@ -107,15 +122,21 @@ export async function listReaderDocuments(
 ): Promise<ReaderResult> {
   if (!apiToken) return failResult(page, "No Readwise API token configured");
 
-  if (!cache || cache.token !== apiToken || Date.now() - cache.fetchedAt > 5 * 60_000) {
+  if (!cache || cache.token !== apiToken || Date.now() - cache.fetchedAt > CACHE_TTL_MS) {
     cache = { docs: [], nextCursor: null, exhausted: false, token: apiToken, fetchedAt: Date.now() };
   }
 
   const snapshot = cache;
   const needed = (page + 1) * PAGE_SIZE;
+  let fetchedPages = 0;
   try {
-    while (snapshot.docs.length < needed && !snapshot.exhausted) {
+    while (
+      snapshot.docs.length < needed &&
+      !snapshot.exhausted &&
+      fetchedPages < MAX_FETCH_PAGES_PER_CALL
+    ) {
       if (!snapshot.pending) {
+        fetchedPages += 1;
         snapshot.pending = (async () => {
           const { docs, nextCursor } = await fetchPage(apiToken, snapshot.nextCursor);
           const existingIds = new Set(snapshot.docs.map((d) => d.id));
