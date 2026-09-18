@@ -50,7 +50,8 @@ async function fetchAllActiveTasks(apiToken: string): Promise<TaskPageResult> {
 }
 
 export async function getDueTasks(
-  { apiToken }: AppConfig["todoist"] = { apiToken: "" }
+  { apiToken }: AppConfig["todoist"] = { apiToken: "" },
+  includeAll = false
 ): Promise<TodoistResult> {
   if (!apiToken) {
     return { ok: false, reason: "No Todoist API token configured", tasks: [], projects: [] };
@@ -98,7 +99,7 @@ export async function getDueTasks(
   const tasks = allTasks
     .filter((t: any) => {
       const dueDate = typeof t.due?.date === "string" ? t.due.date.slice(0, 10) : null;
-      return !!t.deadline?.date || (!!dueDate && dueDate <= today);
+      return includeAll || !!t.deadline?.date || (!!dueDate && dueDate <= today);
     })
     .map((t: any) => ({
       id: t.id,

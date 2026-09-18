@@ -1,3 +1,4 @@
+import ProjectsTab from "./components/ProjectsTab";
 import { usePolling, useWindowVisible } from "./hooks/usePolling";
 import StatsPanel from "./components/StatsPanel";
 // The UI. Runs sandboxed — it can only reach the main process through the
@@ -89,6 +90,7 @@ import appLogo from "./assets/icon.png";
 
 type TabId =
   | "home"
+  | "projects"
   | "development"
   | "reader"
   | "scratchpad"
@@ -126,6 +128,7 @@ const DEFAULT_TABS: TabConfig[] = [
   // maxOrder + 1, so a mid-list position here would disagree with what an
   // existing install's DB actually holds. Drag-to-reorder handles placement.
   { id: "social", label: "Social", sortOrder: 9 },
+  { id: "projects", label: "Projects", sortOrder: 10 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -174,6 +177,7 @@ export default function App() {
   const [daily, setDaily] = useState<DailyNoteResult | null>(null);
   const [missions, setMissions] = useState<MissionsResult | null>(null);
   const [todoist, setTodoist] = useState<TodoistResult | null>(null);
+  const [allTodoist, setAllTodoist] = useState<TodoistResult | null>(null);
   const [clock, setClock] = useState(tickClock());
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
@@ -329,7 +333,11 @@ export default function App() {
     setMissions(await window.api.grimoire.missions());
   }, []);
   const loadTodoist = useCallback(async () => {
-    setTodoist(await window.api.todoist.tasks());
+    const result = await window.api.todoist.tasks(true);
+    setAllTodoist(result);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    setTodoist({ ...result, tasks: result.tasks.filter(task => task.deadline || (task.due && task.due.slice(0, 10) <= today)) });
   }, []);
   const loadCalendar = useCallback(async () => {
     setCalendar(await window.api.calendar.events(calendarDate ?? undefined));
@@ -542,8 +550,8 @@ export default function App() {
   usePolling(loadProcessStatuses, 3000, settingsLoaded, 200);
   usePolling(loadBudgetHealth, ynabRefreshSeconds * 1000, settingsLoaded, 1200);
   usePolling(loadYnab, ynabRefreshSeconds * 1000, foreground && activeTab === "finances", 300);
-  usePolling(loadDockerUpdates, dockerUpdateCheckMinutes * 60_000, foreground && activeTab === "development" && dockerUpdateChecksEnabled, 2000);
-  usePolling(loadGit, gitRefreshSeconds * 1000, foreground && activeTab === "development", 300);
+  usePolling(loadDockerUpdates, dockerUpdateCheckMinutes * 60_000, foreground && (activeTab === "development" || activeTab === "projects") && dockerUpdateChecksEnabled, 2000);
+  usePolling(loadGit, gitRefreshSeconds * 1000, foreground && (activeTab === "development" || activeTab === "projects"), 300);
   usePolling(loadNowPlaying, 4000, foreground && spotifyEnabled, 400);
   useEffect(() => { if (!spotifyEnabled) setNowPlaying(null); }, [spotifyEnabled]);
   usePolling(loadOpenRouter, openRouterRefreshSeconds * 1000, foreground && activeTab === "ai" && aiSubTab === "openrouter", 0, openRouterPeriod);
@@ -679,6 +687,12 @@ export default function App() {
           </div>
         </main>
       )}
+
+      {settingsLoaded && <ProjectsTab active={activeTab === "projects"} docker={docker} updates={dockerUpdates}
+        git={gitStatus} github={github} processes={processConfigs} statuses={processStatuses}
+        tasks={allTodoist} showTimeTracking={showTimeTracking} refreshMinutes={appRefreshMinutes}
+        onDockerRefresh={loadDocker} onCheckUpdates={loadDockerUpdates} onProcessRefresh={loadProcessStatuses}
+        onReposRefresh={async () => { await Promise.all([loadGit(), loadGithub()]); }} onTodoistRefresh={loadTodoist} />}
 
       {activeTab === "development" && (
         <main className="grid grid-dev">

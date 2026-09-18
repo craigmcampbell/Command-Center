@@ -99,6 +99,8 @@ import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
 import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
 import { capture } from "./services/capture";
+import { initProjects, listProjects, saveProject, removeProject, reorderProjects } from "./services/projects";
+import type { ProjectInput } from "../shared/types";
 import { getClaudeUsage, listClaudeSessions, getCodexUsage, listCodexSessions } from "./services/usageWorker";
 import {
   validateCodexResumeTarget,
@@ -260,6 +262,7 @@ import type {
 
 initDatabase();
 initLinks();
+initProjects();
 initScratchpad();
 initHabits();
 initNotes();
@@ -431,8 +434,8 @@ ipcMain.handle("grimoire:saveFinanceReviewLog", async (_evt, content: string) =>
 });
 
 // Todoist: tasks due today or overdue, plus completing/creating tasks.
-readHandler("todoist:tasks", async () => {
-  return getDueTasks(getTodoistSettings());
+readHandler("todoist:tasks", async (_evt, all?: boolean) => {
+  return getDueTasks(getTodoistSettings(), all);
 });
 ipcMain.handle("todoist:complete", async (_evt, taskId: string) => {
   return completeTask(getTodoistSettings(), taskId);
@@ -485,13 +488,13 @@ ipcMain.handle("claude:launch", async (_evt, projectPath: string) => {
   return openInTerminal(projectPath, "claude");
 });
 readHandler("claude:usage", () => getClaudeUsage());
-readHandler("claude:sessions", (_evt, limit?: number) => listClaudeSessions(limit));
+readHandler("claude:sessions", (_evt, limit?: number, folder?: string) => listClaudeSessions(limit, folder));
 // `claude -r <id>` resumes by session id; the id is the transcript filename.
 ipcMain.handle("claude:resume", async (_evt, sessionId: string, cwd: string) => {
   return openInTerminal(cwd, `claude -r ${sessionId}`);
 });
 readHandler("codex:usage", () => getCodexUsage());
-readHandler("codex:sessions", (_evt, limit?: number) => listCodexSessions(limit));
+readHandler("codex:sessions", (_evt, limit?: number, folder?: string) => listCodexSessions(limit, undefined, folder));
 ipcMain.handle("codex:resume", async (_evt, sessionId: string, cwd: string) => {
   const reason = validateCodexResumeTarget(sessionId, cwd);
   if (reason) return { ok: false, reason };
@@ -578,6 +581,10 @@ readHandler("reddit:list", (_evt, forceRefresh?: boolean) =>
 // review-requested PRs across all of them.
 // Same repo list as github:status — a row contributes to whichever widget its
 // fields support (owner+repo → GitHub, localPath → here).
+readHandler("projects:list", () => listProjects());
+ipcMain.handle("projects:save", (_evt, input: ProjectInput, id?: number) => saveProject(input, id));
+ipcMain.handle("projects:remove", (_evt, id: number) => removeProject(id));
+ipcMain.handle("projects:reorder", (_evt, ids: number[]) => reorderProjects(ids));
 readHandler("git:status", () => getGitStatuses(listGithubRepoSettings()));
 
 // OpenRouter: usage by model + by API key name for the selected period, plus

@@ -36,7 +36,7 @@ vi.mock("better-sqlite3", () => ({
           this.state.rows
             .filter((row) => row.archived === 0)
             .sort((a, b) => Number(b.updated_at) - Number(a.updated_at))
-            .slice(0, limit)
+            .slice(0, limit < 0 ? undefined : limit)
             .map((row) => ({ ...row, updated_at_ms: Number(row.updated_at) * 1000 })),
       };
     }
@@ -250,4 +250,24 @@ it("retains context and exact counts across appended events and partial writes",
   expect(usage.byModel[0].label).toBe("gpt-5");
   fs.writeFileSync(file, '');
   expect((await getCodexUsage(root, NOW)).today.requests).toBe(0);
+});
+
+
+it("filters project sessions before the limit in SQLite and transcript fallback", async () => {
+  const root = makeRoot();
+  const rows = [
+    { id: "other", cwd: "/code/application", title: "Other", archived: 0, tokens_used: 1, updated_at: 30 },
+    { id: "nested", cwd: "/code/app/web", title: "Nested", archived: 0, tokens_used: 1, updated_at: 20 },
+    { id: "primary", cwd: "/code/app", title: "Primary", archived: 0, tokens_used: 1, updated_at: 10 },
+  ];
+  const db = path.join(root, "state_5.sqlite");
+  fs.writeFileSync(db, JSON.stringify({ columns: ["id", "cwd", "title", "archived", "tokens_used", "updated_at"], rows }));
+  expect((await listCodexSessions(1, root, "/code/app")).sessions.map(s => s.id)).toEqual(["nested"]);
+  fs.unlinkSync(db);
+  for (const [i, row] of rows.entries()) {
+    const at = `2026-09-01T12:00:0${3-i}.000Z`;
+    writeJsonl(path.join(root, "sessions", `${row.id}.jsonl`), [sessionMeta(row.id, row.cwd, at), token(at, { input_tokens: 1, output_tokens: 1 })]);
+    fs.utimesSync(path.join(root, "sessions", `${row.id}.jsonl`), new Date(at), new Date(at));
+  }
+  expect((await listCodexSessions(1, root, "/code/app")).sessions.map(s => s.id)).toEqual(["nested"]);
 });

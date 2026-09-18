@@ -59,6 +59,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "ai", label: "AI" },
   { id: "stats", label: "Stats" },
   { id: "social", label: "Social" },
+  { id: "projects", label: "Projects" },
 ];
 
 export function initSettings(): void {

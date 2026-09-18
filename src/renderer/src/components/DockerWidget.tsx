@@ -11,7 +11,7 @@ interface DockerWidgetProps {
   onCheckUpdatesNow: () => Promise<void>;
 }
 
-function DockerRow({
+export function DockerRow({
   container,
   updateStatus,
   onRefresh,
