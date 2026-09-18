@@ -1,3 +1,4 @@
+import { matchesProjectFolder } from "./projectPaths";
 // Local Codex subscription telemetry. Codex writes token counters, rolling
 // rate-limit snapshots, and session metadata under CODEX_HOME (normally
 // ~/.codex), so this needs no API or Admin key and never sends data anywhere.
@@ -391,7 +392,7 @@ function stateDatabases(root: string): string[] {
     });
 }
 
-function readThreads(root: string, limit: number): CodexSession[] | null {
+function readThreads(root: string, limit: number, folder?: string): CodexSession[] | null {
   const indexNames = readSessionIndex(root);
   for (const dbPath of stateDatabases(root)) {
     let db: Database.Database | undefined;
@@ -420,8 +421,8 @@ function readThreads(root: string, limit: number): CodexSession[] | null {
            ORDER BY ${updated} DESC
            LIMIT ?`
         )
-        .all(limit) as ThreadRow[];
-      return rows.map((row) => ({
+        .all(folder ? -1 : limit) as ThreadRow[];
+      return rows.filter(row => matchesProjectFolder(row.cwd, folder)).slice(0, limit).map((row) => ({
         id: row.id,
         cwd: row.cwd,
         projectLabel: projectLabel(row.cwd),
@@ -443,7 +444,8 @@ function readThreads(root: string, limit: number): CodexSession[] | null {
 
 export async function listCodexSessions(
   limit = 40,
-  rootOverride?: string
+  rootOverride?: string,
+  folder?: string
 ): Promise<CodexSessionsResult> {
   const root = codexHome(rootOverride);
   const sessionsDir = path.join(root, "sessions");
@@ -451,7 +453,7 @@ export async function listCodexSessions(
     return { ok: false, reason: `No ${rootOverride ? sessionsDir : "~/.codex/sessions"} directory`, sessions: [] };
   }
   const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 40, 100));
-  const fromDb = readThreads(root, safeLimit);
+  const fromDb = readThreads(root, safeLimit, folder);
   if (fromDb) return { ok: true, sessions: fromDb };
 
   const names = readSessionIndex(root);
@@ -467,6 +469,7 @@ export async function listCodexSessions(
       tokensUsed: 0,
       updatedAt: session.updatedAt,
     }))
+    .filter(session => matchesProjectFolder(session.cwd, folder))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, safeLimit);
   return { ok: true, sessions };

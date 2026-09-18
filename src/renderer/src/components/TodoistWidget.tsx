@@ -393,6 +393,7 @@ function TodoistRow({
   liveElapsedSeconds,
   onToggleTimer,
   onTimeChanged,
+  initiallyExpanded = false,
 }: {
   task: TodoistTask;
   projects: TodoistProject[];
@@ -403,8 +404,9 @@ function TodoistRow({
   liveElapsedSeconds: number;
   onToggleTimer: (task: TodoistTask) => void;
   onTimeChanged: () => Promise<void>;
+  initiallyExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [completing, setCompleting] = useState(false);
 
   async function handleComplete() {
@@ -528,7 +530,7 @@ function groupByProject(tasks: TodoistTask[]): [string, TodoistTask[]][] {
   return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-export default function TodoistWidget({ data, onRefresh, showTimeTracking }: TodoistWidgetProps) {
+export default function TodoistWidget({ data, onRefresh, showTimeTracking, embedded = false }: TodoistWidgetProps & { embedded?: boolean }) {
   const [summaries, setSummaries] = useState<Record<string, TaskTimeSummary>>({});
   const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -551,6 +553,9 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
 
   useEffect(() => {
     void loadTimeState();
+    const reload = () => void loadTimeState();
+    window.addEventListener("task-time-changed", reload);
+    return () => window.removeEventListener("task-time-changed", reload);
   }, [loadTimeState]);
 
   // Tick once a second while a timer's running so the row's badge and the
@@ -567,7 +572,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
     } else {
       await window.api.timeTracking.start(task.id, task.content, task.project);
     }
-    await loadTimeState();
+    window.dispatchEvent(new Event("task-time-changed"));
   }
 
   let pipClassName = "pip";
@@ -597,7 +602,8 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
             isRunning={activeTimer?.taskId === t.id}
             liveElapsedSeconds={liveElapsedSeconds}
             onToggleTimer={handleToggleTimer}
-            onTimeChanged={loadTimeState}
+            initiallyExpanded={embedded}
+            onTimeChanged={async () => { window.dispatchEvent(new Event("task-time-changed")); }}
           />
         ))}
       </div>
@@ -606,7 +612,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
 
   return (
     <Panel
-      title="Due & Overdue"
+      title={embedded ? "Todoist" : "Due & Overdue"}
       headerRight={
         <div className="todoist-header-actions">
           {showTimeTracking && (
@@ -623,7 +629,7 @@ export default function TodoistWidget({ data, onRefresh, showTimeTracking }: Tod
         </div>
       }
     >
-      <AddTaskForm onRefresh={onRefresh} projects={data?.ok ? data.projects : []} />
+      {!embedded && <AddTaskForm onRefresh={onRefresh} projects={data?.ok ? data.projects : []} />}
       {body}
       {reportOpen && <TimeReportModal onClose={() => setReportOpen(false)} />}
     </Panel>

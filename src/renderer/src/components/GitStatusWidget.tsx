@@ -53,7 +53,7 @@ function CountBadges({ repo }: { repo: GitRepoStatus }) {
   );
 }
 
-function GitRow({ repo }: { repo: GitRepoStatus }) {
+export function GitRow({ repo }: { repo: GitRepoStatus }) {
   // Reuses the File Links widget's ForkLift launch — no new IPC needed.
   const open = () => void window.api.forklift.open(repo.path);
   // A separate icon-button rather than a modifier-click on the row: the row

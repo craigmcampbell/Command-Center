@@ -1445,7 +1445,28 @@ export interface VaultNoteIndexResult {
   entries: VaultNoteIndexEntry[];
 }
 
+export interface ProjectInput {
+  name: string;
+  folder: string;
+  status: "active" | "paused" | "archived";
+  pinned: boolean;
+  repoId?: number;
+  githubUrl: string;
+  todoistTaskId: string;
+  note: { vaultLabel: string; filePath: string } | null;
+  links: { label: string; url: string }[];
+  processIds: string[];
+  containerNames: string[];
+}
+export interface Project extends ProjectInput { id: number; sortOrder: number }
+
 export interface CommandCenterApi {
+  projects: {
+    list: () => Promise<Project[]>;
+    save: (input: ProjectInput, id?: number) => Promise<Project[]>;
+    remove: (id: number) => Promise<Project[]>;
+    reorder: (ids: number[]) => Promise<Project[]>;
+  };
   docker: {
     list: () => Promise<DockerResult>;
     start: (name: string) => Promise<ActionResult>;
@@ -1471,7 +1492,7 @@ export interface CommandCenterApi {
     saveFinanceReviewLog: (content: string) => Promise<ActionResult>;
   };
   todoist: {
-    tasks: () => Promise<TodoistResult>;
+    tasks: (all?: boolean) => Promise<TodoistResult>;
     complete: (taskId: string) => Promise<ActionResult>;
     create: (content: string, projectId?: string) => Promise<ActionResult>;
     // date is an ISO "YYYY-MM-DD" to set it, or null to clear it entirely.
@@ -1498,12 +1519,12 @@ export interface CommandCenterApi {
   claude: {
     launch: (projectPath: string) => Promise<ActionResult>;
     usage: () => Promise<ClaudeUsageResult>;
-    sessions: (limit?: number) => Promise<ClaudeSessionsResult>;
+    sessions: (limit?: number, folder?: string) => Promise<ClaudeSessionsResult>;
     resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   codex: {
     usage: () => Promise<CodexUsageResult>;
-    sessions: (limit?: number) => Promise<CodexSessionsResult>;
+    sessions: (limit?: number, folder?: string) => Promise<CodexSessionsResult>;
     resume: (sessionId: string, cwd: string) => Promise<ActionResult>;
   };
   forklift: {

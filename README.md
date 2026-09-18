@@ -26,6 +26,20 @@ The UI is split into tabs. Widget data loads and refreshes in the background reg
 | **Services** | Live Docker container status with start/stop controls |
 | **Claude Code** | Opens a Warp tab in a project directory and runs `claude` |
 
+### Projects
+
+Use **Projects → Add project** to connect one primary folder to a Todoist task,
+optional GitHub repository, Obsidian note, Docker containers, managed processes,
+and labeled app URLs. Existing repository settings can be selected in the editor.
+Cards share the Development tab's Git, GitHub, and service controls; expanding a
+card shows task details and time tracking, the five latest Claude/Codex sessions
+from that folder or its subdirectories, and an editable note with an expanded view.
+
+Pin, reorder, search, pause, or archive projects. The Archived filter includes a
+Restore action. Removing a project only removes its associations; repositories,
+containers, processes, tasks, and note files remain intact. Project records live
+in the existing SQLite database and are included in its backups.
+
 ### Reader
 
 | Widget | What it does |

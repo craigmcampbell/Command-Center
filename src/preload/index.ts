@@ -27,6 +27,7 @@ import type {
   FirecrawlScalarConfig,
   RailwayScalarConfig,
   ProcessConfig,
+  ProjectInput,
   StatsSettings,
   TraySummary,
   YnabScalarConfig,
@@ -34,6 +35,12 @@ import type {
 } from "../shared/types";
 
 const api: CommandCenterApi = {
+  projects: {
+    list: () => ipcRenderer.invoke("projects:list"),
+    save: (input: ProjectInput, id?: number) => ipcRenderer.invoke("projects:save", input, id),
+    remove: (id: number) => ipcRenderer.invoke("projects:remove", id),
+    reorder: (ids: number[]) => ipcRenderer.invoke("projects:reorder", ids),
+  },
   docker: {
     list: () => ipcRenderer.invoke("docker:list"),
     start: (name: string) => ipcRenderer.invoke("docker:start", name),
@@ -65,7 +72,7 @@ const api: CommandCenterApi = {
   },
 
   todoist: {
-    tasks: () => ipcRenderer.invoke("todoist:tasks"),
+    tasks: (all?: boolean) => ipcRenderer.invoke("todoist:tasks", all),
     complete: (taskId: string) => ipcRenderer.invoke("todoist:complete", taskId),
     create: (content: string, projectId?: string) =>
       ipcRenderer.invoke("todoist:create", content, projectId),
@@ -98,7 +105,7 @@ const api: CommandCenterApi = {
   claude: {
     launch: (projectPath: string) => ipcRenderer.invoke("claude:launch", projectPath),
     usage: () => ipcRenderer.invoke("claude:usage"),
-    sessions: (limit?: number) => ipcRenderer.invoke("claude:sessions", limit),
+    sessions: (limit?: number, folder?: string) => ipcRenderer.invoke("claude:sessions", limit, folder),
     resume: (sessionId: string, cwd: string) =>
       ipcRenderer.invoke("claude:resume", sessionId, cwd),
   },
@@ -214,7 +221,7 @@ const api: CommandCenterApi = {
 
   codex: {
     usage: () => ipcRenderer.invoke("codex:usage"),
-    sessions: (limit?: number) => ipcRenderer.invoke("codex:sessions", limit),
+    sessions: (limit?: number, folder?: string) => ipcRenderer.invoke("codex:sessions", limit, folder),
     resume: (sessionId: string, cwd: string) =>
       ipcRenderer.invoke("codex:resume", sessionId, cwd),
   },

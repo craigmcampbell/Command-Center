@@ -52,7 +52,7 @@ function groupReposByOwner(repos: GitHubRepoStatus[]): [string, GitHubRepoStatus
     .map(([owner, group]) => [owner, group.slice().sort((a, b) => a.label.localeCompare(b.label))]);
 }
 
-function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
+export function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
   return (
     <div className="row github-pr-row">
       <span className="name link" onClick={() => window.api.openUrl(pr.url)}>
@@ -66,7 +66,7 @@ function PrRow({ pr, showRepo }: { pr: GitHubPr; showRepo: boolean }) {
   );
 }
 
-function RepoRow({ repo }: { repo: GitHubRepoStatus }) {
+export function RepoRow({ repo }: { repo: GitHubRepoStatus }) {
   const repoUrl = `https://github.com/${repo.owner}/${repo.repo}`;
   // Oldest-to-newest, left-to-right, so the strip reads like a timeline
   // ending at the same "now" the leading pip and CI info line describe.

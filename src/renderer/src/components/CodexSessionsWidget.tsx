@@ -24,7 +24,7 @@ function relativeTime(ms: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-function SessionRow({ session }: { session: CodexSession }) {
+export function SessionRow({ session }: { session: CodexSession }) {
   const [state, setState] = useState<"idle" | "opening" | "failed">("idle");
   async function resume() {
     setState("opening");

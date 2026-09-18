@@ -8,6 +8,12 @@ const project = path.join(__dirname, '..');
 const assert = require('node:assert/strict');
 const calls = [];
 const errors = [];
+let projects = [{ id: 1, sortOrder: 0, name: 'Project Alpha', folder: '/code/alpha', status: 'active', pinned: false, repoId: 1, githubUrl: '', todoistTaskId: 'task1', note: { vaultLabel: 'Test', filePath: 'project.md' }, links: [{ label: 'Local app', url: 'http://localhost:3000' }], processIds: [], containerNames: ['db'] }];
+let projectNote = '# Project note';
+let projectMtime = 1;
+let taskActive = true;
+let activeTimer = null;
+
 const channels = [...fs.readFileSync(path.join(project, 'src/preload/index.ts'), 'utf8').matchAll(/ipcRenderer.invoke\("([^"]+)"/g)].map(m => m[1]);
 const note = (id) => ({ id, vaultLabel: 'Test', filePath: `${id}.md`, label: `Note ${id}`, sortOrder: id });
 for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) => {
@@ -22,6 +28,31 @@ for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) =>
     googleCalendar: { clientId: '', clientSecret: '' },
     reader: { apiToken: '' },
   };
+  if (channel === 'projects:list') return projects;
+  if (channel === 'projects:save') {
+    const [input, id] = args;
+    if (id) projects = projects.map(p => p.id === id ? { ...p, ...input } : p);
+    else projects.push({ ...input, id: projects.length + 1, sortOrder: projects.length });
+    return projects;
+  }
+  if (channel === 'projects:remove') { projects = projects.filter(p => p.id !== args[0]); return projects; }
+  if (channel === 'projects:reorder') { projects = args[0].map((id, sortOrder) => ({ ...projects.find(p => p.id === id), sortOrder })); return projects; }
+  if (channel === 'settings:githubRepos:list') return [];
+  if (channel === 'git:status') return { ok: true, repos: [{ id: 1, label: 'Alpha', path: '/code/alpha', ok: true, branch: 'main', ahead: 0, behind: 0, staged: 1, unstaged: 0, untracked: 0, conflicted: 0 }] };
+  if (channel === 'claude:sessions' || channel === 'codex:sessions') return { ok: true, sessions: [] };
+  if (channel === 'todoist:complete') { taskActive = false; return { ok: true }; }
+  if (channel === 'todoist:tasks') return { ok: true, projects: [{ id: 'work', name: 'Work' }], tasks: args[0] && taskActive ? [{ id: 'task1', content: 'Undated project task', description: '', url: 'https://app.todoist.com/app/task/task1', priority: 1, due: null, overdue: false, deadline: null, project: 'Work', projectId: 'work', labels: [], subtasks: [{ id: 'child', content: 'Undated subtask', checked: false }], parentName: null }] : [] };
+  if (channel === 'notes:read' && args[1] === 'project.md') return { ok: true, content: projectNote, mtimeMs: projectMtime };
+  if (channel === 'notes:save' && args[1] === 'project.md') {
+    if (args[3] !== undefined && args[3] !== projectMtime) return { ok: false, conflict: true, reason: 'Changed on disk' };
+    projectNote = args[2]; projectMtime++; return { ok: true, mtimeMs: projectMtime };
+  }
+  if (channel === 'notes:statMany' && args[0].some(n => n.filePath === 'project.md')) return { ok: true, entries: [{ vaultLabel: 'Test', filePath: 'project.md', mtimeMs: projectMtime }] };
+  if (channel === 'timeTracking:summaries') return {};
+  if (channel === 'timeTracking:entries') return [];
+  if (channel === 'timeTracking:activeTimer') return activeTimer;
+  if (channel === 'timeTracking:start') { activeTimer = { taskId: args[0], taskContent: args[1], projectName: args[2], startedAt: Date.now() }; return activeTimer; }
+  if (channel === 'timeTracking:stop') { activeTimer = null; return { ok: true }; }
   if (channel === 'settings:railway:update') return args[0];
   if (channel === 'notes:vaults') return [{ id: 1, label: 'Test', path: '/tmp', sortOrder: 0 }];
   if (channel === 'notes:nav:list') return [note(1), note(2)];
@@ -30,7 +61,7 @@ for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) =>
   if (channel === 'notes:index') return { ok: true, entries: [] };
   if (channel === 'notes:statMany') return { ok: true, entries: [] };
   if (channel === 'process:statusAll' || channel === 'links:list') return [];
-  if (channel === 'docker:list') return { ok: true, containers: [] };
+  if (channel === 'docker:list') return { ok: true, containers: [{ name: 'db', image: 'postgres:16', state: 'running', status: 'Up 1 hour' }] };
   if (channel === 'github:status') return { ok: true, repos: [], reviewRequested: [] };
   if (channel === 'railway:usage') return {
     ok: true,
@@ -92,6 +123,94 @@ app.whenReady().then(async () => {
   await wait(400);
   assert.equal(calls.filter(([c]) => c === 'notes:read').length, 2);
   assert.ok(await win.webContents.executeJavaScript(`document.body.textContent.includes('Content 2.md')`));
+  await click('Projects');
+  await wait(600);
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.projects-tab').textContent.includes('Project Alpha')`));
+  assert.equal(calls.filter(([c, a]) => c === 'claude:sessions' && a[1] === '/code/alpha').length, 0, 'Collapsed projects do not load sessions');
+  await click('Expand');
+  await wait(500);
+  assert.ok(calls.some(([c, a]) => c === 'claude:sessions' && a[0] === 5 && a[1] === '/code/alpha'));
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.project-details').textContent.includes('Undated subtask')`));
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.project-note').textContent.includes('Project note')`));
+  await win.webContents.executeJavaScript(`document.querySelector('.project-details button[title="Start timer"]').click()`);
+  await wait(100);
+  assert.equal(activeTimer.taskId, 'task1');
+  assert.ok(await win.webContents.executeJavaScript(`!!document.querySelector('.project-details button[title="Stop timer"]')`));
+  await win.webContents.executeJavaScript(`document.querySelector('.project-details button[title="Stop timer"]').click()`);
+  await wait(100);
+  assert.equal(activeTimer, null);
+  await click('Open in Obsidian');
+  await wait(100);
+  assert.ok(calls.some(([c, a]) => c === 'open:url' && a[0] === 'obsidian://open?vault=tmp&file=project.md'), 'Obsidian uses actual vault folder name');
+  await click('Write');
+  await wait(100);
+  await win.webContents.executeJavaScript(`document.querySelector('.project-note .cm-content').focus()`);
+  await win.webContents.insertText(' edited');
+  await click('Collapse');
+  await wait(200);
+  assert.ok(projectNote.includes('edited'), 'Collapse flushes queued note edits');
+  await click('Expand');
+  await wait(200);
+  await win.webContents.executeJavaScript(`document.querySelector('.project-note button[title="Expand"]').click()`);
+  await wait(100);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll('.project-note .cm-content').length`), 1, 'Expanded note uses one editor owner');
+  await win.webContents.executeJavaScript(`document.querySelector('.project-note .cm-content').focus()`);
+  await win.webContents.insertText(' modal');
+  await click('Close');
+  await wait(200);
+  assert.ok(projectNote.includes('modal'), 'Modal close flushes edits');
+  projectNote = '# External content'; projectMtime++;
+  await win.webContents.executeJavaScript(`window.dispatchEvent(new Event('focus'))`);
+  await wait(200);
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.project-note .cm-content').textContent.includes('External content')`));
+  await win.webContents.executeJavaScript(`document.querySelector('.project-note .cm-content').focus()`);
+  await win.webContents.insertText(' local');
+  projectMtime++;
+  await wait(650);
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.project-note').textContent.includes('Changed on disk')`), 'Conflicting save is shown');
+  assert.equal(projectNote, '# External content', 'Conflicting save preserves disk');
+  await click('Keep mine');
+  await wait(200);
+  assert.ok(projectNote.includes('local'));
+  await win.webContents.executeJavaScript(`document.querySelector('.project-note .cm-content').focus()`);
+  await win.webContents.insertText(' tab');
+  await click('Home');
+  await wait(200);
+  assert.ok(projectNote.includes('tab'), 'Tab changes flush note edits');
+  await click('Projects');
+  await wait(200);
+  await win.webContents.executeJavaScript(`document.querySelector('.project-details button[title="Mark complete"]').click()`);
+  await wait(450);
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.project-details').textContent.includes('not active or unavailable')`));
+  await click('Archive');
+  await wait(200);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll('.project-card:not([hidden])').length`), 0);
+  await win.webContents.executeJavaScript(`document.querySelector('.projects-toolbar input[type="checkbox"]').click()`);
+  await wait(100);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll('.project-card:not([hidden])').length`), 1);
+  await click('Restore');
+  await wait(100);
+  await win.webContents.executeJavaScript(`document.querySelector('.projects-toolbar input[type="checkbox"]').click()`);
+  await wait(100);
+  await click('Add project');
+  await wait(100);
+  await win.webContents.executeJavaScript(`(() => {
+    const form = document.querySelector('.project-editor');
+    const inputs = form.querySelectorAll('input');
+    const set = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); };
+    set(inputs[0], 'Project Beta'); set(inputs[1], '/code/beta');
+  })()`);
+  await wait(100);
+  await win.webContents.executeJavaScript(`document.querySelector('.project-editor').requestSubmit()`);
+  await wait(250);
+  assert.equal(projects.length, 2, 'Editor saves new projects');
+  await win.webContents.executeJavaScript(`document.querySelector('button[aria-label="Pin Project Beta"]').click()`);
+  await wait(200);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.project-card h2').textContent`), 'Project Beta');
+  await win.webContents.executeJavaScript(`(() => { const input = document.querySelector('input[aria-label="Search projects"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Alpha'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await wait(100);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll('.project-card:not([hidden])').length`), 1);
+  fs.writeFileSync(path.join(project, 'out/projects-smoke.png'), (await win.webContents.capturePage()).toPNG());
   await click('Stats');
   await wait(1200);
   win.hide();
@@ -102,7 +221,7 @@ app.whenReady().then(async () => {
   assert.ok(calls.filter(([c]) => c === 'process:statusAll').length >= 3, 'Background status continues');
   assert.equal(calls.filter(([c]) => c === 'ynab:accounts').length, 0, 'Off-tab finance details stay idle');
   assert.deepEqual(errors, []);
-  console.log('Renderer smoke passed: Home idle, Railway billing, visible/hidden Stats, restored note tabs, no console errors');
+  console.log('Renderer smoke passed: Projects CRUD/filter/archive, tasks, note autosave/conflicts/modal, existing tabs and polling, no console errors');
   win.destroy();
   fs.rmSync(userData, { recursive: true, force: true });
   app.exit(0);

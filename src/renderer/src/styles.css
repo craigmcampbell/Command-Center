@@ -5547,3 +5547,93 @@ body {
 .feed-site {
   color: var(--accent);
 }
+
+/* Projects compose the same live rows as the integration tabs. */
+.projects-tab { padding: 20px; }
+.projects-tab[hidden], .project-card[hidden], .project-note[hidden] { display: none; }
+.projects-toolbar, .project-card-head, .project-card-tools, .project-actions, .project-note-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.projects-toolbar { margin-bottom: 18px; }
+.projects-toolbar > input { flex: 1; min-width: 180px; }
+.projects-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 16px; align-items: start; }
+.project-card { border: 1px solid var(--panel-edge); background: var(--panel, #17191e); border-radius: 10px; padding: 16px; min-width: 0; }
+.project-card h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.project-card h3 { font-size: 13px; margin: 14px 0 8px; }
+.project-card-tools { margin-left: auto; }
+.project-actions { margin-top: 12px; }
+.project-path { font-size: 11px; overflow-wrap: anywhere; margin: 8px 0; }
+.project-summary { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 12px; }
+.project-details > section { margin-top: 14px; }
+.project-details .panel { margin-top: 14px; }
+.project-note { margin-top: 16px; border-top: 1px solid var(--panel-edge); padding-top: 12px; }
+.project-note-heading { justify-content: space-between; margin-bottom: 10px; overflow-wrap: anywhere; }
+.project-note .scratchpad { min-height: 240px; max-height: 420px; overflow: auto; }
+.project-note-expanded { padding: 24px; overflow: auto; }
+.project-note-expanded .scratchpad { max-height: none; flex: 1; }
+.project-editor { width: min(680px, 94vw); max-height: 90vh; overflow: auto; border: 1px solid var(--panel-edge); border-radius: 12px; background: var(--panel, #17191e); padding: 24px; }
+.project-editor > label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.project-editor input, .project-editor select, .projects-toolbar input { padding: 7px 9px; border: 1px solid var(--panel-edge); border-radius: 5px; background: var(--ground); color: inherit; min-width: 0; }
+.project-editor fieldset { border: 1px solid var(--panel-edge); margin: 14px 0; padding: 12px; border-radius: 5px; }
+.project-check, .project-editor > .project-check { display: flex; flex-direction: row; align-items: center; gap: 7px; margin: 6px 0; }
+.project-check input { width: auto; }
+.project-link-edit { display: flex; gap: 6px; margin-bottom: 8px; }
+.project-link-edit input { width: 40%; }
+.project-card button, .projects-toolbar button, .project-editor button { cursor: pointer; }
+.project-card button:disabled, .project-editor button:disabled { opacity: .5; cursor: default; }
+
+.project-card button:not(.check):not(.row-action):not(.docker-toggle):not(.desc-toggle):not(.time-toggle), .projects-toolbar button, .project-editor button {
+  color: var(--project-button-ink, var(--ink-dim)); background: var(--project-button-bg, transparent); border: 1px solid var(--project-button-border, var(--panel-edge)); border-radius: 5px; padding: 5px 9px; font: inherit; font-size: 12px;
+}
+.project-card button:hover, .projects-toolbar button:hover, .project-editor button:hover { color: var(--project-button-hover, var(--ink)); border-color: var(--project-button-ink, var(--accent)); }
+.project-card .error, .project-editor .error { color: var(--alert); font-size: 12px; margin: 10px 0; }
+.project-editor legend { color: var(--ink-dim); font-size: 12px; }
+.project-editor > label { font-size: 12px; color: var(--ink-dim); }
+
+/* Strong, consistent section boundaries make expanded projects easier to scan. */
+.project-card .project-section,
+.project-card .project-details .panel,
+.project-card .project-note {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: var(--ground);
+}
+.project-card .project-section-title,
+.project-card .project-details .panel-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: .03em;
+  text-transform: none;
+}
+.project-card .project-section > .project-section-title,
+.project-card .project-details .panel-head,
+.project-card .project-note-heading {
+  margin: -16px -16px 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-edge);
+  border-left: 3px solid var(--accent);
+  border-radius: 7px 7px 0 0;
+  background: var(--accent-glow);
+}
+.project-card .project-details .panel-body { padding: 0; }
+.project-card .project-note-path { display: block; margin-top: 5px; font-size: 11px; }
+.project-card .project-management {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--panel-edge);
+  justify-content: flex-end;
+}
+.project-action-archive {
+  --project-button-ink: #a9c8ff;
+  --project-button-bg: #203859;
+  --project-button-border: #4672ae;
+  --project-button-hover: #d6e6ff;
+}
+.project-action-danger {
+  --project-button-ink: #ffb3b3;
+  --project-button-bg: #4b252c;
+  --project-button-border: #a44c58;
+  --project-button-hover: #ffe0e0;
+}

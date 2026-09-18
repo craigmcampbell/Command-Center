@@ -1,3 +1,4 @@
+import { matchesProjectFolder } from "./projectPaths";
 // Token and cost accounting for Claude Code, read straight out of the
 // transcripts it already writes to ~/.claude/projects. No API token, no
 // network — this is local file reading.
@@ -319,7 +320,7 @@ export async function getClaudeUsage(): Promise<ClaudeUsageResult> {
   };
 }
 
-export async function listClaudeSessions(limit = 20): Promise<ClaudeSessionsResult> {
+export async function listClaudeSessions(limit = 20, folder?: string): Promise<ClaudeSessionsResult> {
   if (!fs.existsSync(PROJECTS_DIR)) {
     return { ok: false, reason: "No ~/.claude/projects directory", sessions: [] };
   }
@@ -357,5 +358,5 @@ export async function listClaudeSessions(limit = 20): Promise<ClaudeSessionsResu
   }
 
   sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-  return { ok: true, sessions: sessions.slice(0, limit) };
+  return { ok: true, sessions: sessions.filter(session => matchesProjectFolder(session.cwd, folder)).slice(0, limit) };
 }
