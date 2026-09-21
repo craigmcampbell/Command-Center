@@ -36,6 +36,7 @@ interface RawDoc {
   category: string;
   saved_at: string;
   parent_id: string | null;
+  tags: Record<string, { name: string }>;
 }
 
 interface Cache {
@@ -65,6 +66,7 @@ function toReaderDocument(d: RawDoc): ReaderDocument {
     url: d.url,
     category: d.category,
     savedAt: d.saved_at,
+    tags: Object.keys(d.tags || {}),
   };
 }
 
