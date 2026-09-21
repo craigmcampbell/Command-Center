@@ -61,6 +61,15 @@ function ReaderRow({
           <IconExternal className="external-icon" />
         </span>
         <span className="due-meta">
+          {doc.tags.length > 0 && (
+            <span className="tag-chips-inline">
+              {doc.tags.map((tag) => (
+                <span key={tag} className="tag-chip">
+                  {tag}
+                </span>
+              ))}
+            </span>
+          )}
           {doc.author && <span className="tag-chip">{doc.author}</span>}
           <span className="tag">{formatSavedDate(doc.savedAt)}</span>
         </span>

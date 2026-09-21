@@ -932,6 +932,7 @@ export interface ReaderDocument {
   url: string; // Reader's own read.readwise.io link — what clicking opens
   category: string;
   savedAt: string;
+  tags: string[];
 }
 
 export interface ReaderResult {
