@@ -69,10 +69,17 @@ for (const channel of new Set(channels)) ipcMain.handle(channel, (_, ...args) =>
       id: 'workspace-1', name: 'Personal', billingPeriodStart: '2026-09-01T00:00:00Z',
       billingPeriodEnd: '2026-10-01T00:00:00Z', currentUsageDollars: 12,
       estimatedBillDollars: 18, creditBalance: 20, remainingUsageCreditBalance: 8,
-      appliedCredits: 4, lineItems: [],
+      appliedCredits: 4, lineItems: [], services: [],
     }],
     currentUsageDollars: 12, estimatedBillDollars: 18, creditBalance: 20,
-    remainingUsageCreditBalance: 8, appliedCredits: 4, lineItems: [], scanMs: 5,
+    remainingUsageCreditBalance: 8, appliedCredits: 4,
+    lineItems: [{ key: 'MEMORY_USAGE_GB', label: 'Memory', currentUsageDollars: 11.5, estimatedUsageDollars: 17 }],
+    services: [{
+      key: 'workspace-1:p1:s1', workspaceId: 'workspace-1', projectId: 'p1', projectName: 'Home Lab',
+      serviceId: 's1', serviceName: 'Open-WebUI', currentUsageDollars: 7.82,
+      lineItems: [{ key: 'MEMORY_USAGE_GB', label: 'Memory', currentUsageDollars: 7.65 }],
+    }],
+    scanMs: 5,
   };
   if (channel.startsWith('ynab:')) return { ok: false, reason: 'Test fixture', accounts: [], transactions: [], categories: [], payees: [] };
   if (channel === 'stats:system') return { ok: true, cpuPercent: 1, loadAvg: [0,0,0], uptimeSeconds: 10, memory: { usedBytes: 10, totalBytes: 100, freeBytes: 90, wiredBytes: 0, compressedBytes: 0, cachedBytes: 0, swapUsedBytes: 0, swapTotalBytes: 0 } };
@@ -110,6 +117,8 @@ app.whenReady().then(async () => {
   await wait(400);
   assert.equal(calls.filter(([c]) => c === 'railway:usage').length, 1, 'Railway tab should load billing');
   assert.ok(await win.webContents.executeJavaScript(`document.body.textContent.includes('Personal') && document.body.textContent.includes('$12.00')`));
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.slot-railway-services').textContent.includes('Open-WebUI')`), 'Railway by-service panel renders');
+  assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.slot-railway-resources').textContent.includes('Memory')`), 'Railway resources panel renders');
   await click('Stats');
   await wait(2500);
   assert.ok(calls.filter(([c]) => c === 'stats:system').length >= 2, 'Visible Stats should poll');

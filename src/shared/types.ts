@@ -607,6 +607,20 @@ export interface RailwayUsageLineItem {
   estimatedUsageDollars?: number;
 }
 
+// Month-to-date cost for one service, from `usage` grouped by project +
+// service. Current-period only: Railway's `estimatedUsage` has no service
+// tag, so there is no per-service projection to show.
+export interface RailwayServiceUsage {
+  key: string;
+  workspaceId: string;
+  projectId: string | null;
+  projectName: string;
+  serviceId: string | null;
+  serviceName: string;
+  currentUsageDollars: number;
+  lineItems: RailwayUsageLineItem[];
+}
+
 export interface RailwayUsageLimit {
   softLimit: number | null;
   hardLimit: number | null;
@@ -625,6 +639,9 @@ export interface RailwayWorkspaceUsage {
   appliedCredits: number;
   usageLimit?: RailwayUsageLimit;
   lineItems: RailwayUsageLineItem[];
+  services: RailwayServiceUsage[];
+  // The service breakdown fails independently of the billing totals.
+  servicesReason?: string;
   reason?: string;
 }
 
@@ -638,6 +655,8 @@ export interface RailwayUsageResult {
   remainingUsageCreditBalance: number;
   appliedCredits: number;
   lineItems: RailwayUsageLineItem[];
+  // Every workspace's services, most expensive first.
+  services: RailwayServiceUsage[];
   scanMs: number;
 }
 

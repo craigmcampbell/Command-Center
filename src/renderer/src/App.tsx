@@ -69,7 +69,10 @@ import CodexSessionsWidget from "./components/CodexSessionsWidget";
 import OpenRouterUsageWidget, { OpenRouterBreakdown } from "./components/OpenRouterUsageWidget";
 import OpenAIUsageWidget, { OpenAIModelBreakdown, OpenAICostBreakdown } from "./components/OpenAIUsageWidget";
 import FirecrawlUsageWidget, { FirecrawlBreakdown } from "./components/FirecrawlUsageWidget";
-import RailwayUsageWidget from "./components/RailwayUsageWidget";
+import RailwayUsageWidget, {
+  RailwayResourceBreakdown,
+  RailwayServiceBreakdown,
+} from "./components/RailwayUsageWidget";
 import CalendarWidget from "./components/CalendarWidget";
 import ReaderWidget from "./components/ReaderWidget";
 import ReaderFeedWidget from "./components/ReaderFeedWidget";
@@ -989,6 +992,12 @@ export default function App() {
             <main className="grid grid-railway">
               <div className="slot slot-railway-usage">
                 <RailwayUsageWidget data={railwayUsage} />
+              </div>
+              <div className="slot slot-railway-services">
+                <RailwayServiceBreakdown data={railwayUsage} />
+              </div>
+              <div className="slot slot-railway-resources">
+                <RailwayResourceBreakdown data={railwayUsage} />
               </div>
             </main>
           )}

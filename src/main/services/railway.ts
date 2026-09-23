@@ -1,5 +1,6 @@
 import type {
   RailwayScalarConfig,
+  RailwayServiceUsage,
   RailwayUsageLineItem,
   RailwayUsageResult,
   RailwayWorkspaceUsage,
@@ -111,6 +112,51 @@ const USAGE_QUERY = `
   }
 `;
 
+// A separate request from USAGE_QUERY so a failure here only loses the
+// breakdown, not the workspace totals and forecast. Volume and backup usage
+// come back tagged with the service the volume is mounted on, so grouping by
+// service accounts for the whole metered total.
+const SERVICE_USAGE_QUERY = `
+  query RailwayServiceUsage(
+    $workspaceId: String!
+    $measurements: [MetricMeasurement!]!
+    $startDate: DateTime!
+    $endDate: DateTime!
+  ) {
+    usage(
+      workspaceId: $workspaceId
+      measurements: $measurements
+      startDate: $startDate
+      endDate: $endDate
+      includeDeleted: true
+      groupBy: [PROJECT_ID, SERVICE_ID]
+    ) {
+      measurement
+      value
+      tags {
+        projectId
+        serviceId
+      }
+    }
+    projects(workspaceId: $workspaceId, includeDeleted: true, first: 500) {
+      edges {
+        node {
+          id
+          name
+          services {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 interface GraphqlError {
   message?: string;
   traceId?: string;
@@ -145,6 +191,13 @@ interface UsageSample {
   measurement?: string;
   value?: number;
   estimatedValue?: number;
+  tags?: { projectId?: string | null; serviceId?: string | null } | null;
+}
+
+interface ProjectBody {
+  id?: string;
+  name?: string;
+  services?: { edges?: { node?: { id?: string; name?: string } }[] } | null;
 }
 
 function number(value: number | null | undefined): number {
@@ -232,8 +285,8 @@ async function discoverWorkspaces(token: string): Promise<WorkspaceBody[]> {
 function costByMeasurement(samples: UsageSample[], estimated: boolean): Map<string, number> {
   const values = new Map<string, number>();
   for (const sample of samples) {
-    if (!MEASUREMENTS.includes(sample.measurement as (typeof MEASUREMENTS)[number])) continue;
-    const measurement = sample.measurement as (typeof MEASUREMENTS)[number];
+    if (!isMeasurement(sample.measurement)) continue;
+    const measurement = sample.measurement;
     const amount = estimated ? sample.estimatedValue : sample.value;
     values.set(measurement, (values.get(measurement) ?? 0) + number(amount) * PRICES[measurement]);
   }
@@ -258,6 +311,96 @@ function total(items: Map<string, number>): number {
   return [...items.values()].reduce((sum, value) => sum + value, 0);
 }
 
+function isMeasurement(value: string | undefined): value is (typeof MEASUREMENTS)[number] {
+  return MEASUREMENTS.includes(value as (typeof MEASUREMENTS)[number]);
+}
+
+function serviceBreakdown(
+  workspaceId: string,
+  samples: UsageSample[],
+  projects: ProjectBody[]
+): RailwayServiceUsage[] {
+  const projectNames = new Map<string, string>();
+  const serviceNames = new Map<string, string>();
+  for (const project of projects) {
+    if (project.id) projectNames.set(project.id, project.name || "Unnamed project");
+    for (const edge of project.services?.edges ?? []) {
+      if (edge.node?.id) serviceNames.set(edge.node.id, edge.node.name || "Unnamed service");
+    }
+  }
+
+  const rows = new Map<
+    string,
+    { projectId: string | null; serviceId: string | null; costs: Map<string, number> }
+  >();
+  for (const sample of samples) {
+    if (!isMeasurement(sample.measurement)) continue;
+    const projectId = sample.tags?.projectId ?? null;
+    const serviceId = sample.tags?.serviceId ?? null;
+    const key = `${workspaceId}:${projectId ?? "-"}:${serviceId ?? "-"}`;
+    let row = rows.get(key);
+    if (!row) {
+      row = { projectId, serviceId, costs: new Map() };
+      rows.set(key, row);
+    }
+    const cost = number(sample.value) * PRICES[sample.measurement];
+    row.costs.set(sample.measurement, (row.costs.get(sample.measurement) ?? 0) + cost);
+  }
+
+  return [...rows.entries()]
+    .map(([key, row]): RailwayServiceUsage => ({
+      key,
+      workspaceId,
+      projectId: row.projectId,
+      // includeDeleted keeps a deleted service's spend in the totals, but the
+      // name lookup can't return it, so it needs a label of its own.
+      projectName: row.projectId
+        ? (projectNames.get(row.projectId) ?? "Deleted project")
+        : "No project",
+      serviceId: row.serviceId,
+      serviceName: row.serviceId
+        ? (serviceNames.get(row.serviceId) ?? "Deleted service")
+        : "Project-level usage",
+      currentUsageDollars: total(row.costs),
+      lineItems: lineItems(row.costs, new Map()),
+    }))
+    .filter((row) => row.currentUsageDollars > 0)
+    .sort((a, b) => b.currentUsageDollars - a.currentUsageDollars);
+}
+
+async function loadServiceUsage(
+  token: string,
+  workspace: RailwayWorkspaceUsage,
+  variables: Record<string, unknown>
+): Promise<Pick<RailwayWorkspaceUsage, "services" | "servicesReason">> {
+  try {
+    const body = await graphql<{
+      usage?: UsageSample[];
+      projects?: { edges?: { node?: ProjectBody }[] };
+    }>(token, SERVICE_USAGE_QUERY, variables);
+    if (!body.data?.usage) {
+      return {
+        services: [],
+        servicesReason: errorMessage(body.errors) ?? "Railway returned no service usage",
+      };
+    }
+    const projects = (body.data.projects?.edges ?? [])
+      .map((edge) => edge.node)
+      .filter((project): project is ProjectBody => Boolean(project));
+    return {
+      services: serviceBreakdown(workspace.id, body.data.usage, projects),
+      // Usage without names still sums correctly; a missing project list only
+      // costs the labels, so report it without discarding the rows.
+      servicesReason: errorMessage(body.errors),
+    };
+  } catch (error) {
+    return {
+      services: [],
+      servicesReason: (error as Error).message || "Couldn't load Railway service usage",
+    };
+  }
+}
+
 async function addUsageDetails(
   token: string,
   workspace: RailwayWorkspaceUsage
@@ -266,16 +409,19 @@ async function addUsageDetails(
     return { ...workspace, reason: "Railway did not return a billing period" };
   }
 
+  const variables = {
+    workspaceId: workspace.id,
+    measurements: MEASUREMENTS,
+    startDate: workspace.billingPeriodStart,
+    endDate: workspace.billingPeriodEnd,
+  };
+  const serviceUsage = loadServiceUsage(token, workspace, variables);
+
   try {
     const body = await graphql<{
       usage?: UsageSample[];
       estimatedUsage?: UsageSample[];
-    }>(token, USAGE_QUERY, {
-      workspaceId: workspace.id,
-      measurements: MEASUREMENTS,
-      startDate: workspace.billingPeriodStart,
-      endDate: workspace.billingPeriodEnd,
-    });
+    }>(token, USAGE_QUERY, variables);
     const current = costByMeasurement(body.data?.usage ?? [], false);
     const estimated = costByMeasurement(body.data?.estimatedUsage ?? [], true);
     const currentFromMetrics = total(current);
@@ -290,11 +436,13 @@ async function addUsageDetails(
             Math.max(workspace.currentUsageDollars - currentFromMetrics, 0)
           : undefined,
       lineItems: lineItems(current, estimated),
+      ...(await serviceUsage),
       reason,
     };
   } catch (error) {
     return {
       ...workspace,
+      ...(await serviceUsage),
       reason: (error as Error).message || "Couldn't load Railway usage details",
     };
   }
@@ -332,6 +480,7 @@ function failResult(reason: string, scanMs: number): RailwayUsageResult {
     remainingUsageCreditBalance: 0,
     appliedCredits: 0,
     lineItems: [],
+    services: [],
     scanMs,
   };
 }
@@ -364,6 +513,7 @@ export async function getRailwayUsage(
             }
           : undefined,
         lineItems: [],
+        services: [],
         reason: customer ? undefined : "No billing account is attached to this workspace",
       };
     });
@@ -393,6 +543,9 @@ export async function getRailwayUsage(
       ),
       appliedCredits: workspaces.reduce((sum, workspace) => sum + workspace.appliedCredits, 0),
       lineItems: aggregateLineItems(workspaces),
+      services: workspaces
+        .flatMap((workspace) => workspace.services)
+        .sort((a, b) => b.currentUsageDollars - a.currentUsageDollars),
       scanMs: performance.now() - started,
     };
   } catch (error) {

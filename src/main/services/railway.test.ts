@@ -50,6 +50,31 @@ function stubApi(handler: (query: string, variables: Record<string, unknown>) =>
   return fetch;
 }
 
+const NO_SERVICES = { data: { usage: [], projects: { edges: [] } } };
+
+function serviceSample(
+  measurement: string,
+  value: number,
+  projectId: string | null,
+  serviceId: string | null
+) {
+  return { measurement, value, tags: { projectId, serviceId } };
+}
+
+function project(id: string, name: string, services: [string, string][]) {
+  return {
+    node: {
+      id,
+      name,
+      services: {
+        edges: services.map(([serviceId, serviceName]) => ({
+          node: { id: serviceId, name: serviceName },
+        })),
+      },
+    },
+  };
+}
+
 describe("getRailwayUsage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -75,6 +100,7 @@ describe("getRailwayUsage", () => {
       if (query.includes("RailwayBillingWorkspaces")) {
         return jsonReply(discovery([workspace("one", "Personal"), workspace("two", "Team")]));
       }
+      if (query.includes("RailwayServiceUsage")) return jsonReply(NO_SERVICES);
       if (variables.workspaceId === "one") {
         return jsonReply({
           data: {
@@ -137,7 +163,8 @@ describe("getRailwayUsage", () => {
         estimatedUsageDollars: 2,
       },
     ]);
-    expect(fetch).toHaveBeenCalledTimes(3);
+    // Discovery, then a totals query and a service query per workspace.
+    expect(fetch).toHaveBeenCalledTimes(5);
     expect(fetch).toHaveBeenCalledWith(
       "https://backboard.railway.com/graphql/v2",
       expect.objectContaining({
@@ -165,7 +192,10 @@ describe("getRailwayUsage", () => {
 
     await getRailwayUsage(CONFIG);
 
-    const requests = fetch.mock.calls.slice(1).map(([, init]) => JSON.parse(String(init?.body)));
+    const requests = fetch.mock.calls
+      .slice(1)
+      .map(([, init]) => JSON.parse(String(init?.body)))
+      .filter((request) => request.query.includes("RailwayWorkspaceUsage"));
     expect(requests.map((request) => [request.variables.startDate, request.variables.endDate])).toEqual([
       ["2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z"],
       ["2026-09-15T00:00:00Z", "2026-10-15T00:00:00Z"],
@@ -204,7 +234,7 @@ describe("getRailwayUsage", () => {
       ok: true,
       workspaces: [{ id: "one", name: "Personal", currentUsageDollars: 12 }],
     });
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   it("preserves successful workspace billing when a detail query fails", async () => {
@@ -232,6 +262,116 @@ describe("getRailwayUsage", () => {
       currentUsageDollars: 3,
       reason: "Estimate unavailable (trace-2)",
     });
+  });
+
+  it("breaks usage down by service, named and sorted by cost", async () => {
+    const fetch = stubApi((query) => {
+      if (query.includes("RailwayBillingWorkspaces")) {
+        return jsonReply(discovery([workspace("one", "Personal")]));
+      }
+      if (query.includes("RailwayServiceUsage")) {
+        return jsonReply({
+          data: {
+            usage: [
+              // n8n / Worker: $1 memory + $2 CPU
+              serviceSample("MEMORY_USAGE_GB", 4320, "p1", "worker"),
+              serviceSample("CPU_USAGE", 4320, "p1", "worker"),
+              // n8n / Postgres: $0.50 volume + $0.25 egress
+              serviceSample("DISK_USAGE_GB", 144_000, "p1", "postgres"),
+              serviceSample("NETWORK_TX_GB", 5, "p1", "postgres"),
+              serviceSample("BACKUP_USAGE_GB", 0, "p1", "postgres"),
+              // A deleted service in a known project
+              serviceSample("CPU_USAGE", 216, "p2", "gone"),
+              // Zero-cost rows are dropped
+              serviceSample("MEMORY_USAGE_GB", 0, "p2", "idle"),
+              serviceSample("NOT_A_MEASUREMENT", 999, "p2", "idle"),
+            ],
+            projects: {
+              edges: [
+                project("p1", "n8n", [
+                  ["worker", "Worker"],
+                  ["postgres", "Postgres"],
+                ]),
+                project("p2", "Home Lab", [["idle", "caddy"]]),
+              ],
+            },
+          },
+        });
+      }
+      return jsonReply({ data: { usage: [], estimatedUsage: [] } });
+    });
+
+    const result = await getRailwayUsage(CONFIG);
+
+    expect(result.services).toEqual([
+      {
+        key: "one:p1:worker",
+        workspaceId: "one",
+        projectId: "p1",
+        projectName: "n8n",
+        serviceId: "worker",
+        serviceName: "Worker",
+        currentUsageDollars: 3,
+        lineItems: [
+          { key: "MEMORY_USAGE_GB", label: "Memory", currentUsageDollars: 1 },
+          { key: "CPU_USAGE", label: "CPU", currentUsageDollars: 2 },
+        ],
+      },
+      expect.objectContaining({
+        serviceName: "Postgres",
+        projectName: "n8n",
+        currentUsageDollars: expect.closeTo(0.75),
+        lineItems: [
+          { key: "NETWORK_TX_GB", label: "Egress", currentUsageDollars: 0.25 },
+          { key: "DISK_USAGE_GB", label: "Volume", currentUsageDollars: expect.closeTo(0.5) },
+        ],
+      }),
+      expect.objectContaining({
+        serviceName: "Deleted service",
+        projectName: "Home Lab",
+        currentUsageDollars: expect.closeTo(0.1),
+      }),
+    ]);
+    expect(result.workspaces[0].services).toEqual(result.services);
+    expect(result.workspaces[0].servicesReason).toBeUndefined();
+
+    const serviceRequest = fetch.mock.calls
+      .map(([, init]) => JSON.parse(String(init?.body)))
+      .find((request) => request.query.includes("RailwayServiceUsage"));
+    expect(serviceRequest.query).toContain("groupBy: [PROJECT_ID, SERVICE_ID]");
+    expect(serviceRequest.variables).toMatchObject({
+      workspaceId: "one",
+      startDate: "2026-09-01T00:00:00.000Z",
+      endDate: "2026-10-01T00:00:00.000Z",
+    });
+  });
+
+  it("keeps billing totals when the service breakdown fails", async () => {
+    stubApi((query) => {
+      if (query.includes("RailwayBillingWorkspaces")) {
+        return jsonReply(discovery([workspace("one", "Personal")]));
+      }
+      if (query.includes("RailwayServiceUsage")) {
+        return jsonReply({ data: null, errors: [{ message: "groupBy unavailable" }] });
+      }
+      return jsonReply({
+        data: {
+          usage: [{ measurement: "CPU_USAGE", value: 4320 }],
+          estimatedUsage: [{ measurement: "CPU_USAGE", estimatedValue: 8640 }],
+        },
+      });
+    });
+
+    const result = await getRailwayUsage(CONFIG);
+
+    expect(result.ok).toBe(true);
+    expect(result.services).toEqual([]);
+    expect(result.lineItems).toHaveLength(1);
+    expect(result.workspaces[0]).toMatchObject({
+      estimatedBillDollars: 14,
+      servicesReason: "groupBy unavailable",
+    });
+    expect(result.workspaces[0].reason).toBeUndefined();
   });
 
   it("keeps a workspace with no attached billing customer as a partial row", async () => {
