@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type {
   RailwayUsageLineItem,
+  RailwayServiceUsage,
   RailwayUsageResult,
   RailwayWorkspaceUsage,
 } from "../../../shared/types";
@@ -97,6 +98,14 @@ function WorkspaceRow({ workspace }: { workspace: RailwayWorkspaceUsage }) {
   );
 }
 
+// Breakdown panels render their own placeholder while the summary widget
+// owns the error message, so a failed fetch isn't repeated three times.
+function placeholder(data: RailwayUsageResult | null): ReactNode {
+  if (!data) return <p className="muted">Loading…</p>;
+  if (!data.ok) return <p className="muted">No Railway data.</p>;
+  return null;
+}
+
 function LineItems({ rows }: { rows: RailwayUsageLineItem[] }) {
   if (rows.length === 0) return <p className="muted">No metered usage this cycle.</p>;
   return (
@@ -114,6 +123,81 @@ function LineItems({ rows }: { rows: RailwayUsageLineItem[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function ServiceRows({
+  rows,
+  workspaces,
+}: {
+  rows: RailwayServiceUsage[];
+  workspaces: RailwayWorkspaceUsage[];
+}) {
+  const reasons = workspaces.filter((workspace) => workspace.servicesReason);
+  const total = rows.reduce((sum, row) => sum + row.currentUsageDollars, 0);
+  const workspaceNames = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
+  const showWorkspace = workspaces.length > 1;
+
+  return (
+    <>
+      {reasons.map((workspace) => (
+        <p className="railway-warning" key={workspace.id}>
+          {showWorkspace ? `${workspace.name}: ` : ""}
+          {workspace.servicesReason}
+        </p>
+      ))}
+      {rows.length === 0 ? (
+        reasons.length === 0 && <p className="muted">No service usage this cycle.</p>
+      ) : (
+        <div className="railway-line-items">
+          <div className="railway-line-item railway-line-item-head">
+            <span>Service</span>
+            <span>Share</span>
+            <span>Current</span>
+          </div>
+          {rows.map((row) => (
+            <div className="railway-line-item" key={row.key}>
+              <span className="railway-service">
+                <span className="railway-service-name">{row.serviceName}</span>
+                <span className="railway-service-meta">
+                  {[
+                    showWorkspace ? workspaceNames.get(row.workspaceId) : undefined,
+                    row.projectName,
+                    ...row.lineItems
+                      .slice()
+                      .sort((a, b) => b.currentUsageDollars - a.currentUsageDollars)
+                      .slice(0, 2)
+                      .map((item) => `${item.label} ${money(item.currentUsageDollars)}`),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              </span>
+              <span>{total > 0 ? `${Math.round((row.currentUsageDollars / total) * 100)}%` : "—"}</span>
+              <span>{money(row.currentUsageDollars)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+export function RailwayServiceBreakdown({ data }: RailwayUsageWidgetProps) {
+  return (
+    <Panel title="By service this period">
+      {placeholder(data) ?? (
+        <ServiceRows rows={data!.services} workspaces={data!.workspaces} />
+      )}
+    </Panel>
+  );
+}
+
+export function RailwayResourceBreakdown({ data }: RailwayUsageWidgetProps) {
+  return (
+    <Panel title="Metered resources">
+      {placeholder(data) ?? <LineItems rows={data!.lineItems} />}
+    </Panel>
   );
 }
 
@@ -150,10 +234,6 @@ export default function RailwayUsageWidget({ data }: RailwayUsageWidgetProps) {
               ))}
             </div>
           )}
-        </div>
-        <div className="railway-section">
-          <h3 className="railway-section-title">Metered resources</h3>
-          <LineItems rows={data.lineItems} />
         </div>
         <p className="railway-footnote">
           Forecast uses Railway CLI rates · refreshed in {Math.round(data.scanMs)}ms
