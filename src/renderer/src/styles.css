@@ -2204,6 +2204,19 @@ body {
   font-size: 11px;
   color: var(--ink-dim);
 }
+.row .ports-tag {
+  flex-shrink: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  background: var(--panel-edge-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
 
 /* Docker: per-service start/stop toggle */
 .docker-toggle {
