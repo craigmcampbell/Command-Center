@@ -13,12 +13,13 @@ export default defineConfig({
     root: "src/renderer",
     build: {
       rollupOptions: {
-        // Two windows, two entries: the dashboard and the frameless
-        // quick-capture panel. Named inputs (rather than a bare string) so
+        // Three windows, three entries: the dashboard and the two frameless
+        // panels (quick capture, quick assistant). Named inputs (rather than a bare string) so
         // each emits its own html next to the other in out/renderer.
         input: {
           index: "src/renderer/index.html",
           capture: "src/renderer/capture.html",
+          assistantQuick: "src/renderer/assistant-quick.html",
         },
       },
     },

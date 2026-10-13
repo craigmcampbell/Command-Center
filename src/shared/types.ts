@@ -96,6 +96,33 @@ export interface FirecrawlScalarConfig {
   refreshSeconds?: number;
 }
 
+// OpenRouter settings for the Assistant tab's chat harness. `apiKey` is a
+// regular OpenRouter inference key — NOT the Management key under `openrouter`,
+// which the usage widget uses and which OpenRouter rejects for completions.
+// `model` is any OpenRouter model slug that supports tool calling, e.g.
+// "anthropic/claude-sonnet-4.5"; there is intentionally no default. `memoryPath`
+// optionally points the memory file somewhere durable like an Obsidian vault
+// (blank = userData/assistant-memory.md). See services/assistant.ts.
+export interface AssistantScalarConfig {
+  apiKey?: string;
+  model?: string;
+  memoryPath?: string;
+  // Extra standing instructions appended to the built-in system prompt.
+  systemPrompt?: string;
+  // Have the model write a short title after a chat's first reply. Unset means
+  // on; only an explicit false turns it off.
+  autoTitle?: boolean;
+  // Ask the user before EVERY memory write. Unset means yes; only an explicit
+  // false relaxes it to "only after third-party text has been read".
+  askBeforeRemember?: boolean;
+  // Model slug for title requests. Blank means the main model; a cheap one is
+  // plenty for a 5-word title.
+  titleModel?: string;
+  // Global hotkey for the quick panel. Unset means the default combo; an empty
+  // string means the user turned the hotkey off.
+  quickHotkey?: string;
+}
+
 // Railway account and workspace tokens both use the Bearer header. The
 // persisted field keeps its original name for settings compatibility.
 export interface RailwayScalarConfig {
@@ -152,6 +179,129 @@ export interface TabConfig {
   sortOrder: number;
 }
 
+// One tool the assistant ran while producing a reply — shown as a chip, and in
+// the expandable tool log, so a lookup is never invisible. `ok: false` means the
+// tool reported an error. The same fields come out of a live reply and out of a
+// reopened chat (both are built by `describeToolCall`), so the two never differ.
+export interface AssistantToolCall {
+  name: string;
+  ok: boolean;
+  // The user said no to the confirmation card. Implies `ok: false`.
+  declined?: boolean;
+  // Compact "key: value" summary of what the model asked for.
+  args?: string;
+  // The result as the model saw it, truncated — or the error message when it failed.
+  result?: string;
+}
+
+// Pushed while a request is running so the UI can show what the assistant is
+// doing right now. Carries no result: that arrives with the finished reply.
+export interface AssistantToolEvent {
+  requestId: string;
+  // The provider's id for this call; unique within a request.
+  callId: string;
+  name: string;
+  phase: "start" | "end";
+  args?: string;
+  // Only on "end".
+  ok?: boolean;
+  declined?: boolean;
+}
+
+export interface AssistantReply {
+  ok: boolean;
+  reason?: string;
+  // The user pressed Stop; `text` is whatever had streamed by then.
+  stopped?: boolean;
+  usage?: AssistantUsage;
+  // True when the failure is fixed in Settings (no key, no model, key rejected),
+  // so the UI can offer a way straight there.
+  needsSetup?: boolean;
+  // Opaque id for the main-process-held history. The renderer never sees the
+  // raw message blocks: thinking blocks are only valid in the conversation
+  // that produced them, so history must stay append-only and server-side.
+  conversationId: string;
+  text: string;
+  toolCalls: AssistantToolCall[];
+  // Facts the model saved to memory during this reply.
+  remembered: string[];
+}
+
+// One row of the Assistant's chat history list.
+export interface AssistantChatSummary {
+  id: string;
+  title: string;
+  pinned: boolean;
+  updatedAt: number; // epoch ms
+}
+
+// Tokens and cost for one reply, or running totals for a whole chat.
+// `costUsd` is null when the provider never reported one — distinct from 0.
+export interface AssistantUsage {
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number | null;
+}
+
+// One turn of a stored chat, rebuilt for display. An assistant item is the
+// whole reply to one user message (every model step, plus its tool chips).
+export interface AssistantTranscriptItem {
+  role: "user" | "assistant";
+  text: string;
+  toolCalls: AssistantToolCall[];
+  remembered: string[];
+}
+
+export interface AssistantChatResult {
+  ok: boolean;
+  reason?: string;
+  id: string;
+  title: string;
+  pinned: boolean;
+  usage: AssistantUsage;
+  items: AssistantTranscriptItem[];
+}
+
+// The model wants to do something that changes data. Main holds the tool call
+// until the user answers (`assistant.approve`); `summary` is built by main from
+// authoritative data, never from the model's own description of what it is
+// doing, so the card can't be made to misdescribe the action.
+export interface AssistantApproval {
+  requestId: string;
+  approvalId: string;
+  tool: string;
+  summary: string;
+}
+
+// A chunk of streamed reply text, pushed from main while `assistant:ask` is
+// still in flight. `requestId` is chosen by the renderer per question.
+export interface AssistantDelta {
+  requestId: string;
+  text: string;
+}
+
+export interface AssistantMemoryResult {
+  ok: boolean;
+  reason?: string;
+  content: string;
+  path: string;
+}
+
+// The model's PROPOSED tidy of the memory file. Nothing is written until the
+// user applies it; `proposed` is the whole new file.
+export interface AssistantMemoryTidyResult {
+  ok: boolean;
+  reason?: string;
+  needsSetup?: boolean;
+  // False when the model found nothing to change.
+  changed: boolean;
+  // The file exactly as the model saw it. The diff is against this, and applying
+  // is refused if the file no longer matches (it changed while tidying).
+  current: string;
+  proposed: string;
+  usage?: AssistantUsage;
+}
+
 export interface AppConfig {
   grimoire: GrimoireConfig;
   docker: DockerSettings;
@@ -170,6 +320,7 @@ export interface AppConfig {
   openrouter?: OpenRouterScalarConfig;
   openai?: OpenAIScalarConfig;
   firecrawl?: FirecrawlScalarConfig;
+  assistant?: AssistantScalarConfig;
   railway?: RailwayScalarConfig;
   youtubeChannels?: YouTubeChannelConfig[];
   subreddits?: SubredditConfig[];
@@ -762,7 +913,14 @@ export type AppCommand =
   | { type: "openTab"; tab: string }
   // Quick capture wrote to `target` behind the UI's back; the owning widget
   // must drop its stale buffer and reload rather than save over it.
-  | { type: "captured"; target: CaptureTarget };
+  | { type: "captured"; target: CaptureTarget }
+  // The quick assistant panel was just summoned; it starts a fresh chat unless
+  // a reply is still in flight.
+  | { type: "assistantPanelShown" }
+  // "Open in dashboard" from the quick panel: show the Assistant tab on that chat.
+  | { type: "openAssistantChat"; chatId: string | null; openSettings?: boolean }
+  // A chat's AI-written title just replaced its placeholder; reload the history list.
+  | { type: "assistantChatTitled"; chatId: string };
 
 // Working-tree state for one configured repo with a localPath. Each row
 // carries its own `ok`/`reason` — a bad path or a directory that isn't a repo
@@ -1635,6 +1793,39 @@ export interface CommandCenterApi {
   firecrawl: {
     usage: () => Promise<FirecrawlUsageResult>;
   };
+  assistant: {
+    ask: (
+      conversationId: string | null,
+      message: string,
+      requestId: string
+    ) => Promise<AssistantReply>;
+    // Re-runs the last question in a chat, replacing its answer.
+    regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
+    stop: (requestId: string) => Promise<void>;
+    // Answers an approval card; unanswered cards time out as denied.
+    approve: (approvalId: string, allow: boolean) => Promise<void>;
+    onDelta: (cb: (delta: AssistantDelta) => void) => () => void;
+    onApproval: (cb: (approval: AssistantApproval) => void) => () => void;
+    // Live tool activity for a running request (start/end of each call).
+    onTool: (cb: (event: AssistantToolEvent) => void) => () => void;
+    chats: {
+      list: (query?: string) => Promise<AssistantChatSummary[]>;
+      open: (id: string) => Promise<AssistantChatResult>;
+      remove: (id: string) => Promise<{ ok: boolean }>;
+      rename: (id: string, title: string) => Promise<{ ok: boolean }>;
+      pin: (id: string, pinned: boolean) => Promise<{ ok: boolean }>;
+    };
+    hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
+    hidePanel: () => Promise<void>;
+    // `openSettings` also opens Settings → Assistant (for a setup error).
+    openInDashboard: (chatId: string | null, openSettings?: boolean) => Promise<void>;
+    memory: {
+      get: () => Promise<AssistantMemoryResult>;
+      save: (content: string) => Promise<AssistantMemoryResult>;
+      // Asks the model to propose a tidier file. Writes nothing.
+      tidy: () => Promise<AssistantMemoryTidyResult>;
+    };
+  };
   railway: {
     usage: () => Promise<RailwayUsageResult>;
   };
@@ -1790,6 +1981,9 @@ export interface CommandCenterApi {
     };
     firecrawl: {
       update: (values: FirecrawlScalarConfig) => Promise<FirecrawlScalarConfig>;
+    };
+    assistant: {
+      update: (values: AssistantScalarConfig) => Promise<AssistantScalarConfig>;
     };
     railway: {
       update: (values: RailwayScalarConfig) => Promise<RailwayScalarConfig>;

@@ -25,6 +25,17 @@ function timeStamp(): string {
   return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
+// A captured entry is one markdown list item. A single line is `- 14:05 text`;
+// a multi-line capture (a pasted paragraph, or an Assistant answer with lists
+// and code fences) indents every following line by two spaces so it stays
+// INSIDE that list item instead of spilling out as stray top-level markdown.
+// Blank lines stay empty (no trailing whitespace); CommonMark continues the
+// item across them as long as the next paragraph is indented.
+export function formatCaptureEntry(timeStamp: string, text: string): string {
+  const [first, ...rest] = text.replace(/\r\n?/g, "\n").split("\n");
+  return [`- ${timeStamp} ${first}`, ...rest.map((line) => (line.trim() ? `  ${line}` : ""))].join("\n");
+}
+
 // Keeps exactly one blank-line gap when there's existing content, and no
 // leading newline when there isn't — so capturing into an empty note doesn't
 // start the file with whitespace.
@@ -50,11 +61,11 @@ function captureToDailyNote(text: string): ActionResult {
   // separately, so capture is the thing that creates it — from the template,
   // with the captured line appended beneath.
   const existing = current.missing ? current.templateContent ?? "" : current.content;
-  return saveDailyNote(settings, date, appendLine(existing, `- ${timeStamp()} ${text}`));
+  return saveDailyNote(settings, date, appendLine(existing, formatCaptureEntry(timeStamp(), text)));
 }
 
 function captureToScratchpad(text: string): ActionResult {
-  saveScratchpad(appendLine(getScratchpad(), `- ${timeStamp()} ${text}`));
+  saveScratchpad(appendLine(getScratchpad(), formatCaptureEntry(timeStamp(), text)));
   return { ok: true };
 }
 

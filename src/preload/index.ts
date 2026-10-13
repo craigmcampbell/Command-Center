@@ -25,6 +25,10 @@ import type {
   OpenAIPeriod,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantScalarConfig,
+  AssistantDelta,
+  AssistantApproval,
+  AssistantToolEvent,
   RailwayScalarConfig,
   ProcessConfig,
   ProjectInput,
@@ -215,6 +219,56 @@ const api: CommandCenterApi = {
     usage: () => ipcRenderer.invoke("firecrawl:usage"),
   },
 
+  assistant: {
+    ask: (conversationId: string | null, message: string, requestId: string) =>
+      ipcRenderer.invoke("assistant:ask", conversationId, message, requestId),
+    regenerate: (conversationId: string, requestId: string) =>
+      ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
+    stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),
+    approve: (approvalId: string, allow: boolean) =>
+      ipcRenderer.invoke("assistant:approve", approvalId, allow),
+    // Same shape as onCommand: the raw IpcRendererEvent (which carries
+    // `sender`) never crosses the bridge, and the unsubscribe is returned.
+    onDelta: (cb: (delta: AssistantDelta) => void) => {
+      const handler = (_event: IpcRendererEvent, delta: AssistantDelta) => cb(delta);
+      ipcRenderer.on("assistant:delta", handler);
+      return () => {
+        ipcRenderer.removeListener("assistant:delta", handler);
+      };
+    },
+    onApproval: (cb: (approval: AssistantApproval) => void) => {
+      const handler = (_event: IpcRendererEvent, approval: AssistantApproval) => cb(approval);
+      ipcRenderer.on("assistant:approval", handler);
+      return () => {
+        ipcRenderer.removeListener("assistant:approval", handler);
+      };
+    },
+    onTool: (cb: (event: AssistantToolEvent) => void) => {
+      const handler = (_event: IpcRendererEvent, toolEvent: AssistantToolEvent) => cb(toolEvent);
+      ipcRenderer.on("assistant:tool", handler);
+      return () => {
+        ipcRenderer.removeListener("assistant:tool", handler);
+      };
+    },
+    chats: {
+      list: (query?: string) => ipcRenderer.invoke("assistant:chats:list", query),
+      open: (id: string) => ipcRenderer.invoke("assistant:chats:open", id),
+      remove: (id: string) => ipcRenderer.invoke("assistant:chats:remove", id),
+      rename: (id: string, title: string) =>
+        ipcRenderer.invoke("assistant:chats:rename", id, title),
+      pin: (id: string, pinned: boolean) => ipcRenderer.invoke("assistant:chats:pin", id, pinned),
+    },
+    hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
+    hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),
+    openInDashboard: (chatId: string | null, openSettings?: boolean) =>
+      ipcRenderer.invoke("assistant:openInDashboard", chatId, openSettings === true),
+    memory: {
+      get: () => ipcRenderer.invoke("assistant:memory:get"),
+      save: (content: string) => ipcRenderer.invoke("assistant:memory:save", content),
+      tidy: () => ipcRenderer.invoke("assistant:memory:tidy"),
+    },
+  },
+
   railway: {
     usage: () => ipcRenderer.invoke("railway:usage"),
   },
@@ -401,6 +455,10 @@ const api: CommandCenterApi = {
     firecrawl: {
       update: (values: FirecrawlScalarConfig) =>
         ipcRenderer.invoke("settings:firecrawl:update", values),
+    },
+    assistant: {
+      update: (values: AssistantScalarConfig) =>
+        ipcRenderer.invoke("settings:assistant:update", values),
     },
     railway: {
       update: (values: RailwayScalarConfig) =>

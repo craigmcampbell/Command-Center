@@ -159,6 +159,111 @@ export function buildVaultIndex(vaultLabel: string): Promise<VaultNoteIndexResul
   return result;
 }
 
+// ---- content search (for the Assistant's search_notes tool) ----
+
+export interface NoteSearchHit {
+  path: string;
+  // True when the terms matched the file's path/name rather than its body; those
+  // rank first and carry no snippet (the body wasn't read).
+  nameMatch: boolean;
+  snippet: string;
+}
+
+export interface NoteSearchResult {
+  ok: boolean;
+  reason?: string;
+  hits: NoteSearchHit[];
+  // Stopped early on the time or size budget, so a miss isn't proof of absence.
+  truncated: boolean;
+}
+
+const SEARCH_MAX_FILES = 6000;
+const SEARCH_MAX_FILE_CHARS = 512_000;
+const SEARCH_DEADLINE_MS = 4000;
+const SEARCH_CONCURRENCY = 16;
+const SNIPPET_RADIUS = 100;
+
+function snippetAround(content: string, terms: string[]): string {
+  const lower = content.toLowerCase();
+  let at = -1;
+  for (const term of terms) {
+    const found = lower.indexOf(term);
+    if (found >= 0 && (at < 0 || found < at)) at = found;
+  }
+  if (at < 0) return "";
+  const start = Math.max(0, at - SNIPPET_RADIUS);
+  const end = Math.min(content.length, at + SNIPPET_RADIUS);
+  const flat = content.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${flat}${end < content.length ? "…" : ""}`;
+}
+
+// Every whitespace-separated term must appear (AND), case-insensitively, in the
+// file's path or in its body. Walks the same cached index the wikilink resolver
+// uses, so dot-folders are skipped and every path goes through resolveInVault.
+// Bounded on file count, file size and wall-clock time: a vault is the user's
+// whole second brain, and a search tool must never be able to wedge the app.
+export async function searchNotes(
+  vaultLabel: string,
+  query: string,
+  limit = 15
+): Promise<NoteSearchResult> {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+  if (terms.length === 0) return { ok: false, reason: "Empty search", hits: [], truncated: false };
+
+  const index = await buildVaultIndex(vaultLabel);
+  if (!index.ok) return { ok: false, reason: index.reason, hits: [], truncated: false };
+
+  let truncated = index.entries.length > SEARCH_MAX_FILES;
+  const entries = index.entries.slice(0, SEARCH_MAX_FILES);
+  const byName: NoteSearchHit[] = [];
+  const byBody: NoteSearchHit[] = [];
+  const rest: { path: string }[] = [];
+
+  for (const entry of entries) {
+    const lowerPath = entry.path.toLowerCase();
+    if (terms.every((t) => lowerPath.includes(t))) {
+      byName.push({ path: entry.path, nameMatch: true, snippet: "" });
+    } else {
+      rest.push(entry);
+    }
+  }
+
+  const deadline = Date.now() + SEARCH_DEADLINE_MS;
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < rest.length && byName.length + byBody.length < limit) {
+      if (Date.now() > deadline) {
+        truncated = true;
+        return;
+      }
+      const entry = rest[cursor++];
+      const resolved = resolveInVault(vaultLabel, entry.path);
+      if (!resolved.ok) continue;
+      let content: string;
+      try {
+        content = await fs.promises.readFile(resolved.absPath, "utf8");
+      } catch {
+        continue;
+      }
+      if (content.length > SEARCH_MAX_FILE_CHARS) continue;
+      const lower = content.toLowerCase();
+      if (terms.every((t) => lower.includes(t))) {
+        byBody.push({ path: entry.path, nameMatch: false, snippet: snippetAround(content, terms) });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: SEARCH_CONCURRENCY }, worker));
+  // Workers also stop once the limit is reached, leaving files unread; a miss
+  // after that proves nothing, so say so.
+  if (cursor < rest.length) truncated = true;
+
+  // Workers finish in arbitrary order; sort so results are deterministic.
+  byBody.sort((a, b) => a.path.localeCompare(b.path));
+  const hits = [...byName, ...byBody].slice(0, limit);
+  if (byName.length + byBody.length > limit) truncated = true;
+  return { ok: true, hits, truncated };
+}
+
 function mtimeOf(absPath: string): number | null {
   try {
     return fs.statSync(absPath).mtimeMs;

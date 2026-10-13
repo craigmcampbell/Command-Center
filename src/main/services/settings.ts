@@ -32,6 +32,7 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantScalarConfig,
   RailwayScalarConfig,
   StatsSettings,
   SubredditConfig,
@@ -60,6 +61,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "stats", label: "Stats" },
   { id: "social", label: "Social" },
   { id: "projects", label: "Projects" },
+  { id: "assistant", label: "Assistant" },
 ];
 
 export function initSettings(): void {
@@ -371,6 +373,13 @@ export function getFirecrawlSettings(): FirecrawlScalarConfig {
 }
 export function updateFirecrawlSettings(values: FirecrawlScalarConfig): FirecrawlScalarConfig {
   setRaw("firecrawl", values);
+  return values;
+}
+export function getAssistantSettings(): AssistantScalarConfig {
+  return getRaw<AssistantScalarConfig>("assistant") ?? {};
+}
+export function updateAssistantSettings(values: AssistantScalarConfig): AssistantScalarConfig {
+  setRaw("assistant", values);
   return values;
 }
 export function getRailwaySettings(): RailwayScalarConfig {
@@ -802,6 +811,7 @@ export function getAllSettings(): AppConfig {
     openrouter: getOpenRouterSettings(),
     openai: getOpenAISettings(),
     firecrawl: getFirecrawlSettings(),
+    assistant: getAssistantSettings(),
     railway: getRailwaySettings(),
     youtubeChannels: listYouTubeChannelSettings(),
     subreddits: listSubredditSettings(),
@@ -885,6 +895,7 @@ export function seedSettingsFromLegacyConfig(legacy: Record<string, unknown> | n
   seedRawIfEmpty("openrouter", {});
   seedRawIfEmpty("openai", {});
   seedRawIfEmpty("firecrawl", {});
+  seedRawIfEmpty("assistant", {});
   seedRawIfEmpty("railway", {});
   seedRawIfEmpty("spotify", { enabled: true });
 
