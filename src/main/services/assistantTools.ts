@@ -21,20 +21,28 @@
 import { ASSISTANT_MUTATING_TOOLS } from "../../shared/assistant";
 import { getDockerContainers } from "./docker";
 import { getEventsForDay } from "./googleCalendar";
-import { getGitHubStatus } from "./github";
+import { getGitHubStatus, getOpenPullRequests } from "./github";
 import { getGitStatuses } from "./git";
 import { readNoteFile, searchNotes } from "./notes";
 import {
   getAssistantSettings,
   getGithubScalarSettings,
   getGoogleCalendarSettings,
+  getReaderSettings,
   getTodoistSettings,
   getYnabSettings,
   listGithubRepoSettings,
   listVaultSettings,
 } from "./settings";
 import { completeTask, createTask, getDueTasks, setTaskDueDate } from "./todoist";
-import { getUnapprovedTransactions } from "./ynab";
+import { saveLink } from "./reader";
+import { findCachedFeedItem, listReaderFeed, moveFeedItemToInbox } from "./readerFeed";
+import {
+  approveTransaction,
+  getCategories,
+  getUnapprovedTransactions,
+  setTransactionCategory,
+} from "./ynab";
 import { appendFact, findMemoryLines, removeMemoryLines } from "./assistantMemory";
 
 export interface ToolOutcome {
@@ -94,10 +102,82 @@ export const TOOL_DEFS: ToolDef[] = [
     parameters: NO_ARGS,
   },
   {
+    name: "github_list_prs",
+    description:
+      "List ALL open pull requests (up to 50 per repo, newest activity first) with number, title, author, draft flag and last-updated time. Omit repo for every tracked repo, or pass a tracked repo's label or owner/name. Read-only.",
+    parameters: {
+      type: "object",
+      properties: {
+        repo: { type: "string", description: "Tracked repo label or owner/name. Omit for all." },
+      },
+    },
+  },
+  {
     name: "ynab_unapproved",
     description:
-      "The user's unapproved YNAB transactions (date, amount, payee, account, category, memo). Read-only.",
+      "The user's unapproved YNAB transactions (id, date, amount, payee, account, category, memo). Negative amounts are spending. Use the id with approve_transaction or categorize_transaction.",
     parameters: NO_ARGS,
+  },
+  {
+    name: "ynab_categories",
+    description:
+      "The YNAB categories a transaction can be assigned to, with their group. Use a name from here with categorize_transaction.",
+    parameters: NO_ARGS,
+  },
+  {
+    name: "approve_transaction",
+    description:
+      "Approve one unapproved YNAB transaction. The user is asked to confirm first and sees the real payee, amount and date. Get the id from ynab_unapproved.",
+    parameters: {
+      type: "object",
+      properties: { transaction_id: { type: "string" } },
+      required: ["transaction_id"],
+    },
+  },
+  {
+    name: "categorize_transaction",
+    description:
+      "Set the category of one unapproved YNAB transaction. The user is asked to confirm first. Get the id from ynab_unapproved and the category name from ynab_categories. Does not approve it.",
+    parameters: {
+      type: "object",
+      properties: {
+        transaction_id: { type: "string" },
+        category: { type: "string", description: "Exact category name, e.g. Groceries." },
+      },
+      required: ["transaction_id", "category"],
+    },
+  },
+  {
+    name: "reader_feed_unread",
+    description:
+      "Unread items in the user's Readwise Reader RSS feed (newest first, 15 per page): id, title, site, author and a short summary. Use the id with reader_move_to_inbox.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: { type: "number", description: "Zero-based page. Defaults to 0." },
+        site: { type: "string", description: "Only items from this exact site name." },
+      },
+    },
+  },
+  {
+    name: "reader_save_link",
+    description:
+      "Save a web page to the user's Readwise Reader inbox. The user is asked to confirm first and sees the exact URL.",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string", description: "A full http(s) URL." } },
+      required: ["url"],
+    },
+  },
+  {
+    name: "reader_move_to_inbox",
+    description:
+      "Move an item from the Reader RSS feed into the Reader inbox. The user is asked to confirm first. The id must come from reader_feed_unread in this chat.",
+    parameters: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
   },
   {
     name: "search_notes",
@@ -211,6 +291,7 @@ export function hasUntrustedContext(calledTools: Iterable<string>): boolean {
 const MAX_TASKS_RETURNED = 60;
 const MAX_NOTE_CHARS = 20_000;
 const MAX_TRANSACTIONS_RETURNED = 50;
+const MAX_FEED_SUMMARY_CHARS = 200;
 
 const err = (reason: string): ToolOutcome => ({
   content: JSON.stringify({ error: reason }),
@@ -241,6 +322,27 @@ async function findTask(taskId: string) {
 }
 
 const ymd = /^\d{4}-\d{2}-\d{2}$/;
+
+const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+async function findUnapprovedTransaction(id: string) {
+  const result = await getUnapprovedTransactions(getYnabSettings());
+  if (!result.ok) return { ok: false as const, reason: result.reason ?? "YNAB unavailable" };
+  const txn = result.transactions.find((t) => t.id === id);
+  if (!txn) return { ok: false as const, reason: "No unapproved transaction has that id" };
+  return { ok: true as const, txn };
+}
+
+// "Corner Store −$12.50 on 2026-10-12 (Checking)" — built from YNAB's own
+// record of the transaction, never from anything the model said about it.
+function describeTransaction(t: {
+  payeeName: string | null;
+  amount: number;
+  date: string;
+  accountName: string;
+}): string {
+  return `${oneLine(t.payeeName ?? "Unknown payee", 60)} ${money(t.amount)} on ${t.date} (${oneLine(t.accountName, 40)})`;
+}
 
 // ---- the dispatcher --------------------------------------------------------
 
@@ -401,6 +503,7 @@ export async function prepareTool(
             return okJson({
               total: result.transactions.length,
               transactions: result.transactions.slice(0, MAX_TRANSACTIONS_RETURNED).map((t) => ({
+                id: t.id,
                 date: t.date,
                 amount: t.amount,
                 payee: t.payeeName,
@@ -411,6 +514,148 @@ export async function prepareTool(
             });
           },
         };
+
+      case "github_list_prs": {
+        const repo = str(args.repo) ?? undefined;
+        return {
+          run: async () => {
+            const result = await getOpenPullRequests(
+              { ...getGithubScalarSettings(), repos: listGithubRepoSettings() },
+              repo
+            );
+            if (!result.ok) return err(result.reason ?? "GitHub unavailable");
+            return okJson({
+              repos: result.repos.map((r) => ({
+                repo: r.repo,
+                ok: r.ok,
+                reason: r.reason,
+                prs: r.prs.map((p) => ({
+                  number: p.number,
+                  title: p.title,
+                  author: p.author,
+                  draft: p.draft,
+                  updatedAt: p.updatedAt,
+                  url: p.url,
+                })),
+              })),
+            });
+          },
+        };
+      }
+
+      case "ynab_categories":
+        return {
+          run: async () => {
+            const result = await getCategories(getYnabSettings());
+            if (!result.ok) return err(result.reason ?? "YNAB unavailable");
+            return okJson({
+              categories: result.categories.map((c) => ({ name: c.name, group: c.groupName })),
+            });
+          },
+        };
+
+      case "approve_transaction": {
+        const id = str(args.transaction_id);
+        if (!id) return fail("transaction_id is required");
+        const found = await findUnapprovedTransaction(id);
+        if (!found.ok) return fail(found.reason);
+        return {
+          approval: { summary: `Approve ${describeTransaction(found.txn)}` },
+          run: async () => {
+            const result = await approveTransaction(getYnabSettings(), id);
+            return result.ok ? okJson({ approved: true }) : err(result.reason ?? "YNAB failed");
+          },
+        };
+      }
+
+      case "categorize_transaction": {
+        const id = str(args.transaction_id);
+        const wanted = str(args.category)?.trim();
+        if (!id) return fail("transaction_id is required");
+        if (!wanted) return fail("category is required");
+        const found = await findUnapprovedTransaction(id);
+        if (!found.ok) return fail(found.reason);
+        const categories = await getCategories(getYnabSettings());
+        if (!categories.ok) return fail(categories.reason ?? "YNAB unavailable");
+        const needle = wanted.toLowerCase();
+        const matches = categories.categories.filter((c) => c.name.toLowerCase() === needle);
+        if (matches.length === 0) return fail(`No YNAB category named “${oneLine(wanted, 60)}”`);
+        if (matches.length > 1) {
+          return fail(
+            `“${oneLine(wanted, 60)}” matches several categories (${matches.map((c) => c.groupName).join(", ")})`
+          );
+        }
+        const category = matches[0];
+        return {
+          approval: {
+            summary: `Categorise ${describeTransaction(found.txn)} as “${category.groupName}: ${category.name}”${found.txn.categoryName ? ` (now ${found.txn.categoryName})` : ""}`,
+          },
+          run: async () => {
+            const result = await setTransactionCategory(getYnabSettings(), id, category.id);
+            return result.ok ? okJson({ categorised: true }) : err(result.reason ?? "YNAB failed");
+          },
+        };
+      }
+
+      case "reader_feed_unread": {
+        const page = typeof args.page === "number" && args.page >= 0 ? Math.floor(args.page) : 0;
+        const site = str(args.site)?.trim() || null;
+        return {
+          run: async () => {
+            const result = await listReaderFeed(getReaderSettings(), page, site);
+            if (!result.ok) return err(result.reason ?? "Reader unavailable");
+            return okJson({
+              page: result.page,
+              hasNext: result.hasNext,
+              items: result.items.map((i) => ({
+                id: i.id,
+                title: i.title,
+                site: i.siteName,
+                author: i.author,
+                publishedDate: i.publishedDate,
+                summary: i.summary?.slice(0, MAX_FEED_SUMMARY_CHARS),
+              })),
+            });
+          },
+        };
+      }
+
+      case "reader_save_link": {
+        const raw = str(args.url)?.trim();
+        if (!raw) return fail("url is required");
+        let url: URL;
+        try {
+          url = new URL(raw);
+        } catch {
+          return fail("url is not a valid URL");
+        }
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          return fail("Only http and https links can be saved");
+        }
+        return {
+          approval: { summary: `Save to Reader: ${oneLine(url.href, 300)}` },
+          run: async () => {
+            const result = await saveLink(getReaderSettings(), url.href);
+            return result.ok ? okJson({ saved: true }) : err(result.reason ?? "Reader failed");
+          },
+        };
+      }
+
+      case "reader_move_to_inbox": {
+        const id = str(args.id);
+        if (!id) return fail("id is required");
+        const item = findCachedFeedItem(id);
+        if (!item) return fail("That item isn't in the loaded feed — call reader_feed_unread first");
+        return {
+          approval: {
+            summary: `Move “${oneLine(item.title)}”${item.siteName ? ` (${oneLine(item.siteName, 40)})` : ""} to the Reader inbox`,
+          },
+          run: async () => {
+            const result = await moveFeedItemToInbox(getReaderSettings(), id, 0);
+            return result.ok ? okJson({ moved: true }) : err(result.reason ?? "Reader failed");
+          },
+        };
+      }
 
       case "search_notes": {
         const query = str(args.query);

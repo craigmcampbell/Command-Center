@@ -17,6 +17,14 @@
 // persist to disk in the partition — so the warm-up happens on first run and
 // then only when the session lapses. No account, no credentials, no user setup.
 //
+// UPDATE (2026-10-23): Reddit now answers `/r/<sub>/new.json` with the same 403
+// block page even INSIDE the warmed Chromium session (verified: an in-page
+// `fetch()` after a normal page load gets it too), while `/r/<sub>/new.rss`
+// still returns 200 Atom to that session. So this reads the Atom feed. What
+// that costs: no score, no comment count, no flair and no NSFW flag — the feed
+// simply doesn't carry them — so those fields are optional on RedditPost and the
+// widget leaves them out rather than showing a made-up 0.
+//
 // The tradeoff, accepted knowingly: this is an unofficial path and Reddit can
 // change it. If it ever breaks, the OAuth `client_credentials` grant (a
 // "script" app's id + secret) is the stable documented alternative — it was
@@ -111,56 +119,83 @@ function ensureWarm(): Promise<void> {
   return warming;
 }
 
-// Reddit's wire shape, kept local so it never leaks into shared/types.ts.
-interface RawPost {
-  id: string;
-  title: string;
-  author: string;
-  subreddit: string;
-  permalink: string;
-  url: string;
-  domain: string;
-  score: number;
-  num_comments: number;
-  created_utc: number;
-  thumbnail: string;
-  link_flair_text: string | null;
-  is_self: boolean;
-  over_18: boolean;
+// ---- Atom feed parsing ------------------------------------------------------
+//
+// A feed-specific extractor, not an XML parser — same call as youtube.ts: one
+// machine-generated document shape doesn't earn a dependency. Anything that
+// isn't that shape (notably Reddit's HTML block page) yields no entries rather
+// than throwing; fetchSubreddit turns "not a feed at all" into an error.
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
-// `thumbnail` carries sentinels ("self", "default", "nsfw", "spoiler", "")
-// rather than a URL for posts without a preview image.
-function thumbnailOf(raw: string | undefined): string | undefined {
-  return raw && /^https?:\/\//i.test(raw) ? raw : undefined;
+function tagText(xml: string, tag: string): string | undefined {
+  const m = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`));
+  return m ? decodeEntities(m[1]).trim() : undefined;
 }
 
-function toRedditPost(raw: RawPost): RedditPost {
-  const permalink = `${ROOT}${raw.permalink}`;
-  return {
-    id: raw.id,
-    title: raw.title,
-    author: raw.author,
-    subreddit: raw.subreddit,
-    permalink,
-    // A self post's `url` is its own permalink already, but normalize it so the
-    // widget never has to branch on isSelf to decide where a click goes.
-    url: raw.is_self ? permalink : raw.url,
-    domain: raw.domain ?? "",
-    score: raw.score ?? 0,
-    numComments: raw.num_comments ?? 0,
-    createdUtc: raw.created_utc ?? 0,
-    thumbnailUrl: thumbnailOf(raw.thumbnail),
-    flair: raw.link_flair_text || undefined,
-    isSelf: Boolean(raw.is_self),
-    over18: Boolean(raw.over_18),
-  };
+function attr(xml: string, tag: string, name: string): string | undefined {
+  const m = xml.match(new RegExp(`<${tag}\\s[^>]*?${name}="([^"]*)"`));
+  return m ? decodeEntities(m[1]) : undefined;
+}
+
+export function parseRedditFeed(xml: string, subreddit: string): RedditPost[] {
+  const posts: RedditPost[] = [];
+  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const entry = match[1];
+    const fullname = tagText(entry, "id");
+    const title = tagText(entry, "title");
+    const permalink = attr(entry, "link", "href");
+    // Only comment threads: anything else in the feed isn't a post.
+    if (!fullname?.startsWith("t3_") || !title || !permalink?.startsWith(ROOT + "/")) continue;
+
+    // The body is HTML escaped into the XML. For a link post it holds a
+    // "[link]" anchor pointing at the target; for a self post that anchor
+    // points back at the thread itself.
+    const html = tagText(entry, "content") ?? "";
+    const target = html.match(/<a href="([^"]+)">\[link\]<\/a>/)?.[1];
+    const url = target ? decodeEntities(target) : permalink;
+    const isSelf = url === permalink;
+
+    const published = Date.parse(tagText(entry, "published") ?? tagText(entry, "updated") ?? "");
+    let domain = "";
+    if (!isSelf) {
+      try {
+        domain = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        // an unparseable target just has no domain label
+      }
+    }
+    const thumbnail = attr(entry, "media:thumbnail", "url");
+
+    posts.push({
+      id: fullname.slice(3),
+      title,
+      author: (tagText(entry.match(/<author>[\s\S]*?<\/author>/)?.[0] ?? "", "name") ?? "unknown").replace(/^\/?u\//, ""),
+      subreddit,
+      permalink,
+      url,
+      domain,
+      createdUtc: Number.isFinite(published) ? Math.floor(published / 1000) : 0,
+      thumbnailUrl: thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : undefined,
+      isSelf,
+      over18: false,
+    });
+  }
+  return posts;
 }
 
 function listingUrl(subreddit: string): string {
-  const url = new URL(`${ROOT}/r/${subreddit}/new.json`);
+  const url = new URL(`${ROOT}/r/${subreddit}/new.rss`);
   url.searchParams.set("limit", String(POSTS_PER_SUBREDDIT));
-  url.searchParams.set("raw_json", "1"); // stops Reddit HTML-escaping titles
   return url.toString();
 }
 
@@ -173,7 +208,7 @@ async function fetchSubreddit(subreddit: string): Promise<RedditPost[]> {
 
   const request = () =>
     getSession().fetch(listingUrl(name), {
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+      headers: { Accept: "application/atom+xml, application/xml;q=0.9", "User-Agent": USER_AGENT },
     });
 
   let res = await request();
@@ -189,8 +224,10 @@ async function fetchSubreddit(subreddit: string): Promise<RedditPost[]> {
     if (res.status === 429) throw new Error("Rate limited by Reddit");
     throw new Error(`Reddit returned ${res.status}`);
   }
-  const body = (await res.json()) as { data?: { children?: { data: RawPost }[] } };
-  return (body.data?.children ?? []).map((child) => toRedditPost(child.data));
+  const xml = await res.text();
+  // A 200 that isn't a feed is the block page wearing a success status.
+  if (!xml.includes("<feed")) throw new Error("Reddit returned an unexpected response");
+  return parseRedditFeed(xml, name);
 }
 
 export async function listRedditPosts(

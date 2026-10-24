@@ -1,4 +1,3 @@
-import { fetchWithTimeout } from "./http";
 // YNAB REST API (https://api.ynab.com/v1): account balances, unapproved
 // transactions, and this month's scheduled transactions. Fails soft, like the
 // other services — every exported function returns { ok, reason?, ... }
@@ -14,59 +13,24 @@ import type {
   YnabScheduledResult,
   YnabUnapprovedResult,
 } from "../../shared/types";
-import type { ActionResult } from "../../shared/types";
-
-const API_ROOT = "https://api.ynab.com/v1";
-
-function ynabFetch(url: string, token: string, init?: RequestInit): Promise<Response> {
-  return fetchWithTimeout(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
-}
-
-// YNAB reports errors as a JSON body ({ error: { id, name, detail } }) rather
-// than distinct headers, so this has to read the response body, unlike
-// github.ts's header-only rate-limit check.
-async function ynabErrorReason(res: Response): Promise<string> {
-  if (res.status === 401) return "YNAB token rejected";
-  if (res.status === 429) return "Rate limited, try again later";
-  try {
-    const body = await res.json();
-    if (body?.error?.detail) return body.error.detail;
-  } catch {
-    // fall through to the generic message below
-  }
-  return `YNAB request failed (${res.status})`;
-}
+import type {
+  ActionResult,
+  YnabBulkApproveResult,
+  YnabImportResult,
+  YnabSplitPart,
+} from "../../shared/types";
+import { API_ROOT, fetchDelta, ynabErrorReason, ynabFetch } from "./ynabDelta";
 
 function milliunitsToDollars(n: number): number {
   return n / 1000;
 }
 
 export async function getAccounts(config: YnabScalarConfig): Promise<YnabAccountsResult> {
-  const { token, planId } = config;
-  if (!token || !planId) {
-    return { ok: false, reason: "No YNAB token configured", accounts: [] };
-  }
-
-  let res: Response;
-  try {
-    res = await ynabFetch(`${API_ROOT}/plans/${planId}/accounts`, token);
-  } catch {
-    return { ok: false, reason: "Couldn't reach YNAB", accounts: [] };
-  }
-  if (!res.ok) {
-    return { ok: false, reason: await ynabErrorReason(res), accounts: [] };
-  }
+  const res = await fetchDelta(config, "accounts", "accounts");
+  if (!res.ok) return { ok: false, reason: res.reason, accounts: [] };
 
   const hiddenIds = new Set(config.hiddenAccountIds ?? []);
-  const data = await res.json();
-  const accounts = (data.data?.accounts ?? [])
+  const accounts = res.items
     .filter((a: any) => !a.closed)
     .map((a: any) => ({
       id: a.id,
@@ -79,6 +43,9 @@ export async function getAccounts(config: YnabScalarConfig): Promise<YnabAccount
   return { ok: true, accounts };
 }
 
+// Deliberately not a delta request: `type=unapproved` is a server-side filter,
+// and a delta against a filter never reports a row that left it — an approved
+// transaction would stay in the cached list forever. See ynabDelta.ts.
 export async function getUnapprovedTransactions(
   config: YnabScalarConfig
 ): Promise<YnabUnapprovedResult> {
@@ -108,6 +75,7 @@ export async function getUnapprovedTransactions(
     categoryId: t.category_id ?? null,
     categoryName: t.category_name ?? null,
     memo: t.memo ?? null,
+    isSplit: Array.isArray(t.subtransactions) && t.subtransactions.length > 0,
     ynabUrl: `https://app.ynab.com/${planId}/accounts/${t.account_id}`,
   }));
 
@@ -123,23 +91,10 @@ function isInCurrentMonth(dateStr: string): boolean {
 export async function getScheduledTransactionsThisMonth(
   config: YnabScalarConfig
 ): Promise<YnabScheduledResult> {
-  const { token, planId } = config;
-  if (!token || !planId) {
-    return { ok: false, reason: "No YNAB token configured", transactions: [] };
-  }
+  const res = await fetchDelta(config, "scheduled_transactions", "scheduled_transactions");
+  if (!res.ok) return { ok: false, reason: res.reason, transactions: [] };
 
-  let res: Response;
-  try {
-    res = await ynabFetch(`${API_ROOT}/plans/${planId}/scheduled_transactions`, token);
-  } catch {
-    return { ok: false, reason: "Couldn't reach YNAB", transactions: [] };
-  }
-  if (!res.ok) {
-    return { ok: false, reason: await ynabErrorReason(res), transactions: [] };
-  }
-
-  const data = await res.json();
-  const transactions = (data.data?.scheduled_transactions ?? [])
+  const transactions = res.items
     .filter((t: any) => isInCurrentMonth(t.date_next))
     .map((t: any) => ({
       id: t.id,
@@ -247,6 +202,122 @@ export async function createTransaction(
   return { ok: true };
 }
 
+// Asks YNAB to pull whatever its linked banks have waiting (Direct Import) —
+// the same thing as the Import button in the app. Imported rows arrive
+// unapproved, so the caller refreshes the unapproved list afterwards.
+export async function importTransactions(config: YnabScalarConfig): Promise<YnabImportResult> {
+  const { token, planId } = config;
+  if (!token || !planId) return { ok: false, reason: "No YNAB token configured", imported: 0 };
+
+  let res: Response;
+  try {
+    res = await ynabFetch(`${API_ROOT}/plans/${planId}/transactions/import`, token, {
+      method: "POST",
+    });
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB", imported: 0 };
+  }
+  if (!res.ok) return { ok: false, reason: await ynabErrorReason(res), imported: 0 };
+
+  const body = await res.json().catch(() => null);
+  const ids = body?.data?.transaction_ids;
+  return { ok: true, imported: Array.isArray(ids) ? ids.length : 0 };
+}
+
+// Approving is one PATCH for the whole batch rather than one per row, in chunks
+// so a very long backlog doesn't ride on a single request body. A chunk that
+// fails stops the run: `approved` then says how far it got, and the rest are
+// still unapproved rather than in some unknown state.
+const APPROVE_CHUNK = 100;
+
+export async function approveTransactions(
+  config: YnabScalarConfig,
+  transactionIds: string[]
+): Promise<YnabBulkApproveResult> {
+  const { token, planId } = config;
+  if (!token || !planId) return { ok: false, reason: "No YNAB token configured", approved: 0 };
+
+  const ids = Array.from(new Set(transactionIds));
+  let approved = 0;
+  for (let i = 0; i < ids.length; i += APPROVE_CHUNK) {
+    const chunk = ids.slice(i, i + APPROVE_CHUNK);
+    let res: Response;
+    try {
+      res = await ynabFetch(`${API_ROOT}/plans/${planId}/transactions`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ transactions: chunk.map((id) => ({ id, approved: true })) }),
+      });
+    } catch {
+      return { ok: false, reason: "Couldn't reach YNAB", approved };
+    }
+    if (!res.ok) return { ok: false, reason: await ynabErrorReason(res), approved };
+    approved += chunk.length;
+  }
+  return { ok: true, approved };
+}
+
+// Turns an existing, not-yet-split transaction into a split. The parts are
+// checked against YNAB's own copy of the transaction — its real amount and
+// sign, and whether it's already a split — not whatever the renderer last
+// showed, so a stale row can't produce a split that doesn't add up. YNAB does
+// not support editing the lines of a transaction that is already a split.
+export async function splitTransaction(
+  config: YnabScalarConfig,
+  transactionId: string,
+  parts: YnabSplitPart[]
+): Promise<ActionResult> {
+  const { token, planId } = config;
+  if (!token || !planId) return { ok: false, reason: "No YNAB token configured" };
+  if (parts.length < 2) return { ok: false, reason: "A split needs at least two lines" };
+  if (parts.some((p) => !p.categoryId)) return { ok: false, reason: "Every line needs a category" };
+
+  let current: Response;
+  try {
+    current = await ynabFetch(
+      `${API_ROOT}/plans/${planId}/transactions/${encodeURIComponent(transactionId)}`,
+      token
+    );
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB" };
+  }
+  if (!current.ok) return { ok: false, reason: await ynabErrorReason(current) };
+
+  const t = (await current.json().catch(() => null))?.data?.transaction;
+  if (!t) return { ok: false, reason: "YNAB didn't return that transaction" };
+  if (Array.isArray(t.subtransactions) && t.subtransactions.length > 0) {
+    return { ok: false, reason: "That transaction is already split — edit it in YNAB" };
+  }
+
+  const sign = t.amount < 0 ? -1 : 1;
+  const lines = parts.map((p) => ({
+    amount: sign * Math.round(Math.abs(p.amount) * 1000),
+    category_id: p.categoryId,
+    memo: p.memo || undefined,
+  }));
+  if (lines.some((l) => l.amount === 0)) return { ok: false, reason: "Every line needs an amount" };
+  const total = lines.reduce((sum, l) => sum + l.amount, 0);
+  if (total !== t.amount) {
+    return {
+      ok: false,
+      reason: `The lines add up to ${(total / 1000).toFixed(2)} but the transaction is ${(t.amount / 1000).toFixed(2)}`,
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await ynabFetch(`${API_ROOT}/plans/${planId}/transactions`, token, {
+      method: "PATCH",
+      body: JSON.stringify({
+        transactions: [{ id: transactionId, category_id: null, subtransactions: lines }],
+      }),
+    });
+  } catch {
+    return { ok: false, reason: "Couldn't reach YNAB" };
+  }
+  if (!res.ok) return { ok: false, reason: await ynabErrorReason(res) };
+  return { ok: true };
+}
+
 // Flattens category_groups into a single assignable list — internal groups
 // (Uncategorized, Inflow: Ready to Assign) and anything hidden/deleted are
 // dropped, since those aren't real choices for categorizing a transaction.
@@ -286,23 +357,10 @@ export async function getCategories(config: YnabScalarConfig): Promise<YnabCateg
 // accounts, named like "Transfer : Checking") are dropped — neither is a
 // meaningful thing to autocomplete into a transaction's payee field.
 export async function getPayees(config: YnabScalarConfig): Promise<YnabPayeesResult> {
-  const { token, planId } = config;
-  if (!token || !planId) {
-    return { ok: false, reason: "No YNAB token configured", payees: [] };
-  }
+  const res = await fetchDelta(config, "payees", "payees");
+  if (!res.ok) return { ok: false, reason: res.reason, payees: [] };
 
-  let res: Response;
-  try {
-    res = await ynabFetch(`${API_ROOT}/plans/${planId}/payees`, token);
-  } catch {
-    return { ok: false, reason: "Couldn't reach YNAB", payees: [] };
-  }
-  if (!res.ok) {
-    return { ok: false, reason: await ynabErrorReason(res), payees: [] };
-  }
-
-  const data = await res.json();
-  const payees = (data.data?.payees ?? [])
+  const payees = res.items
     .filter((p: any) => !p.deleted && !p.transfer_account_id)
     .map((p: any) => ({ id: p.id, name: p.name }))
     .sort((a: any, b: any) => a.name.localeCompare(b.name));

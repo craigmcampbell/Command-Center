@@ -8,12 +8,13 @@ import type {
   YnabCategory,
   YnabPayee,
   YnabPayeesResult,
+  YnabSplitPart,
   YnabTransaction,
   YnabUnapprovedResult,
 } from "../../../shared/types";
 import Panel from "./Panel";
 import Select from "./Select";
-import { IconCheck, IconChevronRight, IconExternal, IconPlus, IconX } from "./icons";
+import { IconCheck, IconChevronRight, IconExternal, IconPlus, IconRefresh, IconX } from "./icons";
 
 interface YnabUnapprovedWidgetProps {
   data: YnabUnapprovedResult | null;
@@ -312,6 +313,153 @@ function MemoCell({
   );
 }
 
+function centsOf(text: string): number {
+  const n = Number(text);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+interface SplitLine {
+  categoryId: string | null;
+  categoryName: string | null;
+  amountText: string;
+  memo: string;
+}
+
+// Splits an existing transaction into category lines. Amounts are entered as
+// positive figures and must add up to the transaction exactly, to the cent —
+// the Save button stays off until they do, and main re-checks against YNAB's
+// own copy before anything is sent. YNAB can't edit the lines of a split that
+// already exists, so this only appears on plain transactions.
+function SplitEditor({
+  transaction,
+  groupedCategories,
+  onDone,
+  onCancel,
+}: {
+  transaction: YnabTransaction;
+  groupedCategories: [string, YnabCategory[]][];
+  onDone: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [lines, setLines] = useState<SplitLine[]>([
+    {
+      categoryId: transaction.categoryId,
+      categoryName: transaction.categoryName,
+      amountText: "",
+      memo: "",
+    },
+    { categoryId: null, categoryName: null, amountText: "", memo: "" },
+  ]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const totalCents = Math.round(Math.abs(transaction.amount) * 100);
+  const remaining = totalCents - lines.reduce((sum, l) => sum + centsOf(l.amountText), 0);
+  const canSave =
+    lines.length >= 2 &&
+    remaining === 0 &&
+    lines.every((l) => l.categoryId && centsOf(l.amountText) > 0);
+
+  function update(i: number, patch: Partial<SplitLine>) {
+    setLines((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  }
+
+  async function handleSave() {
+    if (!canSave || saving) return;
+    setSaving(true);
+    setError(null);
+    const parts: YnabSplitPart[] = lines.map((l) => ({
+      categoryId: l.categoryId as string,
+      amount: centsOf(l.amountText) / 100,
+      memo: l.memo.trim() || undefined,
+    }));
+    const res = await window.api.ynab.splitTransaction(transaction.id, parts);
+    if (res.ok) {
+      await onDone();
+    } else {
+      setSaving(false);
+      setError(res.reason ?? "Couldn't split that transaction.");
+    }
+  }
+
+  return (
+    <tr className="ynab-split-row">
+      <td colSpan={6}>
+        <div className="ynab-split">
+          {lines.map((l, i) => (
+            <div key={i} className="ynab-split-line">
+              <CategoryPicker
+                categoryId={l.categoryId}
+                categoryName={l.categoryName}
+                groupedCategories={groupedCategories}
+                onSelect={(id, name) => update(i, { categoryId: id, categoryName: name })}
+                disabled={saving}
+              />
+              <input
+                className="settings-input ynab-split-amount"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder={remaining > 0 ? (remaining / 100).toFixed(2) : "0.00"}
+                value={l.amountText}
+                onChange={(e) => update(i, { amountText: e.target.value })}
+                disabled={saving}
+              />
+              <input
+                className="ynab-memo-input"
+                placeholder="Memo"
+                value={l.memo}
+                onChange={(e) => update(i, { memo: e.target.value })}
+                disabled={saving}
+              />
+              <button
+                type="button"
+                className="row-action"
+                onClick={() => setLines((prev) => prev.filter((_, j) => j !== i))}
+                disabled={saving || lines.length <= 2}
+                title="Remove line"
+              >
+                <IconX />
+              </button>
+            </div>
+          ))}
+          <div className="ynab-split-footer">
+            <button
+              type="button"
+              className="row-action"
+              onClick={() =>
+                setLines((prev) => [
+                  ...prev,
+                  { categoryId: null, categoryName: null, amountText: "", memo: "" },
+                ])
+              }
+              disabled={saving}
+            >
+              <IconPlus /> Add line
+            </button>
+            <span className={`muted ynab-split-remaining ${remaining === 0 ? "" : "off"}`}>
+              {remaining === 0
+                ? "Adds up"
+                : remaining > 0
+                  ? `${formatAmount(remaining / 100)} left to assign`
+                  : `${formatAmount(-remaining / 100)} over`}
+            </span>
+            <div className="ynab-add-form-actions">
+              <button type="button" onClick={handleSave} disabled={!canSave || saving}>
+                {saving ? "Splitting…" : "Split"}
+              </button>
+              <button type="button" onClick={onCancel} aria-label="Cancel split" disabled={saving}>
+                <IconX />
+              </button>
+            </div>
+          </div>
+          {error && <span className="muted ynab-add-form-error">{error}</span>}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function TransactionRow({
   transaction,
   groupedCategories,
@@ -323,7 +471,10 @@ function TransactionRow({
 }) {
   const [approving, setApproving] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
-  const canApprove = !!transaction.categoryId;
+  const [splitting, setSplitting] = useState(false);
+  // A split has no category of its own, but is as ready to approve as a
+  // categorised row — each of its lines already has one.
+  const canApprove = !!transaction.categoryId || !!transaction.isSplit;
 
   async function handleApprove() {
     setApproving(true);
@@ -346,48 +497,75 @@ function TransactionRow({
   }
 
   return (
-    <tr>
-      <td className="ynab-col-approve">
-        <button
-          className="check running"
-          disabled={approving || !canApprove}
-          onClick={handleApprove}
-          title={canApprove ? "Approve" : "Assign a category first"}
-        >
-          <IconCheck className="check-icon" />
-        </button>
-      </td>
-      <td className="ynab-col-date">{formatDate(transaction.date)}</td>
-      <td className="ynab-col-payee">
-        <span
-          className="ynab-payee-link"
-          onClick={() => window.api.openUrl(transaction.ynabUrl)}
-          title="Open account in YNAB"
-        >
-          {transaction.payeeName ?? "(no payee)"}
-          <IconExternal className="external-icon" />
-        </span>
-      </td>
-      <td className="ynab-col-category">
-        {groupedCategories.length > 0 ? (
-          <CategoryPicker
-            categoryId={transaction.categoryId}
-            categoryName={transaction.categoryName}
-            groupedCategories={groupedCategories}
-            onSelect={handleCategorySelect}
-            disabled={categorySaving}
-          />
-        ) : (
-          <span className="tag">{transaction.categoryName ?? "Uncategorized"}</span>
-        )}
-      </td>
-      <td className="ynab-col-memo">
-        <MemoCell transaction={transaction} onRefresh={onRefresh} />
-      </td>
-      <td className={`ynab-col-amount ynab-balance ${transaction.amount < 0 ? "negative" : ""}`}>
-        {formatAmount(transaction.amount)}
-      </td>
-    </tr>
+    <>
+      <tr>
+        <td className="ynab-col-approve">
+          <button
+            className="check running"
+            disabled={approving || !canApprove}
+            onClick={handleApprove}
+            title={canApprove ? "Approve" : "Assign a category first"}
+          >
+            <IconCheck className="check-icon" />
+          </button>
+        </td>
+        <td className="ynab-col-date">{formatDate(transaction.date)}</td>
+        <td className="ynab-col-payee">
+          <span
+            className="ynab-payee-link"
+            onClick={() => window.api.openUrl(transaction.ynabUrl)}
+            title="Open account in YNAB"
+          >
+            {transaction.payeeName ?? "(no payee)"}
+            <IconExternal className="external-icon" />
+          </span>
+        </td>
+        <td className="ynab-col-category">
+          {transaction.isSplit ? (
+            <span className="tag" title="Edit the lines of a split in YNAB">
+              Split
+            </span>
+          ) : groupedCategories.length > 0 ? (
+            <div className="ynab-category-with-split">
+              <CategoryPicker
+                categoryId={transaction.categoryId}
+                categoryName={transaction.categoryName}
+                groupedCategories={groupedCategories}
+                onSelect={handleCategorySelect}
+                disabled={categorySaving}
+              />
+              <button
+                type="button"
+                className="row-action"
+                onClick={() => setSplitting((v) => !v)}
+                title={splitting ? "Cancel split" : "Split across categories"}
+              >
+                {splitting ? <IconX /> : "Split"}
+              </button>
+            </div>
+          ) : (
+            <span className="tag">{transaction.categoryName ?? "Uncategorized"}</span>
+          )}
+        </td>
+        <td className="ynab-col-memo">
+          <MemoCell transaction={transaction} onRefresh={onRefresh} />
+        </td>
+        <td className={`ynab-col-amount ynab-balance ${transaction.amount < 0 ? "negative" : ""}`}>
+          {formatAmount(transaction.amount)}
+        </td>
+      </tr>
+      {splitting && !transaction.isSplit && (
+        <SplitEditor
+          transaction={transaction}
+          groupedCategories={groupedCategories}
+          onDone={async () => {
+            setSplitting(false);
+            await onRefresh();
+          }}
+          onCancel={() => setSplitting(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -531,6 +709,50 @@ export default function YnabUnapprovedWidget({
 }: YnabUnapprovedWidgetProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [confirmingApprove, setConfirmingApprove] = useState(false);
+  const [approvingAll, setApprovingAll] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // A transient line beside the buttons rather than a modal: the outcome of an
+  // import or bulk approve is one short sentence, and the list below updates.
+  function flash(message: string) {
+    setNotice(message);
+    window.setTimeout(() => setNotice((current) => (current === message ? null : current)), 6000);
+  }
+
+  async function handleImport() {
+    setImporting(true);
+    const res = await window.api.ynab.importTransactions();
+    setImporting(false);
+    if (!res.ok) {
+      flash(res.reason ?? "Import failed");
+      return;
+    }
+    flash(res.imported === 0 ? "Nothing new to import" : `Imported ${res.imported}`);
+    await onRefresh();
+  }
+
+  // Only rows that are ready — categorised, or a split — are offered. The same
+  // rule as the per-row check, so "approve all" never does something the row
+  // buttons would refuse.
+  const approvable = data?.ok
+    ? data.transactions.filter((t) => !!t.categoryId || !!t.isSplit)
+    : [];
+  const uncategorised = data?.ok ? data.transactions.length - approvable.length : 0;
+
+  async function handleApproveAll() {
+    setApprovingAll(true);
+    const res = await window.api.ynab.approveTransactions(approvable.map((t) => t.id));
+    setApprovingAll(false);
+    setConfirmingApprove(false);
+    flash(
+      res.ok
+        ? `Approved ${res.approved}`
+        : `Approved ${res.approved} of ${approvable.length}: ${res.reason ?? "failed"}`
+    );
+    await onRefresh();
+  }
 
   function toggleGroup(account: string) {
     setCollapsedGroups((prev) => {
@@ -547,7 +769,47 @@ export default function YnabUnapprovedWidget({
 
   const headerRight = (
     <div className="ynab-header-actions">
+      {notice && <span className="muted ynab-notice">{notice}</span>}
       {data?.ok && <span className="pip live"></span>}
+      {confirmingApprove ? (
+        <>
+          <button type="button" onClick={handleApproveAll} disabled={approvingAll}>
+            {approvingAll ? "Approving…" : `Approve ${approvable.length}?`}
+          </button>
+          <button
+            type="button"
+            className="row-action"
+            onClick={() => setConfirmingApprove(false)}
+            disabled={approvingAll}
+            aria-label="Cancel"
+          >
+            <IconX />
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="row-action"
+          onClick={() => setConfirmingApprove(true)}
+          disabled={approvable.length === 0}
+          title={
+            uncategorised > 0
+              ? `Approve everything with a category (${uncategorised} still need one)`
+              : "Approve everything"
+          }
+        >
+          <IconCheck /> Approve all
+        </button>
+      )}
+      <button
+        type="button"
+        className="row-action"
+        onClick={handleImport}
+        disabled={importing}
+        title="Ask YNAB to import from your linked banks"
+      >
+        <IconRefresh /> {importing ? "Importing…" : "Import"}
+      </button>
       <button
         type="button"
         className="row-action"

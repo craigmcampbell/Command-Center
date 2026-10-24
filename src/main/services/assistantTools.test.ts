@@ -15,6 +15,7 @@ vi.mock("./settings", () => ({
   getGoogleCalendarSettings: () => ({}),
   getGithubScalarSettings: () => ({}),
   getYnabSettings: () => ({}),
+  getReaderSettings: () => ({ apiToken: "r" }),
   listGithubRepoSettings: () => [],
   listVaultSettings: () => settings.vaults,
 }));
@@ -27,12 +28,26 @@ vi.mock("./todoist", () => ({
 vi.mock("./notes", () => ({ searchNotes: vi.fn(), readNoteFile: vi.fn() }));
 vi.mock("./docker", () => ({ getDockerContainers: vi.fn() }));
 vi.mock("./googleCalendar", () => ({ getEventsForDay: vi.fn() }));
-vi.mock("./github", () => ({ getGitHubStatus: vi.fn() }));
+vi.mock("./github", () => ({ getGitHubStatus: vi.fn(), getOpenPullRequests: vi.fn() }));
 vi.mock("./git", () => ({ getGitStatuses: vi.fn() }));
-vi.mock("./ynab", () => ({ getUnapprovedTransactions: vi.fn() }));
+vi.mock("./ynab", () => ({
+  getUnapprovedTransactions: vi.fn(),
+  getCategories: vi.fn(),
+  approveTransaction: vi.fn(async () => ({ ok: true })),
+  setTransactionCategory: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock("./reader", () => ({ saveLink: vi.fn(async () => ({ ok: true })) }));
+vi.mock("./readerFeed", () => ({
+  listReaderFeed: vi.fn(),
+  moveFeedItemToInbox: vi.fn(async () => ({ ok: true })),
+  findCachedFeedItem: vi.fn(),
+}));
 
 import { readNoteFile, searchNotes } from "./notes";
 import { completeTask, createTask, getDueTasks, setTaskDueDate } from "./todoist";
+import { approveTransaction, getCategories, getUnapprovedTransactions, setTransactionCategory } from "./ynab";
+import { saveLink } from "./reader";
+import { findCachedFeedItem, moveFeedItemToInbox } from "./readerFeed";
 import { hasUntrustedContext, MUTATING_TOOLS, prepareTool, TOOL_DEFS } from "./assistantTools";
 
 const TASKS = [
@@ -60,7 +75,16 @@ beforeEach(() => {
 describe("tool catalogue", () => {
   it("marks exactly the writing tools as mutating, and describes every one", () => {
     expect([...MUTATING_TOOLS].sort()).toEqual(
-      ["complete_task", "create_task", "forget", "reschedule_task"]
+      [
+        "approve_transaction",
+        "categorize_transaction",
+        "complete_task",
+        "create_task",
+        "forget",
+        "reader_move_to_inbox",
+        "reader_save_link",
+        "reschedule_task",
+      ]
     );
     for (const def of TOOL_DEFS) expect(def.description.length).toBeGreaterThan(20);
     expect(TOOL_DEFS.map((t) => t.name)).toEqual(
@@ -114,10 +138,109 @@ describe("confirmation cards come from authoritative data, not the model", () =>
   });
 
   it("reading tools never ask for confirmation", async () => {
-    const reads = ["get_due_tasks", "get_schedule", "docker_status", "github_status", "git_status", "ynab_unapproved"];
+    const reads = ["get_due_tasks", "get_schedule", "docker_status", "github_status", "git_status", "github_list_prs", "ynab_unapproved", "ynab_categories"];
     for (const name of reads) {
       expect((await prepareTool(name, "{}", noContext)).approval).toBeUndefined();
     }
+  });
+});
+
+describe("YNAB tools", () => {
+  const TXN = {
+    id: "x1",
+    date: "2026-10-12",
+    amount: -12.5,
+    payeeName: "Corner Store",
+    accountId: "a1",
+    accountName: "Checking",
+    categoryId: null,
+    categoryName: null,
+    memo: null,
+    ynabUrl: "",
+  };
+  beforeEach(() => {
+    vi.mocked(getUnapprovedTransactions).mockResolvedValue({ ok: true, transactions: [TXN] });
+    vi.mocked(getCategories).mockResolvedValue({
+      ok: true,
+      categories: [
+        { id: "c1", name: "Groceries", groupName: "Food" },
+        { id: "c2", name: "Fun", groupName: "Wants" },
+        { id: "c3", name: "Fun", groupName: "Kids" },
+      ],
+    });
+  });
+
+  it("quotes YNAB's own payee, amount and date when approving", async () => {
+    const prepared = await prepareTool("approve_transaction", JSON.stringify({ transaction_id: "x1" }), noContext);
+    expect(prepared.approval?.summary).toBe("Approve Corner Store -$12.50 on 2026-10-12 (Checking)");
+    expect(approveTransaction).not.toHaveBeenCalled();
+    expect(json(await prepared.run())).toEqual({ approved: true });
+    expect(approveTransaction).toHaveBeenCalledWith({}, "x1");
+  });
+
+  it("refuses an id that isn't unapproved, with no card", async () => {
+    const prepared = await prepareTool("approve_transaction", JSON.stringify({ transaction_id: "zz" }), noContext);
+    expect(prepared.approval).toBeUndefined();
+    expect((await prepared.run()).isError).toBe(true);
+  });
+
+  it("resolves the category by name and sends its id", async () => {
+    const prepared = await prepareTool(
+      "categorize_transaction",
+      JSON.stringify({ transaction_id: "x1", category: "groceries" }),
+      noContext
+    );
+    expect(prepared.approval?.summary).toBe(
+      "Categorise Corner Store -$12.50 on 2026-10-12 (Checking) as “Food: Groceries”"
+    );
+    await prepared.run();
+    expect(setTransactionCategory).toHaveBeenCalledWith({}, "x1", "c1");
+  });
+
+  it("won't guess between same-named categories or invent one", async () => {
+    const ambiguous = await prepareTool(
+      "categorize_transaction",
+      JSON.stringify({ transaction_id: "x1", category: "Fun" }),
+      noContext
+    );
+    expect(ambiguous.approval).toBeUndefined();
+    expect(json(await ambiguous.run()).error).toContain("several categories");
+
+    const unknown = await prepareTool(
+      "categorize_transaction",
+      JSON.stringify({ transaction_id: "x1", category: "Yachts" }),
+      noContext
+    );
+    expect(unknown.approval).toBeUndefined();
+    expect((await unknown.run()).isError).toBe(true);
+    expect(setTransactionCategory).not.toHaveBeenCalled();
+  });
+});
+
+describe("Reader tools", () => {
+  it("saves only http(s) links and quotes the exact URL", async () => {
+    const bad = await prepareTool("reader_save_link", JSON.stringify({ url: "file:///etc/passwd" }), noContext);
+    expect(bad.approval).toBeUndefined();
+    expect((await bad.run()).isError).toBe(true);
+
+    const prepared = await prepareTool("reader_save_link", JSON.stringify({ url: "https://example.com/a" }), noContext);
+    expect(prepared.approval?.summary).toBe("Save to Reader: https://example.com/a");
+    expect(saveLink).not.toHaveBeenCalled();
+    await prepared.run();
+    expect(saveLink).toHaveBeenCalledWith({ apiToken: "r" }, "https://example.com/a");
+  });
+
+  it("moves only an item that was listed, quoting its real title", async () => {
+    vi.mocked(findCachedFeedItem).mockReturnValueOnce(null);
+    const unknown = await prepareTool("reader_move_to_inbox", JSON.stringify({ id: "d9" }), noContext);
+    expect(unknown.approval).toBeUndefined();
+    expect((await unknown.run()).isError).toBe(true);
+
+    vi.mocked(findCachedFeedItem).mockReturnValueOnce({ title: "A good read", siteName: "Blog" });
+    const prepared = await prepareTool("reader_move_to_inbox", JSON.stringify({ id: "d1" }), noContext);
+    expect(prepared.approval?.summary).toBe("Move “A good read” (Blog) to the Reader inbox");
+    await prepared.run();
+    expect(moveFeedItemToInbox).toHaveBeenCalledWith({ apiToken: "r" }, "d1", 0);
   });
 });
 

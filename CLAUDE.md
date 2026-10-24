@@ -82,7 +82,13 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/reader.ts` — Readwise Reader API v3 for the latest saved documents,
     given the current `reader` settings section. Cursor-paginated upstream, so this
     keeps a small in-memory cache and does the sort-by-saved-date + 15-per-page
-    slicing itself.
+    slicing itself. Fetches `new`, `later` and `shortlist` as three separate
+    `location=` streams — an unfiltered list is newest-*updated* first and mostly
+    feed items on a real account, which left only a day or so of saved documents
+    after the client-side filter. Streams are merged only down to the point every
+    still-paging one has reached (`horizon()`, from the smallest `updated_at`
+    fetched: a document is never saved after it was last updated), so a document
+    can't go missing from the middle. Archive is deliberately not fetched.
   - `services/githubReleases.ts` — latest release from each repo you've
     **starred**, via a single GraphQL query. Starring is the subscription, so
     there's nothing to configure; it reuses `github.ts`'s token. GraphQL rather
@@ -121,7 +127,9 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/ynab.ts` — YNAB REST API (api.ynab.com/v1): account balances,
     unapproved transactions, this month's scheduled transactions, categories,
     and the approve/clear/categorise/memo mutations behind the Finances tab.
-    Fails soft like the other API services.
+    Fails soft like the other API services. Accounts, payees and scheduled
+    transactions go through the delta cache in `ynabDelta.ts` (see "YNAB history
+    and delta requests" below); `ynabInsights.ts` holds the read-only history views.
   - `services/bills.ts` / `services/cards.ts` — manually-tracked recurring bills
     and credit cards for the Finances tab. Plain SQLite CRUD, same shape as
     `links.ts`. Deliberately independent of YNAB's own scheduled transactions:
@@ -261,7 +269,9 @@ lives in `App.tsx` same as always.
   articles you've saved, paginated) and **Feed** (your RSS subscriptions).
 - **Finances** — YNAB accounts + scheduled transactions, manually-tracked Bills
   and Cards, the Finance Review Log (a markdown note), and YNAB's unapproved
-  transactions with inline category/memo editing.
+  transactions with inline category/memo editing. Budget Health shows spent vs
+  budgeted per category as a bar (this month's activity over this month's
+  budgeted amount, not the rolled-over balance).
 - **AI** — four sub-tabs over Claude / Firecrawl / OpenRouter / OpenAI:
   **Claude** (local Claude Code token/cost usage — today, 7d, 30d, by-project
   and by-model, recent sessions with Resume; see "Claude Code usage" below),
@@ -424,6 +434,43 @@ All CodeMirror styling lives in `EditorView.theme()` next to the feature it
 belongs to, never in `styles.css` — which holds only the React chrome around
 the editor (`.md-toolbar`, `.md-conflict`, `.md-outline-*`, `.scratchpad-*`).
 
+## YNAB history and delta requests
+
+`services/ynabDelta.ts` keeps an in-memory copy of each unfiltered YNAB collection
+and sends `last_knowledge_of_server`, merging the changed rows (deleted ones are
+flagged, not omitted). Nothing is persisted: a restart is one full fetch. **Never
+use it on a server-side-filtered request** — a delta against `?type=unapproved`
+never reports a row that *left* the filter, so approved transactions would stay in
+the cache; that is why `getUnapprovedTransactions` still fetches in full.
+Categories are not delta-cached either: their nested groups would need a merge
+whose semantics weren't verifiable without a live token.
+
+`services/ynabInsights.ts` stores nothing. **Spending trends** come from
+`/months` (delta-cached) plus one `/months/{m}` per month for category detail;
+past months are reused for 30 minutes unless their totals change, the current
+month is always refetched. The "Credit Card Payments" group is excluded or every
+card purchase would count twice. **Net worth** is worked backwards from current
+balances (balance now minus everything dated after each month), so it is right
+from the first poll with no snapshots to record; closed accounts are kept (a
+transfer out of one needs both legs) and accounts hidden in the Accounts widget
+are left out. **Money movements** is `/money_movements`, null side = Ready to
+Assign.
+
+**Credit-card utilization trend** (Bills/Cards widget → Utilization) uses the same
+backwards reconstruction per account (`getAccountBalanceHistory`, sharing net
+worth's transaction fetch). The renderer combines it with each card's manually
+tracked limit — measured against *today's* limit for every month, since YNAB has
+no record of past limits — and the last point is the live balance. Only a
+negative balance counts as owed; an overpaid card is zero, not debt.
+
+Mutations (all plain `ipcMain.handle`, never `readHandler`): `importTransactions`
+(Direct Import), `approveTransactions` (bulk PATCH, chunks of 100, reports how far
+it got), `splitTransaction` (re-reads the transaction from YNAB and checks the
+lines sum to its real amount in milliunits before PATCHing `subtransactions`; YNAB
+cannot edit the lines of an existing split, so the UI offers Split only on plain
+rows). The renderer sends the ids it showed for bulk approve, only categorised or
+split rows, behind a confirm click.
+
 ## Assistant tab
 
 A chat harness: a tool-using agent loop over OpenRouter's OpenAI-compatible
@@ -510,6 +557,15 @@ hotkey) — a drift there is silent.
   only those, by exact match). Silence (120s), Stop, or a closed window all mean
   **no**. Google Calendar is read-only (`calendar.readonly`), so there is no
   event-creation tool — adding one means re-authorising with a wider scope.
+- **Tools added later follow the same rules.** `approve_transaction` and
+  `categorize_transaction` look the transaction up in YNAB by id and quote
+  *its* payee/amount/date; a category is resolved by exact name against
+  `getCategories` and refused if it is unknown or ambiguous across groups (it
+  never guesses). `reader_save_link` accepts only `http(s)` and quotes the
+  normalised URL it will save. `reader_move_to_inbox` only accepts an id that
+  `reader_feed_unread` already loaded (`findCachedFeedItem`), so the card can
+  quote a real title. `github_list_prs` is the read-only full list behind the
+  five-per-repo widget. All four mutating ones are in `ASSISTANT_MUTATING_TOOLS`.
 - **Memory writes ask first.** `remember` shows an Allow/Deny card for **every**
   save by default (Settings → Assistant → "Ask me before saving anything to
   memory"; unset means on, only an explicit `false` relaxes it). Relaxed, it
@@ -635,6 +691,22 @@ piece of config — whether to run this poller at all — is a
 `spotify.enabled` toggle in Settings → General, off by choice of a user who
 doesn't use Spotify; disabling it clears `nowPlaying` and stops the interval
 entirely, not just the display.
+
+## Home attention strip
+
+`components/TodayStrip.tsx` renders a row of chips above Home's grid — overdue
+and due-today tasks, the next timed calendar event, red CI, PRs awaiting
+review, crashed processes, overspent budget categories, unapproved YNAB
+transactions — ranked alert → warn → info and linking to the owning tab. The
+rules are `lib/today.ts` (`buildTodayItems`), pure with the clock passed in,
+and add no fetching: everything comes from state `App.tsx` already holds. The
+one new poll is `loadYnabUnapproved` while Home is foreground, since that
+count otherwise only loaded with Finances. A source that is null or `ok:
+false` contributes nothing, and "Nothing needs your attention" shows only
+once Todoist and GitHub have both answered (`todayReady`), so launch never
+flashes a false all-clear. "Next event" is suppressed when the calendar widget
+is paged to another day. The minute clock is local to the strip so it doesn't
+re-render the dashboard.
 
 ## Command Palette
 
@@ -809,7 +881,17 @@ even serve us the challenge page. `services/reddit.ts` instead:
 2. Warms it once by loading `reddit.com` in a **hidden BrowserWindow**, letting
    Chromium run Reddit's own JS and collect a normal logged-out session cookie,
    exactly as opening a tab would.
-3. Then reads `/r/<sub>/new.json` with plain `session.fetch`.
+3. Then reads `/r/<sub>/new.rss` (Atom) with plain `session.fetch`.
+
+**2026-10-23: the JSON listing is now blocked even from the warmed session** —
+`/r/<sub>/new.json` returns the same 403 block page for both `session.fetch`
+and an in-page `fetch()` after a normal load, while `.rss` still answers 200.
+So `parseRedditFeed` reads the Atom feed. Cost, accepted: the feed carries no
+score, comment count, flair or NSFW flag, so `score`/`numComments` are optional
+on `RedditPost` and the widget omits them rather than showing a fake 0. A 200
+without a `<feed` is treated as the block page, not an empty subreddit. If the
+feed goes too, the warm-up still works and the next fallback is the OAuth path
+in git history.
 
 The cookies persist to disk, so the warm-up happens on first run and then only
 when the session lapses. Measured: ~800ms cold including warm-up, ~400ms warm,
@@ -949,6 +1031,21 @@ Two details that are easy to lose:
   (`wal_checkpoint(TRUNCATE)` + `journal_mode = DELETE`). Without that step the
   backup inherits WAL mode and drags `-wal`/`-shm` sidecars along, so an export
   hands the user three files when they'll only think to copy one.
+
+**Restore** (Settings → Data) cannot swap the file under the open connection,
+so it is two steps: `stageRestore` validates the chosen file (integrity check
+plus a `settings` table, so an arbitrary SQLite file is refused), writes a
+`pre-restore-<ts>.db` safety copy of the *current* database, and copies the
+chosen one to `restore-pending.db` through SQLite's backup API; the app then
+relaunches and `applyPendingRestore()` — run **before** `initDatabase()` in
+`main/index.ts` — renames it into place and deletes the old `-wal`/`-shm`
+(left behind they would be replayed onto the restored file). A failed apply
+discards the staged file so a stale one can't be applied by a later launch.
+`backup:restore` only accepts a path `listBackups()` returned; the free-form
+picker is the separate `backup:restoreFromFile`. Safety copies are named
+outside the `command-center-` pattern so rotation never prunes them. Restoring
+also restores that file's API tokens. Not covered by an automated test:
+`better-sqlite3` here is built for Electron's ABI.
 
 The export card states that the file contains tokens in plaintext. Keep that
 warning — it's the difference between an informed export and a leak.

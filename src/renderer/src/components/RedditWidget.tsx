@@ -36,7 +36,7 @@ function open(url: string) {
 function PostRow({ post }: { post: RedditPost }) {
   return (
     <div className="reddit-post">
-      <div className="reddit-score">{compactScore(post.score)}</div>
+      {post.score !== undefined && <div className="reddit-score">{compactScore(post.score)}</div>}
       <div className="reddit-post-main">
         <button type="button" className="reddit-title" onClick={() => open(post.url)}>
           {post.title}
@@ -53,7 +53,7 @@ function PostRow({ post }: { post: RedditPost }) {
             onClick={() => open(post.permalink)}
             title="Open the discussion on Reddit"
           >
-            {post.numComments} comments
+            {post.numComments === undefined ? "Discussion" : `${post.numComments} comments`}
           </button>
         </div>
       </div>

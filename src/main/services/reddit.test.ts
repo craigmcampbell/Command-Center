@@ -42,34 +42,21 @@ const SUBS = [
   { id: 2, subreddit: "programming", sortOrder: 1 },
 ];
 
-function listing(subreddit: string) {
-  return {
-    data: {
-      children: [
-        {
-          data: {
-            id: `${subreddit}-1`,
-            title: `A post in ${subreddit}`,
-            author: "someone",
-            subreddit,
-            permalink: `/r/${subreddit}/comments/abc/a_post/`,
-            url: "https://example.com/article",
-            domain: "example.com",
-            score: 1234,
-            num_comments: 7,
-            created_utc: 1_757_000_000,
-            thumbnail: "https://b.thumbs.redditmedia.com/x.jpg",
-            link_flair_text: "News",
-            is_self: false,
-            over_18: false,
-          },
-        },
-      ],
-    },
-  };
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// What Reddit's Atom feed really looks like: the post body is HTML escaped into
+// <content>, and a "[link]" anchor says where the post points.
+function atom(
+  subreddit: string,
+  opts: { target?: string; thumbnail?: string; title?: string } = {}
+): string {
+  const permalink = `https://www.reddit.com/r/${subreddit}/comments/abc/a_post/`;
+  const target = opts.target ?? "https://example.com/article?a=1&b=2";
+  const html = `<div class="md"><p>body</p></div> <span><a href="${target.replace(/&/g, "&amp;")}">[link]</a></span> <span><a href="${permalink}">[comments]</a></span>`;
+  return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/"><title>newest submissions : ${subreddit}</title><entry><author><name>/u/someone</name><uri>https://www.reddit.com/user/someone</uri></author><category term="${subreddit}" label="r/${subreddit}"/><content type="html">${esc(html)}</content><id>t3_${subreddit}1</id><link href="${permalink}" />${opts.thumbnail ? `<media:thumbnail url="${opts.thumbnail}" />` : ""}<updated>2026-10-23T23:44:40+00:00</updated><published>2026-10-23T23:44:40+00:00</published><title>${esc(opts.title ?? `A post in ${subreddit}`)}</title></entry></feed>`;
 }
 
-const ok = (sub: string) => new Response(JSON.stringify(listing(sub)));
+const ok = (sub: string) => new Response(atom(sub));
 const subOf = (url: string) => url.match(/\/r\/([^/]+)\//)![1];
 
 describe("normalizeSubreddit", () => {
@@ -169,42 +156,68 @@ describe("listRedditPosts", () => {
     });
   });
 
-  it("maps the wire shape and builds an absolute permalink", async () => {
+  it("maps an Atom entry to a post", async () => {
     state.cookies = [{ name: "loid" }];
     state.fetch.mockImplementation(async (url: string) => ok(subOf(url)));
-    const result = await listRedditPosts([SUBS[0]]);
-    expect(result.subreddits[0].posts[0]).toMatchObject({
-      id: "rust-1",
+    const post = (await listRedditPosts([SUBS[0]])).subreddits[0].posts[0];
+    expect(post).toMatchObject({
+      id: "rust1",
+      title: "A post in rust",
+      author: "someone",
       subreddit: "rust",
       permalink: "https://www.reddit.com/r/rust/comments/abc/a_post/",
-      url: "https://example.com/article",
-      score: 1234,
-      numComments: 7,
-      flair: "News",
-      thumbnailUrl: "https://b.thumbs.redditmedia.com/x.jpg",
+      // The anchor's own &amp; is decoded back to a usable URL.
+      url: "https://example.com/article?a=1&b=2",
+      domain: "example.com",
+      isSelf: false,
+      createdUtc: Date.parse("2026-10-23T23:44:40+00:00") / 1000,
     });
+    // The feed has no counts; they must be absent, not a made-up 0.
+    expect(post.score).toBeUndefined();
+    expect(post.numComments).toBeUndefined();
   });
 
-  it("drops thumbnail sentinels that aren't URLs", async () => {
+  it("requests the Atom feed, not the blocked JSON listing", async () => {
     state.cookies = [{ name: "loid" }];
-    state.fetch.mockImplementation(async (url: string) => {
-      const body = listing(subOf(url));
-      body.data.children[0].data.thumbnail = "self";
-      return new Response(JSON.stringify(body));
-    });
-    const result = await listRedditPosts([SUBS[0]]);
-    expect(result.subreddits[0].posts[0].thumbnailUrl).toBeUndefined();
+    state.fetch.mockImplementation(async (url: string) => ok(subOf(url)));
+    await listRedditPosts([SUBS[0]]);
+    expect(state.fetch.mock.calls[0][0]).toContain("/r/rust/new.rss");
+  });
+
+  it("decodes entities in titles", async () => {
+    state.cookies = [{ name: "loid" }];
+    state.fetch.mockImplementation(async () => new Response(atom("rust", { title: "Rust & \"C++\" <3" })));
+    const post = (await listRedditPosts([SUBS[0]])).subreddits[0].posts[0];
+    expect(post.title).toBe('Rust & "C++" <3');
+  });
+
+  it("only accepts http(s) thumbnails", async () => {
+    state.cookies = [{ name: "loid" }];
+    state.fetch.mockImplementation(async () => new Response(atom("rust", { thumbnail: "javascript:alert(1)" })));
+    expect((await listRedditPosts([SUBS[0]])).subreddits[0].posts[0].thumbnailUrl).toBeUndefined();
+    resetRedditCache();
+    state.fetch.mockImplementation(async () => new Response(atom("rust", { thumbnail: "https://b.thumbs.redditmedia.com/x.jpg" })));
+    expect((await listRedditPosts([SUBS[0]])).subreddits[0].posts[0].thumbnailUrl).toBe(
+      "https://b.thumbs.redditmedia.com/x.jpg"
+    );
   });
 
   it("points a self post's url at its own permalink", async () => {
     state.cookies = [{ name: "loid" }];
-    state.fetch.mockImplementation(async (url: string) => {
-      const body = listing(subOf(url));
-      body.data.children[0].data.is_self = true;
-      return new Response(JSON.stringify(body));
-    });
+    state.fetch.mockImplementation(async (url: string) =>
+      new Response(atom(subOf(url), { target: `https://www.reddit.com/r/${subOf(url)}/comments/abc/a_post/` }))
+    );
     const post = (await listRedditPosts([SUBS[0]])).subreddits[0].posts[0];
+    expect(post.isSelf).toBe(true);
     expect(post.url).toBe(post.permalink);
+    expect(post.domain).toBe("");
+  });
+
+  it("treats a 200 that isn't a feed as a failure, not an empty subreddit", async () => {
+    state.cookies = [{ name: "loid" }];
+    state.fetch.mockResolvedValue(new Response("<body>blocked</body>"));
+    const result = await listRedditPosts([SUBS[0]]);
+    expect(result).toEqual({ ok: false, reason: "Reddit returned an unexpected response", subreddits: [] });
   });
 
   it("isolates a failing subreddit from the working ones", async () => {

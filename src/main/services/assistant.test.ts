@@ -96,6 +96,7 @@ vi.mock("./settings", () => ({
   getGoogleCalendarSettings: () => ({}),
   getGithubScalarSettings: () => ({}),
   getYnabSettings: () => ({}),
+  getReaderSettings: () => ({ apiToken: "r" }),
   listGithubRepoSettings: () => [],
   listVaultSettings: () => [],
 }));
@@ -122,9 +123,20 @@ vi.mock("./todoist", () => ({
 vi.mock("./docker", () => ({ getDockerContainers: vi.fn() }));
 vi.mock("./googleCalendar", () => ({ getEventsForDay: vi.fn() }));
 vi.mock("./notes", () => ({ searchNotes: vi.fn(), readNoteFile: vi.fn() }));
-vi.mock("./github", () => ({ getGitHubStatus: vi.fn() }));
+vi.mock("./github", () => ({ getGitHubStatus: vi.fn(), getOpenPullRequests: vi.fn() }));
 vi.mock("./git", () => ({ getGitStatuses: vi.fn() }));
-vi.mock("./ynab", () => ({ getUnapprovedTransactions: vi.fn() }));
+vi.mock("./ynab", () => ({
+  getUnapprovedTransactions: vi.fn(),
+  getCategories: vi.fn(),
+  approveTransaction: vi.fn(),
+  setTransactionCategory: vi.fn(),
+}));
+vi.mock("./reader", () => ({ saveLink: vi.fn() }));
+vi.mock("./readerFeed", () => ({
+  listReaderFeed: vi.fn(),
+  moveFeedItemToInbox: vi.fn(),
+  findCachedFeedItem: vi.fn(),
+}));
 
 import { completeTask } from "./todoist";
 import {
@@ -261,7 +273,14 @@ describe("askAssistant", () => {
       "docker_status",
       "github_status",
       "git_status",
+      "github_list_prs",
       "ynab_unapproved",
+      "ynab_categories",
+      "approve_transaction",
+      "categorize_transaction",
+      "reader_feed_unread",
+      "reader_save_link",
+      "reader_move_to_inbox",
       "search_notes",
       "read_note",
       "complete_task",

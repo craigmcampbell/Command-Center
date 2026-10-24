@@ -8,6 +8,10 @@ export const ASSISTANT_MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "complete_task",
   "reschedule_task",
   "create_task",
+  "approve_transaction",
+  "categorize_transaction",
+  "reader_save_link",
+  "reader_move_to_inbox",
   "forget",
 ]);
 

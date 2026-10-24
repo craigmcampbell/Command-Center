@@ -159,6 +159,80 @@ export async function getReviewRequests(
   return { ok: true, prs };
 }
 
+export interface OpenPullRequest extends GitHubPr {
+  draft: boolean;
+  updatedAt: string;
+}
+
+export interface OpenPullRequestsResult {
+  ok: boolean;
+  reason?: string;
+  repos: { repo: string; ok: boolean; reason?: string; total: number; prs: OpenPullRequest[] }[];
+}
+
+const OPEN_PR_LIMIT = 50;
+
+// Every open PR (not just the five the dashboard widget shows) for the tracked
+// repos, or for the one matching `repoQuery` by label or owner/repo.
+export async function getOpenPullRequests(
+  config: GitHubConfig | undefined,
+  repoQuery?: string
+): Promise<OpenPullRequestsResult> {
+  const token = config?.token;
+  if (!token) return { ok: false, reason: "No GitHub token configured", repos: [] };
+
+  const wanted = repoQuery?.trim().toLowerCase();
+  const repos = (config?.repos ?? [])
+    .filter(hasRemote)
+    .filter(
+      (r) =>
+        !wanted || r.label.toLowerCase() === wanted || `${r.owner}/${r.repo}`.toLowerCase() === wanted
+    );
+  if (repos.length === 0) {
+    return {
+      ok: false,
+      reason: wanted ? `No tracked repo matches “${repoQuery}”` : "No GitHub repos are tracked",
+      repos: [],
+    };
+  }
+
+  const results = await Promise.all(
+    repos.map(async (r) => {
+      const base = { repo: r.label, total: 0, prs: [] as OpenPullRequest[] };
+      let res: Response;
+      try {
+        res = await githubFetch(
+          `${API_ROOT}/repos/${r.owner}/${r.repo}/pulls?state=open&per_page=${OPEN_PR_LIMIT}&sort=updated&direction=desc`,
+          token
+        );
+      } catch {
+        return { ...base, ok: false, reason: "Couldn't reach GitHub" };
+      }
+      const limited = rateLimitReason(res);
+      if (limited) return { ...base, ok: false, reason: limited };
+      if (!res.ok) {
+        return {
+          ...base,
+          ok: false,
+          reason: res.status === 401 ? "GitHub token rejected" : `GitHub request failed (${res.status})`,
+        };
+      }
+      const data: any[] = await res.json();
+      const prs = data.map((pr) => ({
+        number: pr.number,
+        title: pr.title,
+        author: pr.user?.login || "unknown",
+        url: pr.html_url,
+        repoLabel: r.label,
+        draft: Boolean(pr.draft),
+        updatedAt: pr.updated_at,
+      }));
+      return { ...base, ok: true, total: prs.length, prs };
+    })
+  );
+  return { ok: true, repos: results };
+}
+
 export async function getGitHubStatus(config: GitHubConfig | undefined): Promise<GitHubStatusResult> {
   const token = config?.token;
   if (!token) {

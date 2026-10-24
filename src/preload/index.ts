@@ -36,6 +36,7 @@ import type {
   TraySummary,
   YnabScalarConfig,
   YnabNewTransactionInput,
+  YnabSplitPart,
 } from "../shared/types";
 
 const api: CommandCenterApi = {
@@ -293,6 +294,8 @@ const api: CommandCenterApi = {
     export: () => ipcRenderer.invoke("backup:export"),
     list: () => ipcRenderer.invoke("backup:list"),
     runNow: () => ipcRenderer.invoke("backup:runNow"),
+    restore: (file: string) => ipcRenderer.invoke("backup:restore", file),
+    restoreFromFile: () => ipcRenderer.invoke("backup:restoreFromFile"),
   },
 
   capture: {
@@ -333,6 +336,15 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("ynab:setTransactionMemo", transactionId, memo),
     createTransaction: (input: YnabNewTransactionInput) =>
       ipcRenderer.invoke("ynab:createTransaction", input),
+    importTransactions: () => ipcRenderer.invoke("ynab:importTransactions"),
+    approveTransactions: (transactionIds: string[]) =>
+      ipcRenderer.invoke("ynab:approveTransactions", transactionIds),
+    splitTransaction: (transactionId: string, parts: YnabSplitPart[]) =>
+      ipcRenderer.invoke("ynab:splitTransaction", transactionId, parts),
+    trends: () => ipcRenderer.invoke("ynab:trends"),
+    netWorth: () => ipcRenderer.invoke("ynab:netWorth"),
+    accountHistory: (accountIds: string[]) => ipcRenderer.invoke("ynab:accountHistory", accountIds),
+    moneyMovements: () => ipcRenderer.invoke("ynab:moneyMovements"),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
   },

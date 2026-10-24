@@ -29,7 +29,7 @@ export interface AlertSnapshot {
 // purpose, not a build that needs attention.
 const CI_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 
-function isCiFailure(conclusion: string | null | undefined): boolean {
+export function isCiFailure(conclusion: string | null | undefined): boolean {
   return conclusion != null && CI_FAILURE_CONCLUSIONS.has(conclusion);
 }
 
@@ -37,11 +37,11 @@ function isCiFailure(conclusion: string | null | undefined): boolean {
 // SIGTERM, and services/processes.ts records `null` for a signal death (its
 // exit handler takes only the `code` argument), so manual stops can't reach
 // this — no "was this stop intentional?" bookkeeping needed anywhere.
-function isCrash(exitCode: number | null | undefined): boolean {
+export function isCrash(exitCode: number | null | undefined): boolean {
   return exitCode != null && exitCode !== 0;
 }
 
-function isOverspent(balance: number | undefined): boolean {
+export function isOverspent(balance: number | undefined): boolean {
   return balance != null && balance < 0;
 }
 

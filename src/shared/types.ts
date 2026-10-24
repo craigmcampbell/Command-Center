@@ -1195,9 +1195,12 @@ export interface RedditPost {
   permalink: string; // absolute https://www.reddit.com/... — the discussion
   url: string; // what the post points at (its permalink, for a self post)
   domain: string;
-  score: number;
-  numComments: number;
-  createdUtc: number; // seconds since epoch, as Reddit reports it
+  // Absent: the public Atom feed carries neither (the JSON listing that did is
+  // blocked). Optional rather than 0 so the UI can leave them out instead of
+  // showing a number that looks real.
+  score?: number;
+  numComments?: number;
+  createdUtc: number; // seconds since epoch
   thumbnailUrl?: string;
   flair?: string;
   isSelf: boolean;
@@ -1398,6 +1401,10 @@ export interface YnabTransaction {
   categoryId: string | null;
   categoryName: string | null;
   memo: string | null;
+  // A split has no category of its own (its lines do), so `categoryId` is null
+  // for it by design — not "uncategorized". Optional so existing fixtures
+  // that predate splits stay valid.
+  isSplit?: boolean;
   // Deep link to the transaction's account register in the YNAB web app —
   // YNAB's API doesn't expose a documented per-transaction URL, so this
   // lands on the account rather than scrolled/highlighted to the row.
@@ -1519,6 +1526,94 @@ export interface YnabNewTransactionInput {
   payeeId?: string;
   categoryId?: string;
   memo?: string;
+}
+
+// One line of a split. `amount` is a positive dollar magnitude; the sign comes
+// from the transaction being split, which main reads from YNAB rather than
+// trusting the renderer's copy.
+export interface YnabSplitPart {
+  categoryId: string;
+  amount: number;
+  memo?: string;
+}
+
+export interface YnabImportResult {
+  ok: boolean;
+  reason?: string;
+  // Zero is a normal answer: the linked banks had nothing new.
+  imported: number;
+}
+
+export interface YnabBulkApproveResult {
+  ok: boolean;
+  reason?: string;
+  approved: number;
+}
+
+// One budget month's totals. `spent` is a positive number (YNAB reports
+// spending as negative activity); `income` is what landed in Ready to Assign.
+export interface YnabTrendMonth {
+  month: string; // first of the month, YYYY-MM-DD
+  income: number;
+  budgeted: number;
+  spent: number;
+  ageOfMoney: number | null;
+}
+
+// A category's spending across the same months as `YnabTrendsResult.months`,
+// same order and length, so index i lines up with months[i].
+export interface YnabCategoryTrend {
+  id: string;
+  name: string;
+  groupName: string;
+  spent: number[];
+  budgeted: number[];
+}
+
+export interface YnabTrendsResult {
+  ok: boolean;
+  reason?: string;
+  months: YnabTrendMonth[]; // oldest first, ends at the current month
+  categories: YnabCategoryTrend[]; // biggest total spend first
+}
+
+export interface YnabNetWorthPoint {
+  month: string; // first of the month, YYYY-MM-DD; value is as of that month's end
+  netWorth: number;
+}
+
+export interface YnabNetWorthResult {
+  ok: boolean;
+  reason?: string;
+  current: number;
+  points: YnabNetWorthPoint[]; // oldest first, ends at the current month
+}
+
+// Month-end balances per account, for building history the app doesn't store.
+// Each array lines up with `months` (oldest first); the last entry is the live
+// balance. Accounts YNAB doesn't know are simply absent from `balances`.
+export interface YnabAccountHistoryResult {
+  ok: boolean;
+  reason?: string;
+  months: string[];
+  balances: Record<string, number[]>;
+}
+
+// A budget reassignment between categories. A null side is Ready to Assign.
+export interface YnabMoneyMovement {
+  id: string;
+  date: string | null;
+  month: string | null;
+  fromName: string;
+  toName: string;
+  amount: number;
+  note: string | null;
+}
+
+export interface YnabMoneyMovementsResult {
+  ok: boolean;
+  reason?: string;
+  movements: YnabMoneyMovement[]; // newest first
 }
 
 // A file or folder one level down from wherever browseVault() was pointed —
@@ -1841,6 +1936,10 @@ export interface CommandCenterApi {
     export: () => Promise<ExportResult>;
     list: () => Promise<BackupFile[]>;
     runNow: () => Promise<ActionResult>;
+    // Both end in a relaunch on success; `path` is where the replaced
+    // database was kept.
+    restore: (file: string) => Promise<ExportResult>;
+    restoreFromFile: () => Promise<ExportResult>;
   };
   capture: {
     submit: (target: CaptureTarget, text: string) => Promise<ActionResult>;
@@ -1862,6 +1961,13 @@ export interface CommandCenterApi {
     setTransactionCategory: (transactionId: string, categoryId: string) => Promise<ActionResult>;
     setTransactionMemo: (transactionId: string, memo: string) => Promise<ActionResult>;
     createTransaction: (input: YnabNewTransactionInput) => Promise<ActionResult>;
+    importTransactions: () => Promise<YnabImportResult>;
+    approveTransactions: (transactionIds: string[]) => Promise<YnabBulkApproveResult>;
+    splitTransaction: (transactionId: string, parts: YnabSplitPart[]) => Promise<ActionResult>;
+    trends: () => Promise<YnabTrendsResult>;
+    netWorth: () => Promise<YnabNetWorthResult>;
+    accountHistory: (accountIds: string[]) => Promise<YnabAccountHistoryResult>;
+    moneyMovements: () => Promise<YnabMoneyMovementsResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
   };
   bills: {
