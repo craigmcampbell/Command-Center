@@ -62,6 +62,7 @@ const DEFAULT_TABS: { id: string; label: string }[] = [
   { id: "social", label: "Social" },
   { id: "projects", label: "Projects" },
   { id: "assistant", label: "Assistant" },
+  { id: "debt", label: "Debt" },
 ];
 
 export function initSettings(): void {
@@ -126,6 +127,11 @@ export function initSettings(): void {
     label TEXT NOT NULL,
     sort_order INTEGER NOT NULL
   )`);
+  try {
+    db.exec(`ALTER TABLE tabs ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // already migrated
+  }
   migrateAiTab();
   ensureTabDefaults();
 }
@@ -763,9 +769,24 @@ export function reorderProcesses(orderedIds: string[]): ProcessConfig[] {
 // ---- tabs ----
 
 function tabRowsToItems(): TabConfig[] {
-  return getDatabase()
-    .prepare(`SELECT id, label, sort_order as sortOrder FROM tabs ORDER BY sort_order ASC`)
-    .all() as TabConfig[];
+  const rows = getDatabase()
+    .prepare(`SELECT id, label, sort_order as sortOrder, hidden FROM tabs ORDER BY sort_order ASC`)
+    .all() as (Omit<TabConfig, "hidden"> & { hidden: number })[];
+  return rows.map((r) => ({ ...r, hidden: r.hidden !== 0 }));
+}
+
+// Hiding is refused for the last visible tab: with none left the strip would
+// be empty and there'd be nothing to click to get back to Settings' Tabs section.
+export function setTabHidden(id: string, hidden: boolean): TabConfig[] {
+  const db = getDatabase();
+  if (hidden) {
+    const { visible } = db
+      .prepare(`SELECT COUNT(*) as visible FROM tabs WHERE hidden = 0 AND id != ?`)
+      .get(id) as { visible: number };
+    if (visible === 0) return tabRowsToItems();
+  }
+  db.prepare(`UPDATE tabs SET hidden = ? WHERE id = ?`).run(hidden ? 1 : 0, id);
+  return tabRowsToItems();
 }
 
 export function listTabSettings(): TabConfig[] {

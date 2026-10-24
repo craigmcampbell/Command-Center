@@ -12,6 +12,9 @@ import type {
   CaptureSettings,
   CaptureTarget,
   CommandCenterApi,
+  DebtInput,
+  DebtOneTimeInput,
+  DebtPlanSettings,
   DockerSettings,
   GoogleCalendarConfig,
   GrimoireConfig,
@@ -344,6 +347,7 @@ const api: CommandCenterApi = {
     trends: () => ipcRenderer.invoke("ynab:trends"),
     netWorth: () => ipcRenderer.invoke("ynab:netWorth"),
     accountHistory: (accountIds: string[]) => ipcRenderer.invoke("ynab:accountHistory", accountIds),
+    monthSpending: (accountIds: string[]) => ipcRenderer.invoke("ynab:monthSpending", accountIds),
     moneyMovements: () => ipcRenderer.invoke("ynab:moneyMovements"),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
@@ -357,6 +361,23 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("bills:update", id, label, dueDay, autopay),
     remove: (id: number) => ipcRenderer.invoke("bills:remove", id),
     setNote: (id: number, note: string) => ipcRenderer.invoke("bills:setNote", id, note),
+  },
+
+  debts: {
+    list: () => ipcRenderer.invoke("debts:list"),
+    add: (input: DebtInput) => ipcRenderer.invoke("debts:add", input),
+    update: (id: number, input: DebtInput) => ipcRenderer.invoke("debts:update", id, input),
+    remove: (id: number) => ipcRenderer.invoke("debts:remove", id),
+    reorder: (orderedIds: number[]) => ipcRenderer.invoke("debts:reorder", orderedIds),
+    oneTimeList: () => ipcRenderer.invoke("debts:oneTimeList"),
+    oneTimeAdd: (input: DebtOneTimeInput) => ipcRenderer.invoke("debts:oneTimeAdd", input),
+    oneTimeUpdate: (id: number, input: DebtOneTimeInput) =>
+      ipcRenderer.invoke("debts:oneTimeUpdate", id, input),
+    oneTimeRemove: (id: number) => ipcRenderer.invoke("debts:oneTimeRemove", id),
+    getPlan: () => ipcRenderer.invoke("debts:getPlan"),
+    setPlan: (plan: DebtPlanSettings) => ipcRenderer.invoke("debts:setPlan", plan),
+    exportMarkdown: (markdown: string, defaultName: string) =>
+      ipcRenderer.invoke("debts:exportMarkdown", markdown, defaultName),
   },
 
   cards: {
@@ -525,6 +546,8 @@ const api: CommandCenterApi = {
     tabs: {
       rename: (id: string, label: string) => ipcRenderer.invoke("settings:tabs:rename", id, label),
       reorder: (orderedIds: string[]) => ipcRenderer.invoke("settings:tabs:reorder", orderedIds),
+      setHidden: (id: string, hidden: boolean) =>
+        ipcRenderer.invoke("settings:tabs:setHidden", id, hidden),
     },
   },
 };

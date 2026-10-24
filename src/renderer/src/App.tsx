@@ -4,7 +4,7 @@ import StatsPanel from "./components/StatsPanel";
 // The UI. Runs sandboxed — it can only reach the main process through the
 // `window.api` object that the preload set up. No Node, no fs, no exec here.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DockerResult,
   DockerUpdateCheckResult,
@@ -56,6 +56,7 @@ import GitHubWidget from "./components/GitHubWidget";
 import GitStatusWidget from "./components/GitStatusWidget";
 import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
+import DebtTab from "./components/DebtTab";
 import BillsWidget from "./components/BillsWidget";
 import BudgetHealthWidget from "./components/BudgetHealthWidget";
 import SpendingTrendsWidget from "./components/SpendingTrendsWidget";
@@ -111,7 +112,8 @@ type TabId =
   | "ai"
   | "stats"
   | "social"
-  | "assistant";
+  | "assistant"
+  | "debt";
 
 // The AI tab's own sub-navigation (Claude / Firecrawl / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
@@ -127,21 +129,22 @@ type ReaderSubTab = "saved" | "feed";
 // resolves with the DB-backed rows (services/settings.ts's DEFAULT_TABS is
 // the source of truth for what gets seeded — keep these in sync with it).
 const DEFAULT_TABS: TabConfig[] = [
-  { id: "home", label: "Home", sortOrder: 0 },
-  { id: "development", label: "Development", sortOrder: 1 },
-  { id: "reader", label: "Reader", sortOrder: 2 },
-  { id: "scratchpad", label: "Scratchpad", sortOrder: 3 },
-  { id: "habits", label: "Habits", sortOrder: 4 },
-  { id: "notes", label: "Notes", sortOrder: 5 },
-  { id: "finances", label: "Finances", sortOrder: 6 },
-  { id: "ai", label: "AI", sortOrder: 7 },
-  { id: "stats", label: "Stats", sortOrder: 8 },
+  { id: "home", label: "Home", sortOrder: 0, hidden: false },
+  { id: "development", label: "Development", sortOrder: 1, hidden: false },
+  { id: "reader", label: "Reader", sortOrder: 2, hidden: false },
+  { id: "scratchpad", label: "Scratchpad", sortOrder: 3, hidden: false },
+  { id: "habits", label: "Habits", sortOrder: 4, hidden: false },
+  { id: "notes", label: "Notes", sortOrder: 5, hidden: false },
+  { id: "finances", label: "Finances", sortOrder: 6, hidden: false },
+  { id: "ai", label: "AI", sortOrder: 7, hidden: false },
+  { id: "stats", label: "Stats", sortOrder: 8, hidden: false },
   // Appended, not slotted in: ensureTabDefaults() inserts a missing tab at
   // maxOrder + 1, so a mid-list position here would disagree with what an
   // existing install's DB actually holds. Drag-to-reorder handles placement.
-  { id: "social", label: "Social", sortOrder: 9 },
-  { id: "projects", label: "Projects", sortOrder: 10 },
-  { id: "assistant", label: "Assistant", sortOrder: 11 },
+  { id: "social", label: "Social", sortOrder: 9, hidden: false },
+  { id: "projects", label: "Projects", sortOrder: 10, hidden: false },
+  { id: "assistant", label: "Assistant", sortOrder: 11, hidden: false },
+  { id: "debt", label: "Debt", sortOrder: 12, hidden: false },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -495,13 +498,12 @@ export default function App() {
     setActiveTab("scratchpad");
   }, []);
 
-  const renameTab = useCallback(async (id: string, label: string) => {
-    setTabOrder(await window.api.settings.tabs.rename(id, label));
-  }, []);
-
-  const reorderTabs = useCallback(async (orderedIds: string[]) => {
-    setTabOrder(await window.api.settings.tabs.reorder(orderedIds));
-  }, []);
+  // Hidden tabs leave the strip and the palette, but one you're currently on
+  // (reached by a link or a notification) stays put until you navigate away.
+  const visibleTabs = useMemo(
+    () => tabOrder.filter((t) => !t.hidden || t.id === activeTab),
+    [tabOrder, activeTab]
+  );
 
   // ---- command palette: global ⌘P/Ctrl+P toggle, works from any tab ----
   // Not ⌘K: that's the near-universal "insert link" shortcut in a markdown
@@ -521,7 +523,7 @@ export default function App() {
   }, []);
 
   const paletteContext: PaletteContext = {
-    tabs: tabOrder,
+    tabs: tabOrder.filter((t) => !t.hidden),
     onNavigateTab: (id) => setActiveTab(id as TabId),
     claudeProjects,
     localApps,
@@ -561,7 +563,14 @@ export default function App() {
       setNotificationSettings(cfg.notifications ?? {});
       setShowTimeTracking(cfg.todoist?.showTimeTracking !== false);
       setProcessConfigs(cfg.processes ?? []);
-      if (cfg.tabs?.length) setTabOrder(cfg.tabs);
+      if (cfg.tabs?.length) {
+        setTabOrder(cfg.tabs);
+        // Home is where the app opens — unless it has been hidden.
+        if (cfg.tabs.find((t) => t.id === "home")?.hidden) {
+          const first = cfg.tabs.find((t) => !t.hidden);
+          if (first) setActiveTab(first.id as TabId);
+        }
+      }
       setSettingsLoaded(true);
     }).catch(() => { if (!cancelled) setSettingsLoaded(true); });
     void Promise.all([
@@ -582,7 +591,7 @@ export default function App() {
   usePolling(loadGithub, githubRefreshSeconds * 1000, settingsLoaded, 600);
   usePolling(loadProcessStatuses, 3000, settingsLoaded, 200);
   usePolling(loadBudgetHealth, ynabRefreshSeconds * 1000, settingsLoaded, 1200);
-  usePolling(loadYnab, ynabRefreshSeconds * 1000, foreground && activeTab === "finances", 300);
+  usePolling(loadYnab, ynabRefreshSeconds * 1000, foreground && (activeTab === "finances" || activeTab === "debt"), 300);
   // Home's attention strip only needs the unapproved count, not the whole Finances load.
   usePolling(loadYnabUnapproved, ynabRefreshSeconds * 1000, foreground && activeTab === "home", 500);
   usePolling(loadDockerUpdates, dockerUpdateCheckMinutes * 60_000, foreground && (activeTab === "development" || activeTab === "projects") && dockerUpdateChecksEnabled, 2000);
@@ -607,6 +616,8 @@ export default function App() {
   usePolling(loadGithubReleases, localInterval, foreground && activeTab === "development", 800);
   usePolling(async () => { await Promise.all([loadYouTube(), loadReddit()]); }, localInterval, foreground && activeTab === "social", 400);
   usePolling(async () => { await Promise.all([loadFinanceReviewLog(), loadBills(), loadCards()]); }, localInterval, foreground && activeTab === "finances");
+  // The Debt tab only needs the cards list (to prefill a debt from one).
+  usePolling(loadCards, localInterval, foreground && activeTab === "debt");
 
   // ---- alerts + tray, derived from state the widgets already poll ----
   // No new polling: this reacts to github/processStatuses/docker changing,
@@ -683,11 +694,9 @@ export default function App() {
       </header>
 
       <TabBar
-        tabs={tabOrder}
+        tabs={visibleTabs}
         activeId={activeTab}
         onSelect={(id) => setActiveTab(id as TabId)}
-        onReorder={reorderTabs}
-        onRename={renameTab}
       />
 
       {activeTab === "home" && (
@@ -887,6 +896,12 @@ export default function App() {
               onPendingOpenHandled={() => setPendingNoteOpen(null)}
             />
           </div>
+        </main>
+      )}
+
+      {activeTab === "debt" && (
+        <main className="grid grid-debt">
+          <DebtTab ynabAccounts={ynabAccounts} cards={cards} />
         </main>
       )}
 
@@ -1106,6 +1121,7 @@ export default function App() {
         open={settingsOpen}
         initialSection={settingsSection}
         onClose={() => setSettingsOpen(false)}
+        onTabsChange={setTabOrder}
         onProcessConfigsChange={setProcessConfigs}
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}
         onDockerRefreshSecondsChange={setDockerRefreshSeconds}

@@ -1,3 +1,5 @@
+import type { DebtStrategy } from "./debtPlan";
+
 // Shared contract between main (services + IPC), preload (the bridge), and
 // the renderer (React components). This is what makes `window.api` typed.
 
@@ -177,6 +179,8 @@ export interface TabConfig {
   id: string;
   label: string;
   sortOrder: number;
+  /** Not shown in the tab strip or the command palette (still reachable by a link). */
+  hidden: boolean;
 }
 
 // One tool the assistant ran while producing a reply — shown as a chip, and in
@@ -1514,6 +1518,49 @@ export interface CardItem {
   ynabAccountId: string | null;
 }
 
+// ---- Debt paydown plan (Debt tab) ----
+
+// A balance being paid down. `balance` is the manual figure; when the Debt is
+// linked to a YNAB account and `balance` is null the live balance owed is used
+// instead (a manual figure wins as an override). `payInFullSpending` is the
+// part of that balance cleared in full each month, excluded from the plan —
+// either typed by hand or (payInFullAuto) this month's spending in YNAB.
+// See GLOSSARY.md and docs ADR 0001. `cardId` is a one-time prefill source,
+// not a live coupling.
+export interface DebtItem {
+  id: number;
+  name: string;
+  balance: number | null;
+  apr: number;
+  minPayment: number;
+  payInFullSpending: number;
+  /** Linked debts only: use this month's YNAB spending instead of the typed amount. */
+  payInFullAuto: boolean;
+  ynabAccountId: string | null;
+  cardId: number | null;
+  sortOrder: number;
+}
+
+export type DebtInput = Omit<DebtItem, "id" | "sortOrder">;
+
+export interface DebtOneTimePayment {
+  id: number;
+  /** "YYYY-MM" */
+  month: string;
+  amount: number;
+  /** null = follow the strategy. */
+  targetDebtId: number | null;
+}
+
+export type DebtOneTimeInput = Omit<DebtOneTimePayment, "id">;
+
+export interface DebtPlanSettings {
+  extra: number;
+  strategy: DebtStrategy;
+  startsNextMonth: boolean;
+  customOrder: number[];
+}
+
 // Input for manually adding a transaction — amount is dollars, signed
 // (negative = outflow), converted to milliunits server-side. payeeId wins
 // over payeeName when a payee was picked from the autocomplete list; a typed
@@ -1597,6 +1644,14 @@ export interface YnabAccountHistoryResult {
   reason?: string;
   months: string[];
   balances: Record<string, number[]>;
+}
+
+// Month-to-date spending per YNAB account id, in dollars (refunds netted off,
+// never below zero). See getMonthSpending in ynabInsights.ts.
+export interface YnabMonthSpendingResult {
+  ok: boolean;
+  reason?: string;
+  spending: Record<string, number>;
 }
 
 // A budget reassignment between categories. A null side is Ready to Assign.
@@ -1967,6 +2022,7 @@ export interface CommandCenterApi {
     trends: () => Promise<YnabTrendsResult>;
     netWorth: () => Promise<YnabNetWorthResult>;
     accountHistory: (accountIds: string[]) => Promise<YnabAccountHistoryResult>;
+    monthSpending: (accountIds: string[]) => Promise<YnabMonthSpendingResult>;
     moneyMovements: () => Promise<YnabMoneyMovementsResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
   };
@@ -1976,6 +2032,20 @@ export interface CommandCenterApi {
     update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     remove: (id: number) => Promise<BillItem[]>;
     setNote: (id: number, note: string) => Promise<BillItem[]>;
+  };
+  debts: {
+    list: () => Promise<DebtItem[]>;
+    add: (input: DebtInput) => Promise<DebtItem[]>;
+    update: (id: number, input: DebtInput) => Promise<DebtItem[]>;
+    remove: (id: number) => Promise<DebtItem[]>;
+    reorder: (orderedIds: number[]) => Promise<DebtItem[]>;
+    oneTimeList: () => Promise<DebtOneTimePayment[]>;
+    oneTimeAdd: (input: DebtOneTimeInput) => Promise<DebtOneTimePayment[]>;
+    oneTimeUpdate: (id: number, input: DebtOneTimeInput) => Promise<DebtOneTimePayment[]>;
+    oneTimeRemove: (id: number) => Promise<DebtOneTimePayment[]>;
+    getPlan: () => Promise<DebtPlanSettings>;
+    setPlan: (plan: DebtPlanSettings) => Promise<DebtPlanSettings>;
+    exportMarkdown: (markdown: string, defaultName: string) => Promise<ExportResult>;
   };
   cards: {
     list: () => Promise<CardItem[]>;
@@ -2133,6 +2203,7 @@ export interface CommandCenterApi {
     tabs: {
       rename: (id: string, label: string) => Promise<TabConfig[]>;
       reorder: (orderedIds: string[]) => Promise<TabConfig[]>;
+      setHidden: (id: string, hidden: boolean) => Promise<TabConfig[]>;
     };
   };
 }

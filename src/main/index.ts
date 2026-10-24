@@ -170,6 +170,7 @@ import {
   getSpendingTrends as getYnabTrends,
   getNetWorthHistory as getYnabNetWorth,
   getAccountBalanceHistory as getYnabAccountHistory,
+  getMonthSpending as getYnabMonthSpending,
   getMoneyMovements as getYnabMoneyMovements,
 } from "./services/ynabInsights";
 import {
@@ -180,6 +181,20 @@ import {
   removeBill,
   setBillNote,
 } from "./services/bills";
+import {
+  initDebts,
+  listDebts,
+  addDebt,
+  updateDebt,
+  removeDebt,
+  reorderDebts,
+  listOneTime,
+  addOneTime,
+  updateOneTime,
+  removeOneTime,
+  getDebtPlan,
+  setDebtPlan,
+} from "./services/debts";
 import { initCards, listCards, addCard, updateCard, removeCard } from "./services/cards";
 import {
   initNotes,
@@ -274,6 +289,7 @@ import {
   reorderProcesses,
   renameTab,
   reorderTabs,
+  setTabHidden,
 } from "./services/settings";
 import type {
   GoogleCalendarConfig,
@@ -319,6 +335,7 @@ initSettings();
 initTimeTracking();
 initBills();
 initCards();
+initDebts();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -851,6 +868,9 @@ readHandler("ynab:netWorth", () => getYnabNetWorth(getYnabSettings()));
 readHandler("ynab:accountHistory", (_evt, accountIds: string[]) =>
   getYnabAccountHistory(getYnabSettings(), accountIds)
 );
+readHandler("ynab:monthSpending", (_evt, accountIds: string[]) =>
+  getYnabMonthSpending(getYnabSettings(), accountIds)
+);
 readHandler("ynab:moneyMovements", () => getYnabMoneyMovements(getYnabSettings()));
 ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);
@@ -870,6 +890,36 @@ ipcMain.handle(
 );
 ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
 ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(id, note));
+
+// Debt tab: plan inputs only — the projection is computed in the renderer.
+ipcMain.handle("debts:list", () => listDebts());
+ipcMain.handle("debts:add", (_evt, input) => addDebt(input));
+ipcMain.handle("debts:update", (_evt, id: number, input) => updateDebt(id, input));
+ipcMain.handle("debts:remove", (_evt, id: number) => removeDebt(id));
+ipcMain.handle("debts:reorder", (_evt, ids: number[]) => reorderDebts(ids));
+ipcMain.handle("debts:oneTimeList", () => listOneTime());
+ipcMain.handle("debts:oneTimeAdd", (_evt, input) => addOneTime(input));
+ipcMain.handle("debts:oneTimeUpdate", (_evt, id: number, input) => updateOneTime(id, input));
+ipcMain.handle("debts:oneTimeRemove", (_evt, id: number) => removeOneTime(id));
+ipcMain.handle("debts:getPlan", () => getDebtPlan());
+ipcMain.handle("debts:setPlan", (_evt, plan) => setDebtPlan(plan));
+ipcMain.handle(
+  "debts:exportMarkdown",
+  async (_evt, markdown: string, defaultName: string): Promise<ExportResult> => {
+    const result = await dialog.showSaveDialog({
+      title: "Export debt plan",
+      defaultPath: path.basename(String(defaultName || "debt-plan.md")),
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      await fs.promises.writeFile(result.filePath, String(markdown), "utf8");
+      return { ok: true, path: result.filePath };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : "Could not write the file" };
+    }
+  }
+);
 
 // Cards: manually-tracked credit cards (name, credit limit, APR), shown
 // alongside Bills in the Finances tab.
@@ -1140,6 +1190,7 @@ ipcMain.handle("settings:processes:reorder", (_evt, orderedIds: string[]) =>
 );
 
 ipcMain.handle("settings:tabs:rename", (_evt, id: string, label: string) => renameTab(id, label));
+ipcMain.handle("settings:tabs:setHidden", (_evt, id: string, hidden: boolean) => setTabHidden(id, hidden));
 ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderTabs(orderedIds));
 
 app.whenReady().then(() => {

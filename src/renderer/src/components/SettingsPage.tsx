@@ -42,6 +42,7 @@ import type {
   RailwayScalarConfig,
   ProcessConfig,
   SubredditConfig,
+  TabConfig,
   VaultConfig,
   YnabScalarConfig,
   YouTubeChannelConfig,
@@ -76,6 +77,7 @@ type SectionId =
   | "vaults"
   | "githubRepos"
   | "processes"
+  | "tabs"
   | "social"
   | "data";
 
@@ -87,6 +89,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "vaults", label: "Vaults" },
   { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
+  { id: "tabs", label: "Tabs" },
   { id: "social", label: "Social" },
   { id: "data", label: "Data" },
 ];
@@ -98,6 +101,7 @@ interface SettingsPageProps {
   initialSection?: SectionId;
   onClose: () => void;
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
+  onTabsChange: (tabs: TabConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
   onDockerUpdateSettingsChange: (settings: DockerSettings) => void;
@@ -2612,6 +2616,119 @@ function ProcessesSection({
   );
 }
 
+// ---- tabs ----
+
+function TabRow({
+  tab,
+  isLastVisible,
+  onRename,
+  onToggleHidden,
+}: {
+  tab: TabConfig;
+  isLastVisible: boolean;
+  onRename: (label: string) => void;
+  onToggleHidden: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(tab.label);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+
+  function commit() {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== tab.label) onRename(trimmed);
+    else setValue(tab.label);
+    setEditing(false);
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`settings-array-row ${isDragging ? "dragging" : ""} ${tab.hidden ? "tab-row-hidden" : ""}`}
+    >
+      <button className="drag-handle" {...attributes} {...listeners} aria-label={`Reorder ${tab.label}`}>
+        <IconGrip />
+      </button>
+      {editing ? (
+        <input
+          className="settings-input"
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setValue(tab.label);
+              setEditing(false);
+            }
+          }}
+        />
+      ) : (
+        <div className="settings-array-row-main">
+          <span className="settings-array-row-label">{tab.label}</span>
+          {tab.hidden && <span className="settings-array-row-sub">hidden</span>}
+        </div>
+      )}
+      <span className="row-actions always-visible">
+        <button className="row-action" onClick={() => setEditing(true)} aria-label={`Rename ${tab.label}`} title="Rename">
+          <IconPencil />
+        </button>
+        <button
+          className="row-action"
+          onClick={onToggleHidden}
+          disabled={isLastVisible}
+          aria-label={tab.hidden ? `Show ${tab.label}` : `Hide ${tab.label}`}
+          title={isLastVisible ? "At least one tab must stay visible" : tab.hidden ? "Show tab" : "Hide tab"}
+        >
+          {tab.hidden ? <IconEyeOff /> : <IconEye />}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function TabsSection({ tabs, onChange }: { tabs: TabConfig[]; onChange: (tabs: TabConfig[]) => void }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const visibleCount = tabs.filter((t) => !t.hidden).length;
+
+  async function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = tabs.findIndex((t) => t.id === active.id);
+    const newIndex = tabs.findIndex((t) => t.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const next = arrayMove(tabs, oldIndex, newIndex);
+    onChange(next); // optimistic, so the row doesn't snap back while the write lands
+    onChange(await window.api.settings.tabs.reorder(next.map((t) => t.id)));
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>Tabs</h3>
+      <p className="settings-card-hint">
+        Drag to set the order of the tab strip, click the eye to show or hide a tab, and the pencil to rename
+        one. A hidden tab keeps its data and is simply left out of the strip and the command palette.
+      </p>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={tabs.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+          {tabs.map((t) => (
+            <TabRow
+              key={t.id}
+              tab={t}
+              isLastVisible={!t.hidden && visibleCount <= 1}
+              onRename={async (label) => onChange(await window.api.settings.tabs.rename(t.id, label))}
+              onToggleHidden={async () => onChange(await window.api.settings.tabs.setHidden(t.id, !t.hidden))}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
+    </div>
+  );
+}
+
 // ---- top-level page ----
 
 export default function SettingsPage({
@@ -2619,6 +2736,7 @@ export default function SettingsPage({
   initialSection,
   onClose,
   onProcessConfigsChange,
+  onTabsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
   onDockerUpdateSettingsChange,
@@ -2636,11 +2754,15 @@ export default function SettingsPage({
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
   const [data, setData] = useState<AppConfig | null>(null);
+  const [tabs, setTabs] = useState<TabConfig[]>([]);
 
   useEffect(() => {
     if (!open) return;
     setSection(initialSection ?? "general");
-    window.api.settings.getAll().then(setData);
+    window.api.settings.getAll().then((cfg) => {
+      setData(cfg);
+      setTabs(cfg.tabs ?? []);
+    });
   }, [open, initialSection]);
 
   useEffect(() => {
@@ -2847,6 +2969,16 @@ export default function SettingsPage({
                   onChange={(processes) => {
                     setData((prev) => (prev ? { ...prev, processes } : prev));
                     onProcessConfigsChange(processes);
+                  }}
+                />
+              )}
+
+              {section === "tabs" && (
+                <TabsSection
+                  tabs={tabs}
+                  onChange={(next) => {
+                    setTabs(next);
+                    onTabsChange(next);
                   }}
                 />
               )}

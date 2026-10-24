@@ -150,6 +150,7 @@ body {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 0 28px 18px;
@@ -172,9 +173,6 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
-.tab.dragging {
-  opacity: 0.5;
-}
 .tab-label {
   display: flex;
   align-items: center;
@@ -186,58 +184,6 @@ body {
   font-size: 12px;
   padding: 6px 16px;
   cursor: pointer;
-}
-.tabs-editing .tab-label {
-  cursor: text;
-}
-.tab-edit-icon {
-  opacity: 0.5;
-}
-.tab-drag-handle {
-  display: flex;
-  align-items: center;
-  background: none;
-  border: none;
-  color: inherit;
-  padding: 6px 0 6px 12px;
-  cursor: grab;
-}
-.tab-drag-handle:active {
-  cursor: grabbing;
-}
-.tab-renaming {
-  padding: 2px;
-}
-.tab-rename-input {
-  background: var(--ground);
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 5px 14px;
-  width: 120px;
-}
-.tab-rename-input:focus {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
-.tabs-edit-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--panel-edge);
-  color: var(--ink-dim);
-  padding: 6px 10px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  margin-left: auto;
-}
-.tabs-edit-toggle:hover {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 .grid {
@@ -354,7 +300,9 @@ body {
 }
 
 .grid-finances {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* The last column holds Bills/Cards, whose table needs more room than a
+     third of the window to leave the card names readable. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.7fr);
   grid-template-areas:
     "ynab-financelog ynab-accounts ynab-bills"
     "ynab-unapproved ynab-unapproved ynab-unapproved"
@@ -3879,16 +3827,21 @@ body {
 .cards-table tbody tr:hover .row-actions {
   opacity: 1;
 }
-.card-col-name {
+.cards-table .card-col-name {
   width: auto;
+  /* Wrap rather than truncate: a name cut to a few letters is useless.
+     Needs the table prefix to outrank .ynab-table td's nowrap + ellipsis. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
 }
 .card-col-limit {
-  width: 100px;
+  width: 84px;
   text-align: right;
   font-family: var(--mono);
 }
 .card-col-apr {
-  width: 80px;
+  width: 64px;
   text-align: right;
   font-family: var(--mono);
   font-weight: 600;
@@ -3900,7 +3853,7 @@ body {
   color: var(--live);
 }
 .card-col-balance {
-  width: 150px;
+  width: 120px;
   font-family: var(--mono);
 }
 .card-col-actions {
@@ -6753,4 +6706,323 @@ body {
 }
 .util-trend-values li.over span:first-child {
   color: var(--alert);
+}
+
+/* ---- Debt tab ---- */
+.grid-debt {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "debt-plan"
+    "debt-strategies"
+    "debt-detail";
+}
+.slot-debt-plan {
+  grid-area: debt-plan;
+}
+.slot-debt-strategies {
+  grid-area: debt-strategies;
+}
+.slot-debt-detail {
+  grid-area: debt-detail;
+}
+.grid-debt .panel-body {
+  max-height: none;
+}
+.slot-debt-plan .panel,
+.slot-debt-strategies .panel,
+.slot-debt-detail .panel {
+  width: 100%;
+}
+.debt-subhead {
+  margin: 18px 0 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.debt-plan-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.debt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+.debt-field > span {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.debt-field-wide {
+  flex: 2 1 220px;
+}
+.debt-grow {
+  flex: 1;
+  min-width: 0;
+}
+.debt-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.debt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  font-size: 13px;
+}
+.debt-row-editing {
+  flex-wrap: wrap;
+}
+.debt-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.debt-row-name {
+  font-weight: 600;
+}
+.debt-row-balance {
+  font-family: var(--mono);
+  font-weight: 600;
+  min-width: 90px;
+  text-align: right;
+}
+.debt-row-balance.paid {
+  color: var(--live);
+}
+.debt-row-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  min-width: 80px;
+  text-align: right;
+}
+.debt-row-actions {
+  display: flex;
+  gap: 2px;
+}
+.debt-flip svg {
+  transform: rotate(180deg);
+}
+.debt-drift {
+  font-size: 12px;
+  color: var(--pending);
+}
+.debt-amount {
+  width: 120px;
+}
+.debt-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+.debt-row-editing .debt-form {
+  margin-top: 0;
+}
+.debt-form-actions {
+  display: flex;
+  gap: 2px;
+}
+.debt-help {
+  flex-basis: 100%;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.debt-warn {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--pending);
+  background: var(--pending-glow);
+}
+.debt-strategy-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.debt-strategy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px;
+  text-align: left;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.debt-strategy:hover {
+  border-color: var(--accent);
+}
+.debt-strategy.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.debt-strategy-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.debt-strategy-date {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+}
+.debt-strategy-interest {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.debt-saved {
+  color: var(--live);
+  font-size: 12px;
+}
+.debt-custom-order {
+  list-style: none;
+  padding: 0;
+  margin-top: 12px;
+  max-width: 420px;
+}
+.debt-custom-order li,
+.debt-payoffs li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-edge-soft);
+  font-size: 13px;
+}
+.debt-custom-rank {
+  font-family: var(--mono);
+  color: var(--ink-dim);
+  width: 18px;
+}
+.debt-payoffs {
+  list-style: none;
+  padding: 0;
+  max-width: 520px;
+}
+.debt-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.debt-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+}
+.debt-summary strong {
+  font-family: var(--mono);
+  font-size: 20px;
+}
+.debt-chart svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+  background: var(--ground);
+  border-radius: 8px;
+}
+.debt-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.debt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.debt-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+.debt-schedule-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+.debt-schedule {
+  table-layout: auto;
+}
+.debt-schedule th,
+.debt-schedule td {
+  padding-right: 16px;
+  font-family: var(--mono);
+}
+.debt-btn {
+  margin-top: 8px;
+  padding: 6px 12px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.debt-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.debt-export {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.debt-export .debt-btn {
+  margin-top: 0;
+}
+.debt-check {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.debt-auto-note {
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.tab-row-hidden .settings-array-row-label {
+  color: var(--ink-dim);
 }

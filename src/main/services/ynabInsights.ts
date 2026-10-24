@@ -7,6 +7,7 @@ import type {
   YnabAccountHistoryResult,
   YnabCategoryTrend,
   YnabMoneyMovementsResult,
+  YnabMonthSpendingResult,
   YnabNetWorthResult,
   YnabScalarConfig,
   YnabTrendsResult,
@@ -287,4 +288,48 @@ export async function getMoneyMovements(
     }));
 
   return { ok: true, movements };
+}
+
+// Interest and fees are charges, but not spending you'll clear — they belong
+// to the carried balance, so counting them as pay-in-full would hide real debt.
+const NOT_SPENDING_PAYEE = /interest|finance charge|late fee|annual fee/i;
+
+// What went onto each account this month, net of refunds. Transfers are
+// skipped (a card payment is a transfer, and would cancel the spending out).
+// Pure so the rules can be tested without a network. Amounts are milliunits in,
+// dollars out.
+export function monthSpendingByAccount(
+  txns: any[],
+  accountIds: string[],
+  monthStart: string
+): Record<string, number> {
+  const wanted = new Set(accountIds);
+  const net: Record<string, number> = Object.fromEntries(accountIds.map((id) => [id, 0]));
+  for (const t of txns) {
+    if (!wanted.has(t.account_id) || t.deleted) continue;
+    if (t.transfer_account_id) continue;
+    if (String(t.date) < monthStart) continue;
+    if (NOT_SPENDING_PAYEE.test(t.payee_name ?? "")) continue;
+    net[t.account_id] += t.amount;
+  }
+  return Object.fromEntries(
+    Object.entries(net).map(([id, milli]) => [id, Math.max(0, toDollars(-milli))])
+  );
+}
+
+// Month-to-date spending per account, for the Debt tab's automatic
+// pay-in-full figure. This is the calendar month, not the card's statement
+// cycle — close enough to separate this month's charges from carried debt, and
+// it needs no per-card closing day.
+export async function getMonthSpending(
+  config: YnabScalarConfig,
+  accountIds: string[]
+): Promise<YnabMonthSpendingResult> {
+  if (accountIds.length === 0) return { ok: true, spending: {} };
+  const monthStart = currentMonthStart();
+  const txns = await fetchDelta(config, "transactions", "transactions", {
+    query: { since_date: monthStart },
+  });
+  if (!txns.ok) return { ok: false, reason: txns.reason, spending: {} };
+  return { ok: true, spending: monthSpendingByAccount(txns.items, accountIds, monthStart) };
 }

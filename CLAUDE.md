@@ -282,15 +282,21 @@ lives in `App.tsx` same as always.
 - **Social** — recent YouTube uploads across configured channels (one
   side-scrolling, date-ordered strip) and recent posts per subreddit (one
   sub-tab each). See "Social tab" below.
+- **Debt** — paydown plan: debts, an extra monthly amount, dated one-time
+  payments, and a Snowball / Avalanche / Custom / Minimums-only switcher with
+  side-by-side results and a Markdown export. See "Debt tab" below.
 - **Scratchpad**, **Habits**, **Notes** — custom full-tab layouts rather than a grid
   of widgets (see below); each gets one full-bleed `.slot` instead of the
   five-touch-point widget pattern.
 
-**Tab order and labels are DB-backed**, not hardcoded: they live in the `tabs`
-table (`services/settings.ts`), and `TabBar` supports drag-to-reorder plus
-double-click-to-rename via `settings:tabs:reorder` / `settings:tabs:rename`.
-The set of tabs is still fixed in code — those handlers only reorder and
-relabel existing rows, they never add or remove one.
+**Tab order, labels and visibility are DB-backed**: they live in the `tabs`
+table (`services/settings.ts`) and are managed in Settings → Tabs — drag to
+reorder, pencil to rename, eye to show/hide (`settings:tabs:reorder` / `rename` /
+`setHidden`). The header strip itself is a plain row with no edit mode. A hidden
+tab leaves the strip and the command palette but keeps its data; it still appears
+while active, so a link or notification that lands on it doesn't leave you on an
+unhighlighted tab. The last visible tab can't be hidden. The set of tabs is still
+fixed in code — those handlers only reorder, relabel and hide existing rows.
 
 Adding a new tab therefore means: an entry in `DEFAULT_TABS` in **both**
 `App.tsx` and `services/settings.ts` (they're separate constants that must stay
@@ -707,6 +713,37 @@ once Todoist and GitHub have both answered (`todayReady`), so launch never
 flashes a false all-clear. "Next event" is suppressed when the calendar widget
 is paged to another day. The minute clock is local to the strip so it doesn't
 re-render the dashboard.
+
+## Debt tab
+
+Vocabulary is in `GLOSSARY.md`; the one hard-to-reverse decision (the plan models
+only the **carried balance**, never card spending) is ADR 0001 in the Le Recueil
+vault (`raw/docs/ADR`).
+
+- `src/shared/debtPlan.ts` is the whole projection — pure, cent-rounded, tested
+  in `debtPlan.test.ts`. Month order: interest, minimums (capped at balance),
+  the extra pool in strategy order, then one-time payments. A minimum that
+  isn't needed (paid-off debt, final partial month) frees up into the pool, which
+  *is* the rollover. **Minimums only** is the baseline: no extra, no rollover,
+  no one-time payments. Capped at 600 months; what still owes is `neverPaysOff`.
+- The projection runs in the renderer on every edit (`DebtTab.tsx`), so there is
+  no IPC for results. `lib/debtPlanView.ts` turns Debts + live YNAB balances into
+  carried balances (`resolveDebts`) and renders the export; only a negative YNAB
+  balance counts as owed. A manual **balance override** is used as the carried
+  balance as-is; Pay-in-full spending is subtracted only from a live balance. For a
+  linked debt it defaults to **auto**: `ynab:monthSpending` (`getMonthSpending` in
+  `ynabInsights.ts`) sums this calendar month's non-transfer transactions on the account,
+  netting refunds and skipping interest/fee payees, capped at the balance owed. It is the
+  calendar month, not the card's statement cycle, deliberately. If the fetch fails the
+  debt is flagged `spendingUnknown` rather than silently subtracting nothing.
+  The "higher than your plan assumes" hint only applies to the override case.
+- Persistence: `services/debts.ts` — `debts` and `debt_one_time` tables, plus the
+  single plan as a `debtPlan` JSON row in the generic `settings` table. Picking a
+  Card in the debt form prefills name/APR/YNAB link once; it is not a live link.
+- The tab is appended after Assistant by `ensureTabDefaults()` (appended, not slotted
+  in); drag it next to Finances.
+- Export is a save dialog (`debts:exportMarkdown`) writing YAML frontmatter, the
+  inputs, the strategy comparison and the full monthly schedule. No history is stored.
 
 ## Command Palette
 
