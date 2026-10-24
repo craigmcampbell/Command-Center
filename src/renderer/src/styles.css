@@ -6196,28 +6196,42 @@ body {
   cursor: default;
   opacity: 0.6;
 }
+/* Up to two lines before it is cut, so a long title stays recognisable. */
 .assistant-chat-title {
   width: 100%;
   font-size: 12.5px;
   line-height: 1.35;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 .assistant-chat-when {
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--ink-dim);
 }
-/* Per-row actions (pin, rename, delete) appear on hover or keyboard focus. */
+/* Per-row actions (move, pin, rename, delete) appear on hover or keyboard
+   focus. They float over the row's right edge instead of taking width from it,
+   so a title gets the whole row until the pointer is over it. */
 .assistant-chat-actions {
+  position: absolute;
+  top: 5px;
+  right: 4px;
   display: flex;
   align-items: center;
+  padding: 3px 2px;
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--panel-edge);
   opacity: 0;
+  pointer-events: none;
 }
 .assistant-chat:hover .assistant-chat-actions,
 .assistant-chat:focus-within .assistant-chat-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 .assistant-chat-actions button {
   background: none;
@@ -6276,6 +6290,7 @@ body {
   margin-bottom: 4px;
 }
 .assistant-folder-head {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6285,6 +6300,11 @@ body {
 .assistant-folder-head:hover .assistant-chat-actions,
 .assistant-folder-head:focus-within .assistant-chat-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+.assistant-folder-head .assistant-chat-actions {
+  top: 50%;
+  transform: translateY(-50%);
 }
 .assistant-folder-head.drop,
 .assistant-root-zone.drop {
@@ -6318,8 +6338,8 @@ body {
   font-size: 11px;
 }
 .assistant-folder-chats {
-  margin-left: 12px;
-  padding-left: 6px;
+  margin-left: 6px;
+  padding-left: 4px;
   border-left: 1px solid var(--panel-edge-soft);
 }
 .assistant-folder-empty {
