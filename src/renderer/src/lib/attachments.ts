@@ -84,6 +84,17 @@ export async function readAttachment(file: File): Promise<PendingAttachment | st
   return { key, name, mime: file.type || "text/plain", kind: "text", size: data.length, data };
 }
 
+// Which object URLs the transcript still shows, and which of the ones it showed
+// before it has let go of (to be revoked).
+export function previewUrlsToRelease(
+  previous: ReadonlySet<string>,
+  items: { attachments?: { previewUrl?: string }[] }[]
+): { keep: Set<string>; release: string[] } {
+  const keep = new Set<string>();
+  for (const item of items) for (const a of item.attachments ?? []) if (a.previewUrl) keep.add(a.previewUrl);
+  return { keep, release: [...previous].filter((url) => !keep.has(url)) };
+}
+
 export function describeSize(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }

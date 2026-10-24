@@ -167,6 +167,32 @@ export function estimateTokens(messages: (ChatMessage | WireMessage)[]): number 
   return Math.ceil(chars / 4);
 }
 
+// Every image counts the same flat amount (see estimateTokens), so sizing a chat
+// needs no image bytes: this stands in for each data URL instead of reading and
+// base64-encoding the file just to measure it.
+const SIZE_ONLY_IMAGE: ImageResolver = () => "data:,";
+
+// The estimated size of what the model would be sent for this history.
+export function estimateWireTokens(messages: ChatMessage[]): number {
+  return estimateTokens(toWire(messages, SIZE_ONLY_IMAGE));
+}
+
+// An automatic compaction must fold away at least this share of the threshold.
+// Without it, a chat whose LAST few turns alone exceed the threshold (big text
+// attachments, say) would pay for a summary on every turn, each one folding a
+// single short turn and never getting back under the limit.
+export const MIN_FOLD_SHARE = 0.25;
+
+// Roughly how many tokens of history a plan takes out of each later request
+// (before the summary that replaces them is added back).
+export function foldedTokens(messages: ChatMessage[], plan: CompactionPlan): number {
+  const folded = new Set(plan.indices);
+  const after = estimateWireTokens(
+    messages.map((m, i) => (folded.has(i) ? ({ ...m, archived: true } as ChatMessage) : m))
+  );
+  return Math.max(0, estimateWireTokens(messages) - after);
+}
+
 export interface CompactionPlan {
   // Index in the stored list of the first message that stays live; the summary
   // is inserted here.

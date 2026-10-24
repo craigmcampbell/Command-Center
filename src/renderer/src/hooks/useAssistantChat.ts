@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PendingAttachment } from "../lib/attachments";
+import { previewUrlsToRelease, type PendingAttachment } from "../lib/attachments";
 import type {
   AssistantApproval,
   AssistantAttachmentInfo,
@@ -87,6 +87,23 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  // A sent picture is shown from its local object URL until the transcript
+  // moves on (a new chat, another chat opened, a compaction reload), then the
+  // URL is released; left alone, each one would pin the image's bytes for the
+  // life of the window.
+  const shownPreviews = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const { keep, release } = previewUrlsToRelease(shownPreviews.current, items);
+    for (const url of release) URL.revokeObjectURL(url);
+    shownPreviews.current = keep;
+  }, [items]);
+  useEffect(
+    () => () => {
+      for (const url of shownPreviews.current) URL.revokeObjectURL(url);
+    },
+    []
+  );
   useEffect(() => {
     onSavedRef.current = onSaved;
   }, [onSaved]);

@@ -66,6 +66,30 @@ export function cleanFact(fact: string): string {
   return fact.replace(/\s+/g, " ").trim().slice(0, MAX_FACT_CHARS);
 }
 
+// Every id a chat's tool calls already use.
+export function usedCallIds(messages: ChatMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "assistant") for (const c of m.tool_calls ?? []) ids.add(c.id);
+  }
+  return ids;
+}
+
+// A provider's call ids are not guaranteed unique: some send none (the client
+// then numbers them per step, so `call_0` recurs every step) and some repeat
+// one. Results, approvals and known-URL lookups are matched by id, so a repeat
+// would pair a result or a verdict with the wrong call. Any id that is empty or
+// already taken (earlier in the chat, or earlier in this step) is replaced.
+export function withUniqueCallIds(calls: ToolCall[], taken: Set<string>, makeId: () => string): ToolCall[] {
+  const seen = new Set(taken);
+  return calls.map((call) => {
+    let id = call.id;
+    while (!id || seen.has(id)) id = makeId();
+    seen.add(id);
+    return id === call.id ? call : { ...call, id };
+  });
+}
+
 export function deriveTitle(firstUserMessage: string): string {
   const flat = firstUserMessage.replace(/\s+/g, " ").trim();
   if (flat.length <= MAX_TITLE_CHARS) return flat || "New chat";

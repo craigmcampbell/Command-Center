@@ -7,6 +7,8 @@ import {
   describeToolCall,
   summarizeArguments,
   toTranscript,
+  usedCallIds,
+  withUniqueCallIds,
   type ChatMessage,
 } from "./assistantTranscript";
 
@@ -212,5 +214,33 @@ describe("describeToolCall", () => {
       ok: false,
       result: "No result was recorded",
     });
+  });
+});
+
+describe("withUniqueCallIds", () => {
+  const call = (id: string) => ({ id, type: "function" as const, function: { name: "x", arguments: "{}" } });
+  let n = 0;
+  const makeId = () => `new_${++n}`;
+
+  it("keeps unique ids and the same objects", () => {
+    const calls = [call("a"), call("b")];
+    const out = withUniqueCallIds(calls, new Set(), makeId);
+    expect(out[0]).toBe(calls[0]);
+    expect(out.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("replaces empty ids, repeats within a step, and ids taken earlier in the chat", () => {
+    n = 0;
+    const out = withUniqueCallIds([call(""), call("a"), call("a"), call("old")], new Set(["old"]), makeId);
+    expect(out.map((c) => c.id)).toEqual(["new_1", "a", "new_2", "new_3"]);
+  });
+
+  it("collects the ids a chat already uses", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: null, tool_calls: [call("a"), call("b")] },
+      { role: "tool", tool_call_id: "a", content: "{}" },
+    ];
+    expect([...usedCallIds(messages)]).toEqual(["a", "b"]);
   });
 });

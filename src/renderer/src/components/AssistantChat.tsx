@@ -400,7 +400,7 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
   // An unclosed fence or list mid-stream renders as-is and tidies itself as the
   // rest arrives. Computed before any early return to keep hook order stable.
   const html = useMemo(
-    () => (item.role === "assistant" ? renderMarkdown(item.text) : ""),
+    () => (item.role === "assistant" ? renderMarkdown(item.text, { remoteImages: false }) : ""),
     [item.role, item.text]
   );
 

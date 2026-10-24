@@ -3213,6 +3213,11 @@ body {
   border-bottom: 1px dotted var(--alert);
   cursor: default;
 }
+/* An image in model output, shown as a link instead of loaded (remoteImages: false). */
+.note .image-link::before {
+  content: "Image: ";
+  color: var(--ink-dim);
+}
 .note mark {
   background: var(--pending-glow);
   color: var(--ink);

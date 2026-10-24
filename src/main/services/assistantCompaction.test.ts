@@ -4,6 +4,8 @@ import {
   buildSummaryInput,
   cleanSummary,
   estimateTokens,
+  estimateWireTokens,
+  foldedTokens,
   KEEP_RECENT_TURNS,
   planCompaction,
   toWire,
@@ -242,5 +244,35 @@ describe("attachments on the wire", () => {
     const messages: ChatMessage[] = [sys];
     for (let i = 1; i <= 6; i++) messages.push(...turn(i, i === 1 ? [img("a", "chart.png")] : undefined));
     expect(buildSummaryInput(messages, planCompaction(messages)!)).toContain("User: question 1 [attached: chart.png]");
+  });
+});
+
+describe("estimateWireTokens", () => {
+  it("counts each recent image at the flat estimate without needing its bytes", () => {
+    const image = { id: "a".repeat(64), name: "x.png", mime: "image/png", kind: "image" as const, size: 10 };
+    const plain: ChatMessage[] = [{ role: "system", content: "S" }, { role: "user", content: "look" }];
+    const withImage: ChatMessage[] = [plain[0], { role: "user", content: "look", attachments: [image] }];
+    expect(estimateWireTokens(withImage) - estimateWireTokens(plain)).toBe(1000);
+  });
+});
+
+describe("foldedTokens", () => {
+  it("measures the history a plan removes from later requests", () => {
+    const messages = chat(6, 1000);
+    const plan = planCompaction(messages)!;
+    // Two old turns, each holding a 1000-char tool result (trimmed on the wire).
+    const folded = foldedTokens(messages, plan);
+    expect(folded).toBeGreaterThan(100);
+    expect(folded).toBeLessThan(estimateWireTokens(messages));
+  });
+
+  it("is small when only short turns would be folded", () => {
+    const messages: ChatMessage[] = [{ role: "system", content: "S" }];
+    for (let i = 1; i <= 6; i++) {
+      messages.push({ role: "user", content: i <= 2 ? "hi" : "z".repeat(4000) }, { role: "assistant", content: "ok" });
+    }
+    const plan = planCompaction(messages)!;
+    expect(foldedTokens(messages, plan)).toBeLessThan(40);
+    expect(estimateWireTokens(messages)).toBeGreaterThan(4000);
   });
 });

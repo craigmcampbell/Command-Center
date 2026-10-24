@@ -35,6 +35,11 @@ export interface RenderMarkdownOptions {
   // isn't. Defaults to true (single self-contained HTML string) for callers
   // — like the Todoist description panel — that don't need that.
   includeFrontmatter?: boolean;
+  // false → images render as links that need a click, never as <img>. For model
+  // output: an <img> loads the moment it renders, so a prompt-injected reply
+  // could otherwise carry data out in an image URL's query string with no click
+  // at all. (safeUrl never passes `data:`, so there is no inline case to keep.)
+  remoteImages?: boolean;
 }
 
 export function escapeHtml(s: string): string {
@@ -212,6 +217,9 @@ function renderInlineNode(node: SyntaxNode, md: string, options: RenderMarkdownO
       const alt = text.replace(/<[^>]*>/g, "");
       const safe = safeUrl(href);
       if (safe === null) return blockedLink(escapeHtml(alt));
+      if (options.remoteImages === false) {
+        return `<a href="${escapeAttr(safe)}" class="image-link" title="Image not loaded: ${escapeAttr(safe)}">${escapeHtml(alt || "image")}</a>`;
+      }
       return `<img src="${escapeAttr(safe)}" alt="${escapeAttr(alt)}"${title ? ` title="${escapeAttr(title)}"` : ""}>`;
     }
     case "WikiLink":

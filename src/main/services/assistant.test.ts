@@ -97,7 +97,9 @@ vi.mock("./assistantChats", () => ({
   },
   deleteChat: (id: string) => store.chats.delete(id),
   chatImageIds: () => [] as string[],
-  isAttachmentReferenced: () => false,
+  // Like the real LIKE query: any stored message mentioning the id.
+  isAttachmentReferenced: (id: string) =>
+    [...store.chats.values()].some((c) => JSON.stringify(c.messages).includes(id)),
 }));
 
 vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -181,6 +183,7 @@ vi.mock("./readerFeed", () => ({
 import { completeTask, createTask } from "./todoist";
 import { scrapePage, searchWeb } from "./firecrawlWeb";
 import { generateImage } from "./openaiImages";
+import { estimateTokens } from "./assistantCompaction";
 import {
   answerApproval,
   askAssistant,
@@ -930,6 +933,44 @@ describe("turn control", () => {
         // History stays valid: every call has its result.
         const tail = sent[1].body.messages.slice(-4);
         expect(tail.map((m: any) => m.tool_call_id)).toEqual([undefined, "c1", "c2", "c3"]);
+      });
+
+      it("pairs each verdict with its own call even when the provider repeats an id", async () => {
+        const sent = scriptFetch(
+          callTools(
+            { id: "dup", name: "complete_task", args: { task_id: "t1" } },
+            { id: "dup", name: "create_task", args: { content: "Buy milk" } }
+          ),
+          stop("Half done.")
+        );
+        const approvals: any[] = [];
+        const pending = askAssistant(null, "do both", hooks({ onApproval: (a) => approvals.push(a) }));
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        answerApproval(approvals[0].approvalId, true, ["0"]); // only the first
+        await pending;
+
+        expect(completeTask).toHaveBeenCalledTimes(1);
+        expect(createTask).not.toHaveBeenCalled();
+        // The second call was given a fresh id, and each result answers its own call.
+        const [assistant, ...results] = sent[1].body.messages.slice(-3);
+        const ids = assistant.tool_calls.map((c: any) => c.id);
+        expect(ids[0]).toBe("dup");
+        expect(ids[1]).not.toBe("dup");
+        expect(results.map((m: any) => m.tool_call_id)).toEqual(ids);
+      });
+
+      it("renames an id a previous step already used", async () => {
+        const sent = scriptFetch(
+          callTools({ id: "call_0", name: "get_due_tasks" }),
+          callTools({ id: "call_0", name: "get_due_tasks" }),
+          stop("Done.")
+        );
+        await askAssistant(null, "twice", hooks());
+        const ids = sent[2].body.messages
+          .filter((m: any) => m.role === "assistant")
+          .flatMap((m: any) => m.tool_calls.map((c: any) => c.id));
+        expect(ids).toHaveLength(2);
+        expect(new Set(ids).size).toBe(2);
       });
 
       it("Deny all, silence and Stop each decline every item", async () => {
@@ -1780,6 +1821,30 @@ describe("compaction", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("doesn't pay for a summary that would fold away almost nothing", async () => {
+    // Two tiny old turns, then four huge recent ones: the recent turns alone are
+    // over the threshold, and summarizing the tiny ones can't fix that.
+    settings.assistant.compactAtTokens = 0;
+    scriptFetch(stop("ok"));
+    let id: string | null = null;
+    for (let i = 1; i <= 6; i++) {
+      const text = i <= 2 ? `small ${i}` : `big ${i} ${"y".repeat(3000)}`;
+      id = (await askAssistant(id, text)).conversationId;
+    }
+    settings.assistant.compactAtTokens = 1000;
+
+    const sent = scriptFetch(stop("answered"));
+    const reply = await askAssistant(id, "small follow-up");
+    expect(reply.compacted).toBeUndefined();
+    expect(sent).toHaveLength(1);
+
+    // Next turn the first big one falls out of the recent window: that one is
+    // worth folding.
+    const later = scriptFetch(stop("A summary of the big early turn, long enough."), stop("answered"));
+    expect((await askAssistant(id, "another follow-up")).compacted).toBe(true);
+    expect(later).toHaveLength(2);
+  });
+
   it("compacts on demand, and says when there is nothing to summarize", async () => {
     settings.assistant.compactAtTokens = 0;
     const short = (await askAssistant(null, "hello")).conversationId;
@@ -2140,6 +2205,28 @@ describe("attachments", () => {
     expect(fs.existsSync(attachDir) ? fs.readdirSync(attachDir) : []).toEqual([]);
   });
 
+  it("stores nothing for a message refused before it is sent", async () => {
+    scriptFetch(stop("unused"));
+    const reply = await askAssistant(null, "x".repeat(9000), hooks(), "r1", undefined, [png()]);
+    expect(reply).toMatchObject({ ok: false, reason: "Message is too long" });
+    expect(fs.existsSync(attachDir) ? fs.readdirSync(attachDir) : []).toEqual([]);
+  });
+
+  it("removes a failed turn's image, but not one an earlier message still uses", async () => {
+    // Bytes no other test uses: conversations cached by earlier tests count as live.
+    const own = () => png("own.png", Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 42, 42]));
+    scriptFetch({ status: 500, json: { error: { message: "boom" } } });
+    const failed = await askAssistant(null, "what is this?", hooks(), "r1", undefined, [own()]);
+    expect(failed.ok).toBe(false);
+    expect(fs.existsSync(attachDir) ? fs.readdirSync(attachDir) : []).toEqual([]);
+
+    scriptFetch(stop("A screenshot."));
+    const first = await askAssistant(null, "what is this?", hooks(), "r2", undefined, [own()]);
+    scriptFetch({ status: 500, json: { error: { message: "boom" } } });
+    await askAssistant(first.conversationId, "and again", hooks(), "r3", undefined, [own()]);
+    expect(fs.readdirSync(attachDir)).toHaveLength(1);
+  });
+
   it("refuses a file that is neither an image nor text, without calling the model", async () => {
     scriptFetch(stop("unused"));
     const reply = await askAssistant(null, "hi", hooks(), "r1", undefined, [
@@ -2174,17 +2261,26 @@ describe("attachments", () => {
   });
 
   it("counts an image toward the size that triggers compaction", async () => {
-    settings.assistant.compactAtTokens = 500;
+    settings.assistant.compactAtTokens = 0;
     const seed = scriptFetch(stop("ok"));
     let id: string | null = null;
-    settings.assistant.compactAtTokens = 0;
-    for (let i = 1; i <= 6; i++) id = (await askAssistant(id, `q${i}`, hooks())).conversationId;
-    settings.assistant.compactAtTokens = 1200;
+    // Turns big enough that folding the oldest two is worth a summary.
+    for (let i = 1; i <= 6; i++) {
+      id = (await askAssistant(id, `q${i} ${"x".repeat(3000)}`, hooks())).conversationId;
+    }
+    // A threshold the chat is just under; only the image (~1000) pushes it over.
+    const current = estimateTokens(seed.at(-1)!.body.messages) + 10;
+    settings.assistant.compactAtTokens = current + 300;
+
+    const plain = scriptFetch(stop("no image, no summary"));
+    await askAssistant(id, "now", hooks());
+    expect(plain).toHaveLength(1);
+
+    settings.assistant.compactAtTokens = estimateTokens(plain[0].body.messages) + 310;
     const sent = scriptFetch(stop("A summary of earlier questions, long enough."), stop("done"));
     const reply = await askAssistant(id, "now this", hooks(), "r9", undefined, [png("x.png", PNG2)]);
     expect(reply.compacted).toBe(true);
     expect(sent).toHaveLength(2);
-    expect(seed.length).toBeGreaterThan(0);
   });
 });
 
@@ -2302,6 +2398,33 @@ describe("image generation", () => {
     expect(stored.find((m: any) => m.role === "tool").attachments).toHaveLength(1);
     expect(openAssistantChat(reply.conversationId).items[1].attachments).toEqual(reply.attachments);
     expect(fs.readdirSync(attachDir)).toHaveLength(1);
+  });
+
+  it("keeps a paid-for image when a later step fails, closing the turn with a note", async () => {
+    scriptFetch(draw("c1"), { status: 500, json: { error: { message: "boom" } } });
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw a fox", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+
+    expect(reply.ok).toBe(true);
+    expect(reply.text).toMatch(/^\(The reply couldn't be finished: /);
+    expect(reply.attachments).toHaveLength(1);
+    const stored = store.chats.get(reply.conversationId)!.messages;
+    expect(stored.find((m: any) => m.role === "tool").attachments).toHaveLength(1);
+    expect(stored.at(-1)).toEqual({ role: "assistant", content: reply.text });
+    expect(fs.readdirSync(attachDir)).toHaveLength(1);
+  });
+
+  it("still rolls back a failure when nothing was changed", async () => {
+    scriptFetch(draw("c1"), { status: 500, json: { error: { message: "boom" } } });
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw a fox", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, false);
+    expect((await pending).ok).toBe(false);
+    expect(store.chats.size).toBe(0);
   });
 
   it("does nothing when declined, and reports failures to the model", async () => {

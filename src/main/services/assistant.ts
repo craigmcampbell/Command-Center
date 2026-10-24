@@ -51,7 +51,9 @@ import {
   buildSummaryInput,
   cleanSummary,
   DEFAULT_COMPACT_AT_TOKENS,
-  estimateTokens,
+  estimateWireTokens,
+  foldedTokens,
+  MIN_FOLD_SHARE,
   planCompaction,
   SUMMARY_MAX_TOKENS,
   SUMMARY_SYSTEM,
@@ -100,6 +102,8 @@ import {
   describeToolCall,
   summarizeArguments,
   toTranscript,
+  usedCallIds,
+  withUniqueCallIds,
   type ChatMessage,
 } from "./assistantTranscript";
 import { getAssistantSettings, getFirecrawlSettings, getOpenAISettings } from "./settings";
@@ -368,13 +372,40 @@ export function deleteAssistantFolder(id: string): { ok: boolean } {
   }
 }
 
+// Images used by a conversation held in memory. A chat whose first turn is
+// still running has no rows yet, so the database alone would miss its files.
+function liveImageIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const convo of conversations.values()) {
+    for (const m of convo.messages) {
+      if ((m.role === "user" || m.role === "tool") && m.attachments) {
+        for (const a of m.attachments) if (a.kind === "image") ids.add(a.id);
+      }
+    }
+  }
+  return ids;
+}
+
+// Deletes the image files among `ids` that no stored or live message uses. An
+// image another chat also has (same bytes, same file) is kept. Cleanup only: a
+// failure leaves a stray file, never a broken chat.
+function discardUnusedImages(attachments: { id: string; kind: string }[]): void {
+  const images = attachments.filter((a) => a.kind === "image").map((a) => a.id);
+  if (images.length === 0) return;
+  try {
+    const live = liveImageIds();
+    deleteAttachmentFiles(images.filter((image) => !live.has(image) && !isAttachmentReferenced(image)));
+  } catch {
+    // Left on disk.
+  }
+}
+
 export function deleteAssistantChat(id: string): { ok: boolean } {
   conversations.delete(id);
   try {
     const images = chatImageIds(id);
     const deleted = deleteChat(id);
-    // An image another chat also uses (same bytes, same file) is kept.
-    if (deleted) deleteAttachmentFiles(images.filter((image) => !isAttachmentReferenced(image)));
+    if (deleted) discardUnusedImages(images.map((image) => ({ id: image, kind: "image" })));
     return { ok: deleted };
   } catch {
     return { ok: false };
@@ -394,10 +425,15 @@ async function compactConversation(
   id: string,
   convo: Conversation,
   apiKey: string,
-  model: string
+  model: string,
+  // Automatic compaction only: skip a summary that would fold away too little.
+  minFoldTokens = 0
 ): Promise<AssistantCompactResult> {
   const plan = planCompaction(convo.messages);
   if (!plan) return { ok: false, reason: "There isn't enough older conversation to summarize yet" };
+  if (minFoldTokens > 0 && foldedTokens(convo.messages, plan) < minFoldTokens) {
+    return { ok: false, reason: "Too little older conversation to be worth summarizing" };
+  }
   try {
     const result = await complete({
       apiKey,
@@ -619,9 +655,9 @@ async function runTurn({
   let command: ResolvedCommand | null = null;
   let attached: AssistantAttachment[] = [];
   if (!regenerate) {
-    const prepared = prepareAttachments(attachmentInputs);
-    if (!prepared.ok) return fail(prepared.reason, conversationId ?? "");
-    attached = prepared.attachments;
+    // Every cheap refusal comes before the files are stored, so a refused
+    // message never leaves an image on disk.
+    if (text.length > MAX_MESSAGE_CHARS) return fail("Message is too long", conversationId ?? "");
     if (commandName) {
       command = await resolveCommand(commandName);
       if (!command) {
@@ -629,8 +665,11 @@ async function runTurn({
       }
     }
     // A command can be run with nothing typed after it.
-    if (!text && !command && attached.length === 0) return fail("Empty message", conversationId ?? "");
-    if (text.length > MAX_MESSAGE_CHARS) return fail("Message is too long", conversationId ?? "");
+    const hasFiles = Array.isArray(attachmentInputs) && attachmentInputs.length > 0;
+    if (!text && !command && !hasFiles) return fail("Empty message", conversationId ?? "");
+    const prepared = prepareAttachments(attachmentInputs);
+    if (!prepared.ok) return fail(prepared.reason, conversationId ?? "");
+    attached = prepared.attachments;
   }
 
   const resolved = resolveConversation(conversationId, { createIfMissing: !regenerate });
@@ -650,8 +689,10 @@ async function runTurn({
     const incoming =
       Math.ceil(text.length / 4) +
       attached.reduce((n, a) => n + (a.kind === "image" ? 1000 : Math.ceil((a.text?.length ?? 0) / 4)), 0);
-    const size = estimateTokens(toWire(convo.messages, readImageDataUrl)) + incoming;
-    if (size > compactAt) compacted = (await compactConversation(id, convo, apiKey, model)).ok;
+    const size = estimateWireTokens(convo.messages) + incoming;
+    if (size > compactAt) {
+      compacted = (await compactConversation(id, convo, apiKey, model, compactAt * MIN_FOLD_SHARE)).ok;
+    }
   }
 
   // Restored on any failure so history is never left half-written.
@@ -661,6 +702,8 @@ async function runTurn({
   const rollback = (reason: string, needsSetup = false): AssistantReply => {
     titleJob?.abort();
     convo.messages.splice(0, convo.messages.length, ...snapshot);
+    // The files this message brought are no longer part of any chat.
+    discardUnusedImages(attached);
     return fail(reason, id, needsSetup);
   };
 
@@ -754,6 +797,21 @@ async function runTurn({
     return succeed(true);
   };
 
+  // Set once a tool that changes something has actually run (an image paid for,
+  // a task completed). After that a failure must not roll the turn back: the
+  // change happened, and forgetting it would drop the paid-for image from the
+  // chat and leave the model unaware of what it did. Every finished step is
+  // already in history whole, so the turn is closed with a note instead.
+  let changed = false;
+  const failTurn = (reason: string, needsSetup = false): AssistantReply => {
+    if (!changed) return rollback(reason, needsSetup);
+    needSeparator = true;
+    const note = `(The reply couldn't be finished: ${reason})`;
+    emit(note);
+    convo.messages.push({ role: "assistant", content: note });
+    return succeed(false);
+  };
+
   // What a chat list shows for a turn with nothing typed after its command.
   // A chat that has never been saved: its first successful turn names it.
   const firstTurnOfChat = convo.title === null;
@@ -806,10 +864,17 @@ async function runTurn({
       const result = await request;
       if (result.aborted) return finishStopped(result.partialText ?? "");
       if (!result.ok || !result.message) {
-        return rollback(result.reason ?? "Request failed", result.needsSetup);
+        return failTurn(result.reason ?? "Request failed", result.needsSetup);
       }
       addUsage(usage, result.usage);
 
+      if (result.message.tool_calls?.length) {
+        result.message.tool_calls = withUniqueCallIds(
+          result.message.tool_calls,
+          usedCallIds(convo.messages),
+          () => `call_${randomUUID()}`
+        );
+      }
       const calls = result.message.tool_calls ?? [];
       if (calls.length > 0) {
         // Calls in one step run together, so a `remember` that arrives beside a
@@ -873,6 +938,8 @@ async function runTurn({
           })
         );
         const needing = prepared.filter((p) => p.tool?.approval);
+        // Each call's place on the card, by position rather than by call id.
+        const cardIndex = new Map(needing.map((p, i) => [p, i]));
         const verdicts = askForApprovals(
           requestId,
           needing.map((p) => ({ tool: p.name, summary: p.tool!.approval!.summary })),
@@ -881,13 +948,12 @@ async function runTurn({
         );
 
         const outcomes = await Promise.all(
-          prepared.map(async ({ call, event, tool }) => {
+          prepared.map(async (entry) => {
+            const { call, event, tool } = entry;
             let outcome: ToolOutcome;
             try {
               if (!tool) throw new Error("not prepared");
-              const allowed = tool.approval
-                ? (await verdicts)[needing.findIndex((p) => p.call.id === call.id)] === true
-                : true;
+              const allowed = tool.approval ? (await verdicts)[cardIndex.get(entry) ?? -1] === true : true;
               outcome = allowed
                 ? await tool.run(signal)
                 : { content: JSON.stringify({ error: DECLINED_MESSAGE }), isError: true };
@@ -909,7 +975,10 @@ async function runTurn({
         );
         // Recorded in the order the model asked for them (not the order they
         // happened to finish), which is also how a reopened chat lists them.
-        for (const { outcome, described } of outcomes) {
+        for (const { call, outcome, described } of outcomes) {
+          if (!outcome.isError && (MUTATING_TOOLS.has(call.function.name) || call.function.name === "remember")) {
+            changed = true;
+          }
           toolCalls.push(described);
           if (outcome.attachments) generated.push(...outcome.attachments);
           if (outcome.remembered) remembered.push(outcome.remembered);
@@ -933,12 +1002,12 @@ async function runTurn({
         continue;
       }
 
-      if (result.finishReason === "length") return rollback("The response was cut off");
-      if (result.finishReason === "content_filter") return rollback("The model declined this request");
+      if (result.finishReason === "length") return failTurn("The response was cut off");
+      if (result.finishReason === "content_filter") return failTurn("The model declined this request");
       convo.messages.push(result.message);
       return succeed(false);
     }
-    return rollback("Stopped after too many tool calls");
+    return failTurn("Stopped after too many tool calls");
   } finally {
     inFlight.delete(requestId);
   }

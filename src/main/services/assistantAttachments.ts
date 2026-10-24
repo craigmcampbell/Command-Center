@@ -125,21 +125,46 @@ export function prepareAttachments(inputs: unknown, dir: string = attachmentsDir
 }
 
 // Recently used images stay in memory: the same few are re-read on every request
-// in a chat, and a data URL is cheap to keep for a handful of them.
+// in a chat. Least recently used goes first, and the cache is bounded by size as
+// well as count — an 8 MB image is ~11 MB as a data URL, so a count alone could
+// hold over 100 MB.
 const cache = new Map<string, string>();
 const CACHE_MAX = 12;
+export const CACHE_MAX_CHARS = 32 * 1024 * 1024;
+let cachedChars = 0;
+
+function cacheDelete(key: string): void {
+  const url = cache.get(key);
+  if (url === undefined) return;
+  cachedChars -= url.length;
+  cache.delete(key);
+}
+
+function cachePut(key: string, url: string): void {
+  if (url.length > CACHE_MAX_CHARS) return;
+  cache.set(key, url);
+  cachedChars += url.length;
+  while (cache.size > CACHE_MAX || cachedChars > CACHE_MAX_CHARS) {
+    cacheDelete(cache.keys().next().value as string);
+  }
+}
 
 export function readImageDataUrl(id: string, dir: string = attachmentsDir()): string | null {
   if (!ATTACHMENT_ID.test(id)) return null;
-  const hit = cache.get(`${dir}\0${id}`);
-  if (hit) return hit;
+  const key = `${dir}\0${id}`;
+  const hit = cache.get(key);
+  if (hit) {
+    // Re-inserted so it counts as the most recently used.
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  }
   try {
     const bytes = fs.readFileSync(path.join(dir, id));
     const mime = sniffImageMime(bytes);
     if (!mime) return null;
     const url = `data:${mime};base64,${bytes.toString("base64")}`;
-    cache.set(`${dir}\0${id}`, url);
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string);
+    cachePut(key, url);
     return url;
   } catch {
     return null;
@@ -158,7 +183,7 @@ export function attachmentPath(id: string, dir: string = attachmentsDir()): stri
 export function deleteAttachmentFiles(ids: string[], dir: string = attachmentsDir()): void {
   for (const id of ids) {
     if (!ATTACHMENT_ID.test(id)) continue;
-    cache.delete(`${dir}\0${id}`);
+    cacheDelete(`${dir}\0${id}`);
     try {
       fs.unlinkSync(path.join(dir, id));
     } catch {

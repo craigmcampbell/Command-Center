@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
 
 import {
+  CACHE_MAX_CHARS,
   cleanName,
   deleteAttachmentFiles,
   MAX_ATTACHMENTS,
@@ -127,5 +128,48 @@ describe("prepareAttachments", () => {
     }
     deleteAttachmentFiles(["../secret.txt", "secret.txt"], dir);
     expect(fs.existsSync(path.join(dir, "secret.txt"))).toBe(true);
+  });
+});
+
+describe("readImageDataUrl cache", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-attach-cache-"));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // A PNG of roughly `bytes` bytes, stored under a distinct id.
+  function image(n: number, bytes = 16): string {
+    const data = new Uint8Array(bytes);
+    data.set(PNG);
+    data[bytes - 1] = n;
+    const id = n.toString(16).padStart(64, "0");
+    fs.writeFileSync(path.join(dir, id), data);
+    return id;
+  }
+  // Removes the file, so a read only succeeds from the cache.
+  const fromCacheOnly = (id: string) => {
+    fs.rmSync(path.join(dir, id));
+    return readImageDataUrl(id, dir);
+  };
+
+  it("evicts the least recently used image, not the oldest added", () => {
+    const ids = Array.from({ length: 12 }, (_, i) => image(i + 1));
+    for (const id of ids) readImageDataUrl(id, dir);
+    readImageDataUrl(ids[0], dir); // used again: now the most recent
+    readImageDataUrl(image(13), dir);
+    expect(fromCacheOnly(ids[0])).not.toBeNull();
+    expect(fromCacheOnly(ids[1])).toBeNull();
+  });
+
+  it("is bounded by size as well as count", () => {
+    // Two images whose data URLs together exceed the cap.
+    const bytes = Math.ceil((CACHE_MAX_CHARS * 0.6 * 3) / 4);
+    const big1 = image(101, bytes);
+    const big2 = image(102, bytes);
+    expect(readImageDataUrl(big1, dir)).not.toBeNull();
+    expect(readImageDataUrl(big2, dir)).not.toBeNull();
+    expect(fromCacheOnly(big1)).toBeNull();
+    expect(fromCacheOnly(big2)).not.toBeNull();
   });
 });
