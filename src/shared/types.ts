@@ -135,6 +135,9 @@ export interface AssistantScalarConfig {
   // Summarize the older part of a chat once it would exceed roughly this many
   // tokens (estimated). Unset means the default; 0 turns automatic compaction off.
   compactAtTokens?: number;
+  // Add prompt-cache breakpoints for models whose provider needs them
+  // (Anthropic). Unset means on; only an explicit false turns it off.
+  promptCache?: boolean;
 }
 
 // Railway account and workspace tokens both use the Bearer header. The
@@ -336,6 +339,11 @@ export interface AssistantUsage {
   promptTokens: number;
   completionTokens: number;
   costUsd: number | null;
+  // Prompt tokens read from / written to the provider's prompt cache. Both are
+  // already counted in promptTokens. Absent (not 0) when the provider never
+  // reported them, so "nothing was cached" and "unknown" stay distinguishable.
+  cachedTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 // One turn of a stored chat, rebuilt for display. An assistant item is the

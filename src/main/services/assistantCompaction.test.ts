@@ -6,9 +6,12 @@ import {
   estimateTokens,
   estimateWireTokens,
   foldedTokens,
+  KEEP_IMAGE_TURNS,
   KEEP_RECENT_TURNS,
   planCompaction,
+  STABLE_STEP_TURNS,
   toWire,
+  wireCutoffs,
 } from "./assistantCompaction";
 import { searchTextOf } from "./assistantChats";
 import { toTranscript, type ChatMessage } from "./assistantTranscript";
@@ -92,16 +95,70 @@ describe("toWire", () => {
   });
 
   it("trims bulky tool output from old turns but not from the recent ones", () => {
-    const wire = toWire(chat(6));
+    const wire = toWire(chat(KEEP_RECENT_TURNS + STABLE_STEP_TURNS));
     const results = wire.filter((m) => m.role === "tool").map((m) => m.content);
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(8);
     expect(results[0]).toContain("older tool output trimmed: 3000 characters");
     expect(results[0].length).toBeLessThan(600);
-    expect(results[5]).toBe("x".repeat(3000));
+    expect(results[3]).toContain("older tool output trimmed");
+    expect(results[4]).toBe("x".repeat(3000));
+    expect(results[7]).toBe("x".repeat(3000));
     // The stored history is untouched.
-    const messages = chat(6);
+    const messages = chat(8);
     toWire(messages);
     expect(messages.find((m) => m.role === "tool")).toMatchObject({ content: "x".repeat(3000) });
+  });
+
+  it("moves the trimming cut in whole steps, not one turn at a time", () => {
+    // Between steps the old turns stay whole, so the prefix doesn't change.
+    const trimmed = (n: number) =>
+      toWire(chat(n)).filter((m) => m.role === "tool" && m.content.includes("trimmed")).length;
+    expect([5, 6, 7, 8, 9, 11, 12].map(trimmed)).toEqual([0, 0, 0, 4, 4, 4, 8]);
+  });
+});
+
+describe("a stable prefix for prompt caching", () => {
+  const img = { id: "pic", name: "pic.png", mime: "image/png", kind: "image" as const, size: 10 };
+  const resolve = (id: string) => `data:image/png;base64,${id}`;
+  // Like chat(n), but every question carries an image, so both cut-offs apply.
+  const withImages = (n: number): ChatMessage[] =>
+    chat(n).map((m) => (m.role === "user" ? { ...m, attachments: [img] } : m));
+  const sameStart = (a: unknown[], b: unknown[]) => JSON.stringify(b.slice(0, a.length)) === JSON.stringify(a);
+
+  it("sends each turn's request as a byte-identical prefix of the next, except at a step", () => {
+    const breaks: number[] = [];
+    for (let n = 1; n < 30; n++) {
+      const before = toWire(withImages(n), resolve);
+      const after = toWire(withImages(n + 1), resolve);
+      if (!sameStart(before, after)) breaks.push(n + 1);
+    }
+    // Both cut-offs move together, once per STABLE_STEP_TURNS. The first few
+    // turns are the image window filling up.
+    expect(breaks).toEqual([3, 4, 8, 12, 16, 20, 24, 28]);
+    for (const n of breaks) {
+      const a = wireCutoffs(n - 1);
+      const b = wireCutoffs(n);
+      expect(a.elideTurns !== b.elideTurns || a.imageTurns !== b.imageTurns).toBe(true);
+    }
+  });
+
+  it("keeps the prefix identical across the model steps of one turn", () => {
+    const messages = withImages(9);
+    const first = toWire(messages, resolve);
+    const afterTool = toWire(
+      [...messages, { role: "assistant", content: null, tool_calls: [call("z")] }, { role: "tool", tool_call_id: "z", content: "x".repeat(3000) }],
+      resolve
+    );
+    expect(sameStart(first, afterTool)).toBe(true);
+  });
+
+  it("never keeps fewer than the recent windows", () => {
+    for (let n = 0; n < 40; n++) {
+      const { elideTurns, imageTurns } = wireCutoffs(n);
+      expect(n - elideTurns).toBeGreaterThanOrEqual(Math.min(n, KEEP_RECENT_TURNS));
+      expect(n - imageTurns).toBeGreaterThanOrEqual(Math.min(n, KEEP_IMAGE_TURNS));
+      expect(n - elideTurns).toBeLessThan(KEEP_RECENT_TURNS + STABLE_STEP_TURNS);
+    }
   });
 });
 

@@ -1385,6 +1385,8 @@ function AssistantCard({
   const [compactAt, setCompactAt] = useState(
     value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)
   );
+  // Unset means on; only an explicit false turns cache breakpoints off.
+  const [promptCache, setPromptCache] = useState(value.promptCache !== false);
   const [systemPrompt, setSystemPrompt] = useState(value.systemPrompt ?? "");
   const [hotkey, setHotkey] = useState(currentHotkey);
   const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
@@ -1397,6 +1399,7 @@ function AssistantCard({
     setAskBeforeRemember(value.askBeforeRemember !== false);
     setMemoryPath(value.memoryPath ?? "");
     setCompactAt(value.compactAtTokens === undefined ? "" : String(value.compactAtTokens));
+    setPromptCache(value.promptCache !== false);
     setSystemPrompt(value.systemPrompt ?? "");
     setHotkey(value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
   }, [
@@ -1407,6 +1410,7 @@ function AssistantCard({
     value.askBeforeRemember,
     value.memoryPath,
     value.compactAtTokens,
+    value.promptCache,
     value.systemPrompt,
     value.quickHotkey,
   ]);
@@ -1422,6 +1426,7 @@ function AssistantCard({
     askBeforeRemember !== (value.askBeforeRemember !== false) ||
     memoryPath !== (value.memoryPath ?? "") ||
     compactAt !== (value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)) ||
+    promptCache !== (value.promptCache !== false) ||
     systemPrompt !== (value.systemPrompt ?? "") ||
     hotkey !== currentHotkey;
   const hotkeyError = hotkey.trim() ? validateAccelerator(hotkey) : null;
@@ -1438,6 +1443,7 @@ function AssistantCard({
       askBeforeRemember,
       memoryPath: memoryPath.trim() || undefined,
       compactAtTokens: /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : undefined,
+      promptCache,
       systemPrompt: systemPrompt.trim() || undefined,
       quickHotkey: hotkey.trim(),
     });
@@ -1532,6 +1538,20 @@ function AssistantCard({
         When a chat would grow past this, its older turns are summarized (one extra request on the
         main model) and the model reads the summary instead. Nothing is deleted: the full chat stays
         on screen and searchable. The Compact button in the tab does it on demand.
+      </p>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={promptCache}
+          onChange={(e) => setPromptCache(e.target.checked)}
+        />
+        Use prompt caching on Anthropic models
+      </label>
+      <p className="settings-card-hint">
+        Marks the stable start of each request so a long chat re-reads it at about a tenth of the
+        price. Writing the cache costs a quarter more than normal input, so a chat you only send one
+        message in costs slightly more. OpenAI, DeepSeek and Gemini cache on their own; this setting
+        doesn’t affect them. The tab header shows how much of a chat was read from cache.
       </p>
       <div className="settings-field-row settings-field-row-top">
         <label>Instructions</label>

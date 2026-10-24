@@ -30,6 +30,8 @@ interface ChatRow {
   prompt_tokens: number;
   completion_tokens: number;
   cost_usd: number | null;
+  cached_tokens: number | null;
+  cache_write_tokens: number | null;
   updated_at: number;
 }
 
@@ -160,6 +162,10 @@ export function initAssistantChats(): void {
   // NULL, not 0, means "the provider never reported a cost" — the two must not
   // be confused or a free-looking $0.00 would hide real spend.
   addColumnIfMissing("assistant_chats", "cost_usd", "REAL");
+  // Prompt-cache reads/writes, part of prompt_tokens. NULL until a provider
+  // reports them, for the same reason as cost_usd.
+  addColumnIfMissing("assistant_chats", "cached_tokens", "INTEGER");
+  addColumnIfMissing("assistant_chats", "cache_write_tokens", "INTEGER");
   // Folders for the history list. A chat in a folder that no longer exists reads
   // as top level (the join below), so a deleted folder can never hide a chat.
   addColumnIfMissing("assistant_chats", "folder_id", "TEXT");
@@ -220,6 +226,18 @@ export function initAssistantChats(): void {
   }
 }
 
+// Adds a turn's cache counts to the running ones. A NULL addend leaves the
+// total as it was; the first reported count turns a NULL total into a number.
+const addCacheCounts = (cached: string, written: string): string => `
+  cached_tokens = CASE WHEN ${cached} IS NULL THEN cached_tokens
+    ELSE COALESCE(cached_tokens, 0) + ${cached} END,
+  cache_write_tokens = CASE WHEN ${written} IS NULL THEN cache_write_tokens
+    ELSE COALESCE(cache_write_tokens, 0) + ${written} END`;
+
+function cacheParams(usage: AssistantUsage): { cachedTokens: number | null; cacheWriteTokens: number | null } {
+  return { cachedTokens: usage.cachedTokens ?? null, cacheWriteTokens: usage.cacheWriteTokens ?? null };
+}
+
 // Insert-or-replace. Deliberately leaves `title` and `pinned` alone on update:
 // those are the user's to change (rename/pin), and a later reply in the chat
 // must not undo them. `usage` is the cost of THIS turn and is added to the
@@ -236,9 +254,11 @@ export function saveChat(
   const upsert = db
     .prepare(
       `INSERT INTO assistant_chats
-         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd, created_at, updated_at)
+         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd,
+          cached_tokens, cache_write_tokens, created_at, updated_at)
        VALUES
-         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now)
+         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd,
+          @cachedTokens, @cacheWriteTokens, @now, @now)
        ON CONFLICT(id) DO UPDATE SET
          search_text = excluded.search_text,
          prompt_tokens = prompt_tokens + excluded.prompt_tokens,
@@ -247,6 +267,7 @@ export function saveChat(
            WHEN excluded.cost_usd IS NULL THEN cost_usd
            ELSE COALESCE(cost_usd, 0) + excluded.cost_usd
          END,
+         ${addCacheCounts("excluded.cached_tokens", "excluded.cache_write_tokens")},
          updated_at = excluded.updated_at`
     );
   db.transaction(() => {
@@ -257,6 +278,7 @@ export function saveChat(
       promptTokens: turn.promptTokens,
       completionTokens: turn.completionTokens,
       costUsd: turn.costUsd,
+      ...cacheParams(turn),
       now,
     });
     writeMessages(id, messages);
@@ -266,7 +288,8 @@ export function saveChat(
 export function loadChat(id: string): StoredChat | null {
   const row = getDatabase()
     .prepare(
-      `SELECT id, title, pinned, prompt_tokens, completion_tokens, cost_usd, updated_at
+      `SELECT id, title, pinned, prompt_tokens, completion_tokens, cost_usd,
+              cached_tokens, cache_write_tokens, updated_at
          FROM assistant_chats WHERE id = ?`
     )
     .get(id) as ChatRow | undefined;
@@ -290,6 +313,8 @@ export function loadChat(id: string): StoredChat | null {
         promptTokens: row.prompt_tokens,
         completionTokens: row.completion_tokens,
         costUsd: row.cost_usd,
+        ...(row.cached_tokens !== null ? { cachedTokens: row.cached_tokens } : {}),
+        ...(row.cache_write_tokens !== null ? { cacheWriteTokens: row.cache_write_tokens } : {}),
       },
     };
   } catch {
@@ -412,10 +437,17 @@ export function addChatUsage(id: string, usage: AssistantUsage): boolean {
            cost_usd = CASE
              WHEN @costUsd IS NULL THEN cost_usd
              ELSE COALESCE(cost_usd, 0) + @costUsd
-           END
+           END,
+           ${addCacheCounts("@cachedTokens", "@cacheWriteTokens")}
          WHERE id = @id`
       )
-      .run({ id, ...usage }).changes > 0
+      .run({
+        id,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        costUsd: usage.costUsd,
+        ...cacheParams(usage),
+      }).changes > 0
   );
 }
 

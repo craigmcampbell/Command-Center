@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import type { AssistantToolCall, CaptureTarget } from "../../../shared/types";
+import type { AssistantToolCall, AssistantUsage, CaptureTarget } from "../../../shared/types";
 import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
+import { cachedShare } from "../../../shared/assistantUsage";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
@@ -87,11 +88,15 @@ function formatTokens(n: number): string {
   return n >= 10_000 ? `${(n / 1000).toFixed(0)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-export function formatUsage(usage: { promptTokens: number; completionTokens: number; costUsd: number | null }): string | null {
+export function formatUsage(usage: AssistantUsage): string | null {
   const total = usage.promptTokens + usage.completionTokens;
   if (total === 0) return null;
   const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd < 0.01 ? usage.costUsd.toFixed(4) : usage.costUsd.toFixed(2)}`;
-  return `${formatTokens(total)} tokens${cost}`;
+  // Only when the provider reported cache figures: "cached 0%" from one that
+  // never does would read as caching failing.
+  const share = cachedShare(usage);
+  const cached = share === null ? "" : ` · cached ${Math.round(share * 100)}%`;
+  return `${formatTokens(total)} tokens${cost}${cached}`;
 }
 
 interface AssistantChatProps {
