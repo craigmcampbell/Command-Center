@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const settings = vi.hoisted(() => ({
   firecrawl: {} as { apiKey?: string },
-  openai: {} as { apiKey?: string; imageModel?: string },
+  openai: {} as { apiKey?: string; adminApiKey?: string; imageModel?: string },
   assistant: {} as {
     apiKey?: string;
     model?: string;
