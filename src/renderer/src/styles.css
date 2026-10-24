@@ -5935,11 +5935,59 @@ body {
   outline: 2px dashed var(--accent, #6aa8ff);
   outline-offset: -4px;
 }
+/* Composer buttons: one height, matched to a single line of the input. */
+.assistant-input-row > button {
+  height: 40px;
+  border-radius: 9px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.05s;
+}
+.assistant-input-row > button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.assistant-input-row > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.assistant-input-row > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .assistant-attach-button {
-  align-self: flex-end;
-  padding: 0 10px;
-  font-size: 18px;
-  line-height: 1;
+  width: 40px;
+  padding: 0;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  color: var(--ink-dim);
+}
+.assistant-attach-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--ink);
+  background: var(--accent-glow);
+}
+.assistant-send {
+  padding: 0 16px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.assistant-send:hover:not(:disabled) {
+  background: #6b8be0;
+  border-color: #6b8be0;
+}
+.assistant-input-row > .assistant-stop {
+  padding: 0 16px;
+  background: transparent;
+}
+.assistant-input-row > .assistant-stop:hover {
+  background: rgba(209, 121, 95, 0.14);
 }
 .assistant-attachments {
   display: flex;
@@ -6118,6 +6166,7 @@ body {
 .assistant-chat {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   border-radius: 8px;
   border: 1px solid transparent;
@@ -6213,6 +6262,119 @@ body {
 .assistant-chat-rename {
   margin: 3px 4px;
   width: calc(100% - 8px);
+}
+/* Folders in the chat history. */
+.assistant-folder-bar {
+  margin-bottom: 6px;
+}
+.assistant-folder-bar .assistant-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.assistant-folder {
+  margin-bottom: 4px;
+}
+.assistant-folder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.assistant-folder-head:hover .assistant-chat-actions,
+.assistant-folder-head:focus-within .assistant-chat-actions {
+  opacity: 1;
+}
+.assistant-folder-head.drop,
+.assistant-root-zone.drop {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.assistant-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.assistant-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-folder-count {
+  color: var(--ink-dim);
+  font-weight: 400;
+  font-size: 11px;
+}
+.assistant-folder-chats {
+  margin-left: 12px;
+  padding-left: 6px;
+  border-left: 1px solid var(--panel-edge-soft);
+}
+.assistant-folder-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.assistant-root-zone {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  min-height: 28px;
+  padding-bottom: 4px;
+}
+.assistant-root-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+  padding: 6px 6px 2px;
+}
+.assistant-chat.dragging {
+  opacity: 0.45;
+}
+.assistant-move-menu {
+  flex: 0 0 100%;
+  list-style: none;
+  padding: 4px;
+  margin: 2px 0 4px;
+  width: 100%;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.assistant-move-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.assistant-move-menu button:hover:not(:disabled) {
+  background: var(--accent-glow);
+}
+.assistant-move-menu button:disabled {
+  color: var(--ink-dim);
+  cursor: default;
 }
 .assistant-chat-confirm {
   display: flex;

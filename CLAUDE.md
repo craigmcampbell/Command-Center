@@ -733,6 +733,17 @@ hotkey) — a drift there is silent.
 - **Cost** is tracked per chat (`usage: { include: true }`; tokens summed, cost
   null — not 0 — when the provider reports none). It is an API-equivalent figure
   from OpenRouter, shown in the tab header.
+- **Folders** group the history list. `assistant_folders` (id, name, sort order) plus
+  a `folder_id` column on `assistant_chats`; flat, no nesting. Deleting a folder
+  returns its chats to the top level and never deletes one, and `listChats` LEFT
+  JOINs the folders table so a chat pointing at a folder that is gone reads as
+  top level instead of vanishing. Filing a chat doesn't touch `updated_at`, so
+  tidying never reorders the list, and a later reply keeps the chat where it is.
+  In the UI a chat row is `draggable` onto a folder header (or onto the "Chats"
+  area to take it out), with a "Move to folder" menu on each row as the
+  keyboard/mouse alternative; the drag payload is a private MIME type so files
+  or text dragged in from outside can't be mistaken for a chat. Folded-shut
+  folders are remembered in `localStorage`. While searching, the list is flat.
 - **History UI**: search (every term, in the title or in what was *said* —
   `search_text` excludes tool payloads and call arguments, or "tasks" would match
   everything), pinned-first, inline rename, delete with confirm. History controls

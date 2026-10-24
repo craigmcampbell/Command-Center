@@ -83,6 +83,41 @@ const path = require('node:path');
     assert.equal(api.isAttachmentReferenced('not hex'), false, 'A malformed id matches nothing');
     assert.deepEqual(api.listChats('Hello'), [], 'Attached text is not searchable');
 
+    // Folders: flat groups for the history list.
+    assert.deepEqual(api.listFolders(), []);
+    const work = api.createFolder('  Work   stuff ');
+    const home = api.createFolder('Home');
+    assert.equal(work.name, 'Work stuff', 'Whitespace is normalised');
+    assert.equal(api.createFolder('   '), null, 'A blank name is refused');
+    assert.deepEqual(api.listFolders().map(f => f.name), ['Work stuff', 'Home'], 'Folders keep creation order');
+    api.saveChat('f1', 'In a folder', [{ role: 'user', content: 'x' }]);
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, null, 'Chats start at the top level');
+    db.prepare(`UPDATE assistant_chats SET updated_at = 7777 WHERE id = 'f1'`).run();
+    assert.equal(api.moveChat('f1', work.id), true);
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, work.id);
+    assert.equal(db.prepare(`SELECT updated_at FROM assistant_chats WHERE id = 'f1'`).get().updated_at, 7777, 'Filing a chat does not reorder the list');
+    assert.equal(api.moveChat('f1', 'no-such-folder'), false, 'A folder that does not exist is refused');
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, work.id, 'A refused move changes nothing');
+    assert.equal(api.moveChat('nope', work.id), false);
+    assert.deepEqual(api.listChats('folder').map(c => [c.id, c.folderId]), [['f1', work.id]], 'Search still works and reports the folder');
+    assert.equal(api.listChats("'; DROP TABLE assistant_chats; --").length, 0, 'The folder join keeps queries parameterised');
+    api.saveChat('f1', 'ignored', [{ role: 'user', content: 'x' }, { role: 'assistant', content: 'y' }]);
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, work.id, 'A later reply keeps the chat in its folder');
+    assert.equal(api.renameFolder(home.id, ' Personal '), true);
+    assert.equal(api.renameFolder(home.id, '  '), false);
+    assert.equal(api.listFolders()[1].name, 'Personal');
+    assert.equal(api.moveChat('f1', null), true, 'null returns a chat to the top level');
+    api.moveChat('f1', work.id);
+    assert.equal(api.deleteFolder(work.id), true);
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, null, 'Deleting a folder returns its chats instead of deleting them');
+    assert.equal(api.loadChat('f1').messages.length, 2);
+    assert.equal(api.deleteFolder(work.id), false);
+    // A chat pointing at a folder row that is gone (however it happened) reads as top level.
+    db.prepare(`UPDATE assistant_chats SET folder_id = 'ghost' WHERE id = 'f1'`).run();
+    assert.equal(api.listChats().find(c => c.id === 'f1').folderId, null);
+    api.deleteChat('f1');
+    api.deleteFolder(home.id);
+
     // A file a tool produced (a generated image) rides on the tool message.
     const made = image('d'.repeat(64), 'fox.png');
     api.saveChat('gen', 'Gen', [{ role: 'user', content: 'draw' }, { role: 'assistant', content: null, tool_calls: [{ id: 'g1', type: 'function', function: { name: 'generate_image', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'g1', content: '{"generated":true}', attachments: [made] }, { role: 'assistant', content: 'Here.' }]);
@@ -247,6 +282,6 @@ const path = require('node:path');
     assert.equal(api.deleteChat('b'), false, 'Deleting twice reports nothing deleted');
     assert.equal(api.listChats().length, 3);
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, folders, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

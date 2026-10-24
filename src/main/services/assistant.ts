@@ -37,6 +37,7 @@ import type {
   AssistantAttachment,
   AssistantChatResult,
   AssistantCompactResult,
+  AssistantFolder,
   AssistantChatSummary,
   AssistantReply,
   AssistantToolCall,
@@ -59,8 +60,13 @@ import {
 import {
   addChatUsage,
   chatImageIds,
+  createFolder,
   deleteChat,
+  deleteFolder,
   isAttachmentReferenced,
+  listFolders,
+  moveChat,
+  renameFolder,
   listChats,
   loadChat,
   renameChat,
@@ -316,6 +322,47 @@ export function renameAssistantChat(id: string, title: string): { ok: boolean } 
 export function pinAssistantChat(id: string, pinned: boolean): { ok: boolean } {
   try {
     return { ok: setChatPinned(id, pinned) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function moveAssistantChat(id: string, folderId: string | null): { ok: boolean } {
+  try {
+    return { ok: moveChat(id, folderId) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function listAssistantFolders(): AssistantFolder[] {
+  try {
+    return listFolders();
+  } catch {
+    return [];
+  }
+}
+
+export function createAssistantFolder(name: string): { ok: boolean; folder?: AssistantFolder } {
+  try {
+    const folder = createFolder(name);
+    return folder ? { ok: true, folder } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function renameAssistantFolder(id: string, name: string): { ok: boolean } {
+  try {
+    return { ok: renameFolder(id, name) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function deleteAssistantFolder(id: string): { ok: boolean } {
+  try {
+    return { ok: deleteFolder(id) };
   } catch {
     return { ok: false };
   }

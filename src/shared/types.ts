@@ -315,6 +315,15 @@ export interface AssistantChatSummary {
   title: string;
   pinned: boolean;
   updatedAt: number; // epoch ms
+  // The folder it is filed in, or null for the top level.
+  folderId: string | null;
+}
+
+// A folder in the chat history list. Folders are flat and only group chats:
+// deleting one moves its chats back to the top level, never deletes them.
+export interface AssistantFolder {
+  id: string;
+  name: string;
 }
 
 // Tokens and cost for one reply, or running totals for a whole chat.
@@ -2055,8 +2064,17 @@ export interface CommandCenterApi {
       remove: (id: string) => Promise<{ ok: boolean }>;
       rename: (id: string, title: string) => Promise<{ ok: boolean }>;
       pin: (id: string, pinned: boolean) => Promise<{ ok: boolean }>;
+      // Files a chat in a folder; null returns it to the top level.
+      move: (id: string, folderId: string | null) => Promise<{ ok: boolean }>;
       // Summarizes the older part of a chat now, regardless of its size.
       compact: (id: string) => Promise<AssistantCompactResult>;
+    };
+    folders: {
+      list: () => Promise<AssistantFolder[]>;
+      create: (name: string) => Promise<{ ok: boolean; folder?: AssistantFolder }>;
+      rename: (id: string, name: string) => Promise<{ ok: boolean }>;
+      // Its chats go back to the top level.
+      remove: (id: string) => Promise<{ ok: boolean }>;
     };
     // An image attachment as a data URL, for showing it in the transcript.
     // null when the file is gone.

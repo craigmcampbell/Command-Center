@@ -232,6 +232,12 @@ const api: CommandCenterApi = {
       command?: string,
       attachments?: AssistantAttachmentInput[]
     ) => ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command, attachments),
+    folders: {
+      list: () => ipcRenderer.invoke("assistant:folders:list"),
+      create: (name: string) => ipcRenderer.invoke("assistant:folders:create", name),
+      rename: (id: string, name: string) => ipcRenderer.invoke("assistant:folders:rename", id, name),
+      remove: (id: string) => ipcRenderer.invoke("assistant:folders:remove", id),
+    },
     readAttachment: (id: string) => ipcRenderer.invoke("assistant:attachments:read", id),
     saveAttachment: (id: string, name: string) => ipcRenderer.invoke("assistant:attachments:save", id, name),
     regenerate: (conversationId: string, requestId: string) =>
@@ -270,6 +276,7 @@ const api: CommandCenterApi = {
         ipcRenderer.invoke("assistant:chats:rename", id, title),
       pin: (id: string, pinned: boolean) => ipcRenderer.invoke("assistant:chats:pin", id, pinned),
       compact: (id: string) => ipcRenderer.invoke("assistant:chats:compact", id),
+      move: (id: string, folderId: string | null) => ipcRenderer.invoke("assistant:chats:move", id, folderId),
     },
     commands: {
       list: () => ipcRenderer.invoke("assistant:commands:list"),

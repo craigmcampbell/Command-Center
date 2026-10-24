@@ -6,9 +6,10 @@ import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
 import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/types";
+import { matchCommands } from "../lib/commandMatch";
 import { describeSize, MAX_FILES, MAX_TOTAL_BYTES, readAttachment, type PendingAttachment } from "../lib/attachments";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
-import { IconCheck, IconCopy, IconX } from "./icons";
+import { IconArrowUp, IconCheck, IconCopy, IconPlus, IconX } from "./icons";
 
 // The transcript and composer for one Assistant conversation. Used by the
 // dashboard tab and the quick panel; the surrounding chrome (history, memory,
@@ -141,10 +142,7 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
 
   const typedName = /^\/([\w-]*)$/.exec(draft)?.[1] ?? null;
   const matches = useMemo(
-    () =>
-      typedName === null
-        ? []
-        : commands.filter((c) => c.name.toLowerCase().startsWith(typedName.toLowerCase())),
+    () => (typedName === null ? [] : matchCommands(commands, typedName)),
     [commands, typedName]
   );
   const pickerOpen = matches.length > 0 && !busy && !dismissed;
@@ -363,15 +361,21 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
           aria-label="Attach files"
           title="Attach images or text files (or paste or drop them)"
         >
-          +
+          <IconPlus size={16} />
         </button>
         {busy ? (
           <button type="button" className="assistant-stop" onClick={chat.stop}>
             Stop
           </button>
         ) : (
-          <button type="button" onClick={submit} disabled={!draft.trim() && pending.length === 0}>
+          <button
+            type="button"
+            className="assistant-send"
+            onClick={submit}
+            disabled={!draft.trim() && pending.length === 0}
+          >
             Send
+            <IconArrowUp size={13} />
           </button>
         )}
       </div>

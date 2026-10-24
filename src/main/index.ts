@@ -126,7 +126,12 @@ import {
   openAssistantChat,
   pinAssistantChat,
   compactAssistantChat,
+  createAssistantFolder,
+  deleteAssistantFolder,
+  listAssistantFolders,
+  moveAssistantChat,
   regenerateAssistant,
+  renameAssistantFolder,
   renameAssistantChat,
   saveAssistantMemory,
   stopAssistant,
@@ -791,6 +796,20 @@ ipcMain.handle("assistant:commands:savePrompt", (_evt, input: any) =>
 );
 ipcMain.handle("assistant:commands:removePrompt", (_evt, name: unknown) =>
   removePromptCommand(typeof name === "string" ? name : "")
+);
+// Folders in the history list.
+ipcMain.handle("assistant:folders:list", () => listAssistantFolders());
+ipcMain.handle("assistant:folders:create", (_evt, name: unknown) =>
+  createAssistantFolder(typeof name === "string" ? name : "")
+);
+ipcMain.handle("assistant:folders:rename", (_evt, id: unknown, name: unknown) =>
+  renameAssistantFolder(typeof id === "string" ? id : "", typeof name === "string" ? name : "")
+);
+ipcMain.handle("assistant:folders:remove", (_evt, id: unknown) =>
+  deleteAssistantFolder(typeof id === "string" ? id : "")
+);
+ipcMain.handle("assistant:chats:move", (_evt, id: unknown, folderId: unknown) =>
+  moveAssistantChat(typeof id === "string" ? id : "", typeof folderId === "string" ? folderId : null)
 );
 // A summarize request costs money and isn't idempotent: plain handle, not readHandler.
 ipcMain.handle("assistant:chats:compact", (_evt, id: unknown) =>

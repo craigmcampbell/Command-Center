@@ -18,9 +18,10 @@
 // something up. `search_text` holds just what was SAID (user and assistant
 // text), maintained on every save.
 
+import { randomUUID } from "node:crypto";
 import { getDatabase } from "./db";
 import type { ChatMessage, ToolCall } from "./assistantTranscript";
-import type { AssistantAttachment, AssistantChatSummary, AssistantUsage } from "../../shared/types";
+import type { AssistantAttachment, AssistantChatSummary, AssistantFolder, AssistantUsage } from "../../shared/types";
 
 interface ChatRow {
   id: string;
@@ -159,6 +160,15 @@ export function initAssistantChats(): void {
   // NULL, not 0, means "the provider never reported a cost" — the two must not
   // be confused or a free-looking $0.00 would hide real spend.
   addColumnIfMissing("assistant_chats", "cost_usd", "REAL");
+  // Folders for the history list. A chat in a folder that no longer exists reads
+  // as top level (the join below), so a deleted folder can never hide a chat.
+  addColumnIfMissing("assistant_chats", "folder_id", "TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
   db.exec(`CREATE INDEX IF NOT EXISTS assistant_chats_updated ON assistant_chats (updated_at DESC)`);
   db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
     chat_id TEXT NOT NULL,
@@ -294,7 +304,7 @@ export function loadChat(id: string): StoredChat | null {
 export function listChats(query?: string): AssistantChatSummary[] {
   const terms = (query ?? "").split(/\s+/).filter(Boolean).slice(0, 8);
   const where = terms
-    .map(() => `(title LIKE ? ESCAPE '\\' OR search_text LIKE ? ESCAPE '\\')`)
+    .map(() => `(c.title LIKE ? ESCAPE '\\' OR c.search_text LIKE ? ESCAPE '\\')`)
     .join(" AND ");
   const params = terms.flatMap((t) => {
     const like = `%${escapeLike(t)}%`;
@@ -302,17 +312,69 @@ export function listChats(query?: string): AssistantChatSummary[] {
   });
   const rows = getDatabase()
     .prepare(
-      `SELECT id, title, pinned, updated_at FROM assistant_chats
+      `SELECT c.id, c.title, c.pinned, c.updated_at, f.id AS folder_id
+         FROM assistant_chats c
+         LEFT JOIN assistant_folders f ON f.id = c.folder_id
         ${where ? `WHERE ${where}` : ""}
-        ORDER BY pinned DESC, updated_at DESC LIMIT 200`
+        ORDER BY c.pinned DESC, c.updated_at DESC LIMIT 200`
     )
-    .all(...params) as Pick<ChatRow, "id" | "title" | "pinned" | "updated_at">[];
+    .all(...params) as (Pick<ChatRow, "id" | "title" | "pinned" | "updated_at"> & { folder_id: string | null })[];
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
     pinned: r.pinned === 1,
     updatedAt: r.updated_at,
+    folderId: r.folder_id,
   }));
+}
+
+// ---- folders ---------------------------------------------------------------
+
+const FOLDER_NAME_MAX = 60;
+const cleanFolderName = (name: string): string => name.replace(/\s+/g, " ").trim().slice(0, FOLDER_NAME_MAX);
+
+export function listFolders(): AssistantFolder[] {
+  return getDatabase()
+    .prepare(`SELECT id, name FROM assistant_folders ORDER BY sort_order, created_at`)
+    .all() as AssistantFolder[];
+}
+
+export function createFolder(name: string): AssistantFolder | null {
+  const clean = cleanFolderName(name);
+  if (!clean) return null;
+  const db = getDatabase();
+  const next = (db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM assistant_folders`).get() as { n: number }).n;
+  const id = randomUUID();
+  db.prepare(`INSERT INTO assistant_folders (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)`).run(
+    id,
+    clean,
+    next,
+    Date.now()
+  );
+  return { id, name: clean };
+}
+
+export function renameFolder(id: string, name: string): boolean {
+  const clean = cleanFolderName(name);
+  if (!clean) return false;
+  return getDatabase().prepare(`UPDATE assistant_folders SET name = ? WHERE id = ?`).run(clean, id).changes > 0;
+}
+
+// Its chats return to the top level; none is deleted.
+export function deleteFolder(id: string): boolean {
+  const db = getDatabase();
+  return db.transaction(() => {
+    db.prepare(`UPDATE assistant_chats SET folder_id = NULL WHERE folder_id = ?`).run(id);
+    return db.prepare(`DELETE FROM assistant_folders WHERE id = ?`).run(id).changes > 0;
+  })();
+}
+
+// Files a chat in a folder (null = top level). Doesn't touch updated_at, so
+// tidying the list never reorders it. A folder that doesn't exist is refused.
+export function moveChat(id: string, folderId: string | null): boolean {
+  const db = getDatabase();
+  if (folderId !== null && !db.prepare(`SELECT 1 FROM assistant_folders WHERE id = ?`).get(folderId)) return false;
+  return db.prepare(`UPDATE assistant_chats SET folder_id = ? WHERE id = ?`).run(folderId, id).changes > 0;
 }
 
 export function renameChat(id: string, title: string): boolean {
