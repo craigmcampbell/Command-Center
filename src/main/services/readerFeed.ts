@@ -245,6 +245,15 @@ export async function listReaderFeed(
   return buildResult(page, source, snapshot);
 }
 
+// Title and site of an item already loaded into the cache, so a caller that is
+// about to move it (the Assistant's confirmation card) can quote what will
+// really move instead of trusting a description of it. Null when the id isn't
+// in the loaded feed — the caller should list the feed first.
+export function findCachedFeedItem(id: string): { title: string; siteName: string } | null {
+  const doc = cache?.docs.find((d) => d.id === id);
+  return doc ? { title: cleanFeedTitle(doc.title), siteName: doc.site_name || "" } : null;
+}
+
 // Moves a feed item into the Reader inbox — the "I'll actually read this"
 // gesture. It leaves the feed location, so it drops out of this list and shows
 // up in the saved-articles widget instead.

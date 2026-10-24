@@ -83,6 +83,99 @@ export async function exportDatabase(destPath: string): Promise<ActionResult> {
   }
 }
 
+// ---- restore ---------------------------------------------------------------
+//
+// The live database is held open by one long-lived connection that every
+// service shares, so it can't be swapped in place. Restore is therefore two
+// steps: `stageRestore` validates the chosen file and writes a self-contained
+// copy to `restore-pending.db`; the caller then relaunches, and
+// `applyPendingRestore` (run in main/index.ts BEFORE initDatabase) moves it over
+// the real file. Nothing is touched until the new file has passed validation.
+
+function pendingRestorePath(): string {
+  return path.join(app.getPath("userData"), "restore-pending.db");
+}
+
+function liveDatabasePath(): string {
+  return path.join(app.getPath("userData"), "command-center.db");
+}
+
+// A restore is only offered for a file this app wrote itself, which is checked
+// by the one table every version of it has: `settings`. An arbitrary SQLite
+// file (or a corrupt one) would otherwise replace everything with nothing.
+function validateBackup(file: string): string | null {
+  let handle: DatabaseType | undefined;
+  try {
+    handle = new Database(file, { readonly: true, fileMustExist: true });
+    const integrity = handle.pragma("integrity_check", { simple: true });
+    if (integrity !== "ok") return "That file failed SQLite's integrity check";
+    const hasSettings = handle
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'")
+      .get();
+    if (!hasSettings) return "That file isn't a Command Center database";
+    return null;
+  } catch {
+    return "That file couldn't be opened as a database";
+  } finally {
+    handle?.close();
+  }
+}
+
+// `source` must be a path the caller has already vetted. Returns where the
+// pre-restore safety copy of the CURRENT database went, so the UI can say.
+export async function stageRestore(
+  source: string
+): Promise<ActionResult & { safetyCopy?: string }> {
+  if (path.resolve(source) === path.resolve(liveDatabasePath())) {
+    return { ok: false, reason: "That is the database already in use" };
+  }
+  const invalid = validateBackup(source);
+  if (invalid) return { ok: false, reason: invalid };
+
+  try {
+    // Keep what's being replaced. Named outside the `command-center-` pattern
+    // so the daily rotation can never prune it.
+    fs.mkdirSync(backupsDir(), { recursive: true });
+    const safetyCopy = path.join(backupsDir(), `pre-restore-${Date.now()}.db`);
+    await getDatabase().backup(safetyCopy);
+    consolidate(safetyCopy);
+
+    // Copy through SQLite rather than fs.copyFile, for the same WAL reason as
+    // every other copy in this file.
+    const pending = pendingRestorePath();
+    for (const p of [pending, `${pending}-wal`, `${pending}-shm`]) fs.rmSync(p, { force: true });
+    const reader = new Database(source, { readonly: true, fileMustExist: true });
+    try {
+      await reader.backup(pending);
+    } finally {
+      reader.close();
+    }
+    consolidate(pending);
+    return { ok: true, safetyCopy };
+  } catch (err) {
+    fs.rmSync(pendingRestorePath(), { force: true });
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Boot-time half of a restore. Must run before the database is opened. Never
+// throws: if it fails the app starts on the existing database, and the staged
+// file is discarded so a stale one can't be applied by some later launch.
+export function applyPendingRestore(): void {
+  const pending = pendingRestorePath();
+  if (!fs.existsSync(pending)) return;
+  try {
+    const live = liveDatabasePath();
+    // The old WAL belongs to the file being replaced; left behind it would be
+    // replayed onto the restored database.
+    for (const p of [`${live}-wal`, `${live}-shm`]) fs.rmSync(p, { force: true });
+    fs.renameSync(pending, live);
+  } catch (err) {
+    console.error("[backup] couldn't apply the staged restore:", err);
+    fs.rmSync(pending, { force: true });
+  }
+}
+
 // Keeps the newest `keep` backups. Only ever deletes files matching our own
 // naming pattern (listBackups filters on it), so pointing the directory at
 // something unexpected can't turn this into a shredder.

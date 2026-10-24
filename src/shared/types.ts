@@ -1195,9 +1195,12 @@ export interface RedditPost {
   permalink: string; // absolute https://www.reddit.com/... — the discussion
   url: string; // what the post points at (its permalink, for a self post)
   domain: string;
-  score: number;
-  numComments: number;
-  createdUtc: number; // seconds since epoch, as Reddit reports it
+  // Absent: the public Atom feed carries neither (the JSON listing that did is
+  // blocked). Optional rather than 0 so the UI can leave them out instead of
+  // showing a number that looks real.
+  score?: number;
+  numComments?: number;
+  createdUtc: number; // seconds since epoch
   thumbnailUrl?: string;
   flair?: string;
   isSelf: boolean;
@@ -1841,6 +1844,10 @@ export interface CommandCenterApi {
     export: () => Promise<ExportResult>;
     list: () => Promise<BackupFile[]>;
     runNow: () => Promise<ActionResult>;
+    // Both end in a relaunch on success; `path` is where the replaced
+    // database was kept.
+    restore: (file: string) => Promise<ExportResult>;
+    restoreFromFile: () => Promise<ExportResult>;
   };
   capture: {
     submit: (target: CaptureTarget, text: string) => Promise<ActionResult>;

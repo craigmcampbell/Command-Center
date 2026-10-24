@@ -12,7 +12,7 @@ import { fetchWithTimeout } from "./http";
 // asks for a forced refresh (see resetReaderCache); archiving/deleting a
 // document just removes it from the cache directly, no refetch needed.
 
-import type { AppConfig, ReaderDocument, ReaderResult } from "../../shared/types";
+import type { ActionResult, AppConfig, ReaderDocument, ReaderResult } from "../../shared/types";
 
 const API_ROOT = "https://readwise.io/api/v3";
 const PAGE_SIZE = 15;
@@ -25,7 +25,22 @@ const CACHE_TTL_MS = 5 * 60_000;
 // request; a deep or stale page just comes back short until a later
 // request (the next poll, or paging forward again) walks the cursor
 // further. Same mitigation as readerFeed.ts's MAX_FETCH_PAGES_PER_CALL.
-const MAX_FETCH_PAGES_PER_CALL = 1;
+//
+// Raised to 4 because the saved list is now fetched per location (see below):
+// the first call needs one page from each of three locations before it can
+// order anything.
+const MAX_FETCH_PAGES_PER_CALL = 4;
+
+// The locations that make up "saved". The list API takes ONE `location` per
+// request, and without it returns every document newest-UPDATED first — feed
+// items included. A real account holds thousands of feed items, so an
+// unfiltered 100-item page was mostly feed, got filtered away client-side, and
+// left a handful of saved documents reaching back only a day or so. Asking for
+// each location by name makes every fetched document one we actually show.
+// Archive is left out on purpose: archiving from this widget moves a document
+// there, and it is meant to stay gone.
+const SAVED_LOCATIONS = ["new", "later", "shortlist"] as const;
+type SavedLocation = (typeof SAVED_LOCATIONS)[number];
 
 interface RawDoc {
   id: string;
@@ -35,14 +50,25 @@ interface RawDoc {
   location: string;
   category: string;
   saved_at: string;
+  updated_at: string;
   parent_id: string | null;
   tags: Record<string, { name: string }>;
 }
 
-interface Cache {
-  docs: RawDoc[];
+// Paging state for one location. The API lists newest-UPDATED first, so
+// `oldestUpdated` (the smallest updated_at fetched so far, in ms) bounds what is
+// still upstream: anything not yet fetched was updated no later than that, and a
+// document is never saved after it was last updated — so every document SAVED
+// after `oldestUpdated` is guaranteed to be here already.
+interface LocationState {
   nextCursor: string | null;
   exhausted: boolean;
+  oldestUpdated: number | null;
+}
+
+interface Cache {
+  docs: RawDoc[];
+  locations: Record<SavedLocation, LocationState>;
   token: string;
   fetchedAt: number;
   pending?: Promise<void>;
@@ -70,8 +96,46 @@ function toReaderDocument(d: RawDoc): ReaderDocument {
   };
 }
 
+function freshCache(token: string): Cache {
+  const state = (): LocationState => ({ nextCursor: null, exhausted: false, oldestUpdated: null });
+  return {
+    docs: [],
+    locations: { new: state(), later: state(), shortlist: state() },
+    token,
+    fetchedAt: Date.now(),
+  };
+}
+
+function allExhausted(snapshot: Cache | null): boolean {
+  return !snapshot || SAVED_LOCATIONS.every((l) => snapshot.locations[l].exhausted);
+}
+
+// Documents are fetched newest-first per location, so merging locations is only
+// correct down to the point every still-paging location has reached. Showing
+// anything older would let a document from a location we haven't paged that far
+// yet be silently missing from the middle of the list.
+function horizon(snapshot: Cache | null): number {
+  if (!snapshot) return -Infinity;
+  let h = -Infinity;
+  for (const l of SAVED_LOCATIONS) {
+    const state = snapshot.locations[l];
+    if (state.exhausted) continue;
+    // Not fetched at all yet: nothing is known to be complete.
+    if (state.oldestUpdated === null) return Infinity;
+    h = Math.max(h, state.oldestUpdated);
+  }
+  return h;
+}
+
+function visibleDocs(snapshot: Cache | null): RawDoc[] {
+  const h = horizon(snapshot);
+  return [...(snapshot?.docs ?? [])]
+    .filter((d) => Date.parse(d.saved_at) >= h)
+    .sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+}
+
 function buildResult(page: number, snapshot = cache): ReaderResult {
-  const sorted = [...(snapshot?.docs ?? [])].sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+  const sorted = visibleDocs(snapshot);
   const start = page * PAGE_SIZE;
   const pageDocs = sorted.slice(start, start + PAGE_SIZE);
 
@@ -85,16 +149,18 @@ function buildResult(page: number, snapshot = cache): ReaderResult {
     // page — must not advertise a next page that comes back empty.
     hasNext:
       sorted.length > start + PAGE_SIZE ||
-      (pageDocs.length === PAGE_SIZE && !(snapshot?.exhausted ?? true)),
+      (pageDocs.length === PAGE_SIZE && !allExhausted(snapshot)),
     hasPrev: page > 0,
   };
 }
 
 async function fetchPage(
   apiToken: string,
+  location: SavedLocation,
   cursor: string | null
-): Promise<{ docs: RawDoc[]; nextCursor: string | null }> {
+): Promise<{ docs: RawDoc[]; nextCursor: string | null; oldestUpdated: number | null }> {
   const url = new URL(`${API_ROOT}/list/`);
+  url.searchParams.set("location", location);
   url.searchParams.set("limit", String(FETCH_LIMIT));
   if (cursor) url.searchParams.set("pageCursor", cursor);
 
@@ -108,6 +174,12 @@ async function fetchPage(
   }
 
   const data = await res.json();
+  // Taken before filtering: a filtered-out row was still fetched, and the
+  // bound is about how far down the upstream list we have read.
+  const updated = (data.results || [])
+    .map((d: RawDoc) => Date.parse(d.updated_at))
+    .filter((n: number) => Number.isFinite(n));
+  const oldestUpdated = updated.length > 0 ? Math.min(...updated) : null;
   const docs: RawDoc[] = (data.results || []).filter(
     (d: RawDoc) =>
       d.location !== "feed" &&
@@ -115,7 +187,7 @@ async function fetchPage(
       d.category !== "note" &&
       !d.parent_id
   );
-  return { docs, nextCursor: data.nextPageCursor || null };
+  return { docs, nextCursor: data.nextPageCursor || null, oldestUpdated };
 }
 
 export async function listReaderDocuments(
@@ -125,7 +197,7 @@ export async function listReaderDocuments(
   if (!apiToken) return failResult(page, "No Readwise API token configured");
 
   if (!cache || cache.token !== apiToken || Date.now() - cache.fetchedAt > CACHE_TTL_MS) {
-    cache = { docs: [], nextCursor: null, exhausted: false, token: apiToken, fetchedAt: Date.now() };
+    cache = freshCache(apiToken);
   }
 
   const snapshot = cache;
@@ -133,20 +205,36 @@ export async function listReaderDocuments(
   let fetchedPages = 0;
   try {
     while (
-      snapshot.docs.length < needed &&
-      !snapshot.exhausted &&
+      visibleDocs(snapshot).length < needed &&
+      !allExhausted(snapshot) &&
       fetchedPages < MAX_FETCH_PAGES_PER_CALL
     ) {
-      if (!snapshot.pending) {
-        fetchedPages += 1;
-        snapshot.pending = (async () => {
-          const { docs, nextCursor } = await fetchPage(apiToken, snapshot.nextCursor);
-          const existingIds = new Set(snapshot.docs.map((d) => d.id));
-          snapshot.docs.push(...docs.filter((d) => !existingIds.has(d.id)));
-          snapshot.nextCursor = nextCursor;
-          if (!nextCursor) snapshot.exhausted = true;
-        })().finally(() => { snapshot.pending = undefined; });
+      if (snapshot.pending) {
+        await snapshot.pending;
+        continue;
       }
+      // Next page from whichever location is holding the horizon back: one
+      // not fetched yet first, then the one with the newest oldestUpdated.
+      const location = SAVED_LOCATIONS.filter((l) => !snapshot.locations[l].exhausted).sort(
+        (a, b) =>
+          (snapshot.locations[b].oldestUpdated ?? Infinity) -
+          (snapshot.locations[a].oldestUpdated ?? Infinity)
+      )[0];
+      const state = snapshot.locations[location];
+      fetchedPages += 1;
+      snapshot.pending = (async () => {
+        const { docs, nextCursor, oldestUpdated } = await fetchPage(apiToken, location, state.nextCursor);
+        const existingIds = new Set(snapshot.docs.map((d) => d.id));
+        snapshot.docs.push(...docs.filter((d) => !existingIds.has(d.id)));
+        state.nextCursor = nextCursor;
+        if (oldestUpdated !== null) {
+          state.oldestUpdated =
+            state.oldestUpdated === null ? oldestUpdated : Math.min(state.oldestUpdated, oldestUpdated);
+        }
+        if (!nextCursor) state.exhausted = true;
+      })().finally(() => {
+        snapshot.pending = undefined;
+      });
       await snapshot.pending;
     }
   } catch (err) {
@@ -215,4 +303,32 @@ export async function deleteDocument(
 
   if (cache) cache.docs = cache.docs.filter((d) => d.id !== id);
   return buildResult(page);
+}
+
+// Saves a URL to the Reader inbox (`location: new`, the API's default). 201 is
+// a fresh save and 200 means Reader already had it — both are success, since
+// the user's intent ("have this in Reader") holds either way. The saved list is
+// cached, so drop it; the new document shows up on the next load.
+export async function saveLink({ apiToken }: AppConfig["reader"], url: string): Promise<ActionResult> {
+  if (!apiToken) return { ok: false, reason: "No Readwise API token configured" };
+  try {
+    const res = await fetchWithTimeout(`${API_ROOT}/save/`, {
+      method: "POST",
+      headers: { Authorization: `Token ${apiToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason:
+          res.status === 401 || res.status === 403
+            ? "Readwise token rejected"
+            : `Couldn't save that link (${res.status})`,
+      };
+    }
+  } catch {
+    return { ok: false, reason: "Couldn't reach Readwise" };
+  }
+  cache = null;
+  return { ok: true };
 }

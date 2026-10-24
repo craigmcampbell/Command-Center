@@ -55,6 +55,7 @@ import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import BillsWidget from "./components/BillsWidget";
 import BudgetHealthWidget from "./components/BudgetHealthWidget";
+import TodayStrip from "./components/TodayStrip";
 import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
 import DailyNoteWidget from "./components/DailyNoteWidget";
@@ -570,6 +571,8 @@ export default function App() {
   usePolling(loadProcessStatuses, 3000, settingsLoaded, 200);
   usePolling(loadBudgetHealth, ynabRefreshSeconds * 1000, settingsLoaded, 1200);
   usePolling(loadYnab, ynabRefreshSeconds * 1000, foreground && activeTab === "finances", 300);
+  // Home's attention strip only needs the unapproved count, not the whole Finances load.
+  usePolling(loadYnabUnapproved, ynabRefreshSeconds * 1000, foreground && activeTab === "home", 500);
   usePolling(loadDockerUpdates, dockerUpdateCheckMinutes * 60_000, foreground && (activeTab === "development" || activeTab === "projects") && dockerUpdateChecksEnabled, 2000);
   usePolling(loadGit, gitRefreshSeconds * 1000, foreground && (activeTab === "development" || activeTab === "projects"), 300);
   usePolling(loadNowPlaying, 4000, foreground && spotifyEnabled, 400);
@@ -674,6 +677,19 @@ export default function App() {
         onReorder={reorderTabs}
         onRename={renameTab}
       />
+
+      {activeTab === "home" && (
+        <TodayStrip
+          todoist={todoist}
+          calendar={calendar}
+          github={github}
+          unapproved={ynabUnapproved}
+          budgetHealth={budgetHealth}
+          processStatuses={processStatuses}
+          processConfigs={processConfigs}
+          onNavigate={(id) => setActiveTab(id as TabId)}
+        />
+      )}
 
       {activeTab === "home" && (
         <main className="grid grid-home">

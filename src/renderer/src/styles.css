@@ -250,6 +250,46 @@ body {
 /* Six columns rather than three: the tasks/daily-note row wants halves and the
    missions/apps/learning row wants thirds, and 6 is the smallest track count
    that expresses both. */
+/* Home's "needs attention" strip, above the grid. */
+.today-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 28px;
+  margin-bottom: 14px;
+}
+.today-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.today-chip-alert {
+  border-color: var(--alert);
+  color: var(--alert);
+}
+.today-chip-warn {
+  border-color: var(--pending);
+  color: var(--pending);
+}
+.today-chip-info {
+  color: var(--ink-dim);
+}
+.today-chip-clear {
+  color: var(--live);
+  border-color: var(--live);
+}
+.today-chip-link {
+  cursor: pointer;
+}
+.today-chip-link:hover {
+  background: var(--accent-glow);
+}
+
 .grid-home {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-template-areas:
@@ -1657,6 +1697,42 @@ body {
 
 /* Budget Health widget's header stats — same tile shape as .claude-stat,
    just two columns instead of three since there are only two figures. */
+.ynab-col-spent {
+  width: 150px;
+  text-align: left;
+}
+.budget-spent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.budget-spent-track {
+  flex: 1;
+  height: 6px;
+  min-width: 50px;
+  border-radius: 3px;
+  background: var(--panel-edge);
+  overflow: hidden;
+}
+.budget-spent-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--live);
+}
+.budget-spent-fill.near {
+  background: var(--pending);
+}
+.budget-spent-fill.over {
+  background: var(--alert);
+}
+.budget-spent-pct {
+  min-width: 34px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  text-align: right;
+}
 .budget-health-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4124,6 +4200,12 @@ body {
     0 1px 3px rgba(0, 0, 0, 0.4);
   animation: fadeInUp 0.15s ease both;
 }
+.budget-expand-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 18px;
+}
 .md-expand-toolbar {
   display: flex;
   align-items: center;
@@ -4434,6 +4516,16 @@ body {
 }
 .settings-backup-size {
   flex-shrink: 0;
+  margin-left: auto;
+}
+.settings-backup-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.settings-backup-actions button {
+  padding: 1px 8px;
+  font-size: 11px;
 }
 .settings-field-error {
   margin: 6px 0 0;

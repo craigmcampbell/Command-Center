@@ -657,6 +657,10 @@ function DataCard({
   const [saving, setSaving] = useState(false);
   const [backups, setBackups] = useState<BackupFile[]>([]);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
+  // The backup awaiting an "are you sure" — restoring replaces everything.
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => setDraft(norm(value)), [value]);
   const refreshList = () => void window.api.backup.list().then(setBackups);
@@ -678,6 +682,24 @@ function DataCard({
     // A dismissed save dialog is not a failure — say nothing at all.
     if (result.canceled) return;
     setExportMsg(result.ok ? `Exported to ${result.path}` : `Export failed: ${result.reason}`);
+  }
+
+  async function handleRestore(file: string | null) {
+    setRestoreMsg(null);
+    setRestoring(true);
+    // Success relaunches the app, so there's nothing to show afterwards; only
+    // a failure (or a dismissed file dialog) comes back here.
+    const result = file
+      ? await window.api.backup.restore(file)
+      : await window.api.backup.restoreFromFile();
+    setRestoring(false);
+    setConfirmRestore(null);
+    if (result.canceled) return;
+    setRestoreMsg(
+      result.ok
+        ? `Restoring… the app will restart. The database it replaced was kept at ${result.path}`
+        : `Restore failed: ${result.reason}`
+    );
   }
 
   return (
@@ -715,12 +737,40 @@ function DataCard({
               <li key={b.path}>
                 <span className="settings-backup-name">{b.name}</span>
                 <span className="settings-backup-size">{formatBytes(b.size)}</span>
+                {confirmRestore === b.path ? (
+                  <span className="settings-backup-actions">
+                    <button type="button" disabled={restoring} onClick={() => void handleRestore(b.path)}>
+                      {restoring ? "Restoring…" : "Confirm restore"}
+                    </button>
+                    <button type="button" disabled={restoring} onClick={() => setConfirmRestore(null)}>
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <span className="settings-backup-actions">
+                    <button type="button" disabled={restoring} onClick={() => setConfirmRestore(b.path)}>
+                      Restore
+                    </button>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
         )}
 
+        {confirmRestore && (
+          <p className="settings-card-warning">
+            Restoring replaces everything in the app — notes nav, habits, finances, time entries and
+            settings, including API tokens — with the contents of this backup, then restarts. The
+            current database is kept first so this can be undone.
+          </p>
+        )}
+        {restoreMsg && <p className="settings-card-hint">{restoreMsg}</p>}
+
         <div className="settings-card-footer">
+          <button type="button" disabled={restoring} onClick={() => void handleRestore(null)}>
+            Restore from file…
+          </button>
           <button type="submit" disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
           </button>

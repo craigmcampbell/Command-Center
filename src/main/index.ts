@@ -97,7 +97,15 @@ import {
 import { getGitStatuses } from "./services/git";
 import { getNotificationHealth, showAlert } from "./services/notifications";
 import { destroyTray, initTray, updateTray } from "./services/tray";
-import { backupsDir, defaultExportName, exportDatabase, listBackups, runDailyBackup } from "./services/backup";
+import {
+  applyPendingRestore,
+  backupsDir,
+  defaultExportName,
+  exportDatabase,
+  listBackups,
+  runDailyBackup,
+  stageRestore,
+} from "./services/backup";
 import { capture } from "./services/capture";
 import { initProjects, listProjects, saveProject, removeProject, reorderProjects } from "./services/projects";
 import type { ProjectInput } from "../shared/types";
@@ -288,6 +296,8 @@ import type {
   StatsSettings,
 } from "../shared/types";
 
+// A restore staged by the previous run is applied before anything opens the file.
+applyPendingRestore();
 initDatabase();
 initLinks();
 initProjects();
@@ -739,6 +749,34 @@ ipcMain.handle("backup:export", async (): Promise<ExportResult> => {
   return written.ok ? { ok: true, path: result.filePath } : written;
 });
 ipcMain.handle("backup:list", () => listBackups());
+
+// Restore swaps the whole database, so it ends in a relaunch. The response is
+// sent first; the short delay lets it reach the renderer before the window goes.
+function relaunchAfterRestore(): void {
+  setTimeout(() => {
+    app.relaunch();
+    app.quit();
+  }, 400);
+}
+ipcMain.handle("backup:restore", async (_evt, file: string): Promise<ExportResult> => {
+  // Only a file the app itself listed — the renderer can't name an arbitrary path.
+  const known = listBackups().find((b) => b.path === file);
+  if (!known) return { ok: false, reason: "That backup no longer exists" };
+  const staged = await stageRestore(known.path);
+  if (staged.ok) relaunchAfterRestore();
+  return staged.ok ? { ok: true, path: staged.safetyCopy } : staged;
+});
+ipcMain.handle("backup:restoreFromFile", async (): Promise<ExportResult> => {
+  const picked = await dialog.showOpenDialog({
+    title: "Restore database from file",
+    properties: ["openFile"],
+    filters: [{ name: "SQLite database", extensions: ["db"] }],
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return { ok: false, canceled: true };
+  const staged = await stageRestore(picked.filePaths[0]);
+  if (staged.ok) relaunchAfterRestore();
+  return staged.ok ? { ok: true, path: staged.safetyCopy } : staged;
+});
 ipcMain.handle("backup:runNow", async (): Promise<ActionResult> => {
   const dest = path.join(backupsDir(), `manual-${Date.now()}.db`);
   fs.mkdirSync(backupsDir(), { recursive: true });

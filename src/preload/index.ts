@@ -293,6 +293,8 @@ const api: CommandCenterApi = {
     export: () => ipcRenderer.invoke("backup:export"),
     list: () => ipcRenderer.invoke("backup:list"),
     runNow: () => ipcRenderer.invoke("backup:runNow"),
+    restore: (file: string) => ipcRenderer.invoke("backup:restore", file),
+    restoreFromFile: () => ipcRenderer.invoke("backup:restoreFromFile"),
   },
 
   capture: {
