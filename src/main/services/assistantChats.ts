@@ -1,7 +1,13 @@
-// Persistence for the Assistant's chat history. One row per chat; the message
-// list is a JSON column rather than a row per message because a chat is only
-// ever read or replaced whole (resume loads all of it, a new turn rewrites it),
-// never queried by message.
+// Persistence for the Assistant's chat history. `assistant_chats` holds one row
+// of metadata per chat (title, pin, usage); `assistant_messages` holds one row
+// per message, in order. Rows rather than a JSON blob because compaction flags
+// individual messages (`archived`, `summary`) and later features hang data off
+// single messages. A chat is still only ever read or replaced whole, so a save
+// rewrites its rows in one transaction.
+//
+// The old `assistant_chats.messages` JSON column is kept, not dropped: boot
+// copies each chat that has no message rows yet into the new table and leaves
+// the original as an untouched backup. New chats write `'[]'` there.
 //
 // The system prompt is deliberately NOT stored: it embeds today's date and a
 // snapshot of the memory file, both stale by the time a chat is resumed, so
@@ -13,13 +19,12 @@
 // text), maintained on every save.
 
 import { getDatabase } from "./db";
-import type { ChatMessage } from "./assistantTranscript";
+import type { ChatMessage, ToolCall } from "./assistantTranscript";
 import type { AssistantChatSummary, AssistantUsage } from "../../shared/types";
 
 interface ChatRow {
   id: string;
   title: string;
-  messages: string;
   pinned: number;
   prompt_tokens: number;
   completion_tokens: number;
@@ -35,7 +40,57 @@ export interface StoredChat {
   usage: AssistantUsage;
 }
 
+interface MessageRow {
+  role: ChatMessage["role"];
+  content: string | null;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  archived: number;
+  summary: number;
+}
+
 const MAX_SEARCH_TEXT_CHARS = 100_000;
+
+function toRow(m: ChatMessage): MessageRow {
+  return {
+    role: m.role,
+    content: m.content,
+    tool_calls: m.role === "assistant" && m.tool_calls ? JSON.stringify(m.tool_calls) : null,
+    tool_call_id: m.role === "tool" ? m.tool_call_id : null,
+    archived: m.archived ? 1 : 0,
+    summary: m.role === "system" && m.summary ? 1 : 0,
+  };
+}
+
+// Throws on a malformed `tool_calls` payload; loadChat turns that into "no such
+// chat" rather than a half-readable one.
+function fromRow(row: MessageRow): ChatMessage {
+  const archived = row.archived === 1 ? { archived: true as const } : {};
+  switch (row.role) {
+    case "tool":
+      return { role: "tool", tool_call_id: row.tool_call_id ?? "", content: row.content ?? "", ...archived };
+    case "assistant": {
+      const calls: ToolCall[] | null = row.tool_calls ? JSON.parse(row.tool_calls) : null;
+      if (calls !== null && !Array.isArray(calls)) throw new Error("tool_calls is not a list");
+      return { role: "assistant", content: row.content, ...(calls ? { tool_calls: calls } : {}), ...archived };
+    }
+    case "system":
+      return { role: "system", content: row.content ?? "", ...(row.summary === 1 ? { summary: true } : {}), ...archived };
+    default:
+      return { role: "user", content: row.content ?? "", ...archived };
+  }
+}
+
+// Replaces a chat's messages. Callers wrap it in a transaction.
+function writeMessages(chatId: string, messages: ChatMessage[]): void {
+  const db = getDatabase();
+  db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(chatId);
+  const insert = db.prepare(
+    `INSERT INTO assistant_messages (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary)
+     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary)`
+  );
+  messages.forEach((m, seq) => insert.run({ chatId, seq, ...toRow(m) }));
+}
 
 // Only what a person would remember being said — never tool payloads.
 export function searchTextOf(messages: ChatMessage[]): string {
@@ -78,6 +133,37 @@ export function initAssistantChats(): void {
   // be confused or a free-looking $0.00 would hide real spend.
   addColumnIfMissing("assistant_chats", "cost_usd", "REAL");
   db.exec(`CREATE INDEX IF NOT EXISTS assistant_chats_updated ON assistant_chats (updated_at DESC)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
+    chat_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_calls TEXT,
+    tool_call_id TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    summary INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, seq)
+  ) WITHOUT ROWID`);
+
+  // One-time, idempotent: a chat with no message rows yet is copied over from
+  // its JSON column. A chat that has rows is never touched again, so this is
+  // safe on every boot.
+  const unmigrated = db
+    .prepare(
+      `SELECT id, messages FROM assistant_chats
+        WHERE messages != '[]'
+          AND NOT EXISTS (SELECT 1 FROM assistant_messages m WHERE m.chat_id = assistant_chats.id)`
+    )
+    .all() as { id: string; messages: string }[];
+  const migrate = db.transaction((id: string, messages: ChatMessage[]) => writeMessages(id, messages));
+  for (const row of unmigrated) {
+    try {
+      const parsed = JSON.parse(row.messages);
+      if (Array.isArray(parsed) && parsed.length > 0) migrate(row.id, parsed);
+    } catch {
+      // A corrupt legacy row stays unreadable, exactly as before.
+    }
+  }
 
   // Backfill search text for chats saved before it existed.
   const stale = db
@@ -105,14 +191,14 @@ export function saveChat(
 ): void {
   const now = Date.now();
   const turn = usage ?? { promptTokens: 0, completionTokens: 0, costUsd: null };
-  getDatabase()
+  const db = getDatabase();
+  const upsert = db
     .prepare(
       `INSERT INTO assistant_chats
          (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd, created_at, updated_at)
        VALUES
-         (@id, @title, @messages, @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now)
+         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now)
        ON CONFLICT(id) DO UPDATE SET
-         messages = excluded.messages,
          search_text = excluded.search_text,
          prompt_tokens = prompt_tokens + excluded.prompt_tokens,
          completion_tokens = completion_tokens + excluded.completion_tokens,
@@ -121,30 +207,39 @@ export function saveChat(
            ELSE COALESCE(cost_usd, 0) + excluded.cost_usd
          END,
          updated_at = excluded.updated_at`
-    )
-    .run({
+    );
+  db.transaction(() => {
+    upsert.run({
       id,
       title,
-      messages: JSON.stringify(messages),
       searchText: searchTextOf(messages),
       promptTokens: turn.promptTokens,
       completionTokens: turn.completionTokens,
       costUsd: turn.costUsd,
       now,
     });
+    writeMessages(id, messages);
+  })();
 }
 
 export function loadChat(id: string): StoredChat | null {
   const row = getDatabase()
     .prepare(
-      `SELECT id, title, messages, pinned, prompt_tokens, completion_tokens, cost_usd, updated_at
+      `SELECT id, title, pinned, prompt_tokens, completion_tokens, cost_usd, updated_at
          FROM assistant_chats WHERE id = ?`
     )
     .get(id) as ChatRow | undefined;
   if (!row) return null;
   try {
-    const messages = JSON.parse(row.messages);
-    if (!Array.isArray(messages)) return null;
+    const rows = getDatabase()
+      .prepare(
+        `SELECT role, content, tool_calls, tool_call_id, archived, summary
+           FROM assistant_messages WHERE chat_id = ? ORDER BY seq`
+      )
+      .all(id) as MessageRow[];
+    // A saved chat always has at least its opening question.
+    if (rows.length === 0) return null;
+    const messages = rows.map(fromRow);
     return {
       id: row.id,
       title: row.title,
@@ -240,5 +335,9 @@ export function setChatPinned(id: string, pinned: boolean): boolean {
 }
 
 export function deleteChat(id: string): boolean {
-  return getDatabase().prepare(`DELETE FROM assistant_chats WHERE id = ?`).run(id).changes > 0;
+  const db = getDatabase();
+  return db.transaction(() => {
+    db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(id);
+    return db.prepare(`DELETE FROM assistant_chats WHERE id = ?`).run(id).changes > 0;
+  })();
 }

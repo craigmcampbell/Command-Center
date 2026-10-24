@@ -5912,6 +5912,22 @@ body {
 /* Rendered markdown inside an assistant bubble (see lib/markdown.ts). The base
    bubble is pre-wrap for plain text; with real block elements that would also
    render the newlines between tags as blank lines, so it's reset here. */
+.assistant-summary {
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-muted, inherit);
+}
+.assistant-summary > summary {
+  cursor: pointer;
+}
+.assistant-summary > p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
 .assistant-bubble-md {
   white-space: normal;
   overflow-x: auto;

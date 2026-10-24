@@ -261,6 +261,7 @@ const api: CommandCenterApi = {
       rename: (id: string, title: string) =>
         ipcRenderer.invoke("assistant:chats:rename", id, title),
       pin: (id: string, pinned: boolean) => ipcRenderer.invoke("assistant:chats:pin", id, pinned),
+      compact: (id: string) => ipcRenderer.invoke("assistant:chats:compact", id),
     },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
     hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),

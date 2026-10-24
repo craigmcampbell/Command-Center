@@ -491,7 +491,7 @@ standing instructions, memory-file path and the hotkey are Settings → Assistan
 `assistant.ts` the loop and conversation state · `assistantClient.ts` one
 streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
 the approval rules · `assistantMemory.ts` the memory file · `assistantChats.ts`
-SQLite · `assistantTranscript.ts` pure helpers (message types, titles,
+SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTranscript.ts` pure helpers (message types, titles,
 `toTranscript`) · `assistantWindow.ts` the quick panel. Renderer:
 `hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
 (transcript + composer, shared) · `AssistantWidget.tsx` (the tab: history,
@@ -505,9 +505,12 @@ hotkey) — a drift there is silent.
   purpose: slugs churn, and it must support tool calling (OpenRouter's 400 for
   one that doesn't is passed through verbatim). A rejected key sets
   `needsSetup`, which makes the UI offer a button into Settings.
-- **Chats persist and resume.** One row per chat in `assistant_chats`; the
-  message list is a JSON column, since a chat is only ever read or replaced
-  whole. The renderer holds display text and an opaque `conversationId`; the
+- **Chats persist and resume.** One metadata row per chat in `assistant_chats`
+  and one row per message in `assistant_messages` (ordered by `seq`; a save
+  rewrites a chat's rows in one transaction, since it is only ever read or
+  replaced whole). The old `messages` JSON column is kept as an untouched
+  backup: boot copies any chat that has no message rows yet, and new chats
+  write `'[]'` there. The renderer holds display text and an opaque `conversationId`; the
   live `conversations` map is a cache — an unknown id is loaded from the
   database, which is also how a chat resumes after a restart. A chat is written
   only after a turn **succeeds**, so a failed first question leaves no row. A
@@ -529,6 +532,23 @@ hotkey) — a drift there is silent.
   is never overwritten by a later reply** (the upsert leaves `title`/`pinned`
   alone). Columns were added by additive migration — keep it
   that way.
+- **Compaction** (`assistantCompaction.ts`, pure) keeps long chats cheap
+  without deleting anything. Past `compactAtTokens` (estimated chars/4; default
+  30k, 0 = off, Settings → Assistant) a turn first summarizes everything before
+  the last 4 user turns on the main model, **marks** those messages `archived`
+  and inserts one `summary` system message at the cut. `toWire` is the single
+  function deciding what the model is sent: it drops archived rows, appends the
+  latest summary to the system prompt (still one system message), strips the
+  bookkeeping flags, and trims tool output over 2000 chars from turns older than
+  the recent window. The cut is always on a user message, so a `tool_calls`
+  message never loses its results. The transcript and search keep seeing the
+  full history, with a divider where the summary sits (`role: "summary"`;
+  summary text is not searchable). A failed summary never fails the turn — it
+  just goes ahead uncompacted. The summary is saved immediately, not with the
+  reply, and its cost is added to the chat like a title's. Regenerate never
+  compacts. The tab's **Compact** button does it on demand
+  (`assistant:chats:compact`); a reply that compacted carries `compacted: true`
+  so the renderer reloads its transcript.
 - **A turn is atomic.** History is only ever left in a state a provider accepts:
   an assistant message with `tool_calls` and **all** its `tool` results are
   pushed together after the tools finish; a failed turn restores a snapshot; a

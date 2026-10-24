@@ -29,7 +29,7 @@ export interface LiveTool {
 
 export interface ChatItem {
   id: number;
-  role: "user" | "assistant" | "error";
+  role: "user" | "assistant" | "error" | "summary";
   text: string;
   // Set while the reply is still arriving; ties streamed deltas and
   // confirmation cards to this bubble. The final reply clears it.
@@ -150,6 +150,29 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     };
   }, []);
 
+  // Loads a saved chat into view. Returns false if it no longer exists.
+  const openChat = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (busyRef.current) return false;
+      const chat = await window.api.assistant.chats.open(id);
+      if (!chat.ok) return false;
+      setConversation(id);
+      setTitle(chat.title);
+      setUsage(chat.usage);
+      setItems(
+        chat.items.map((item) => ({
+          id: nextId.current++,
+          role: item.role,
+          text: item.text,
+          toolCalls: item.toolCalls,
+          remembered: item.remembered,
+        }))
+      );
+      return true;
+    },
+    [setConversation]
+  );
+
   const finalItem = (id: number, reply: AssistantReply): ChatItem =>
     reply.ok
       ? {
@@ -175,8 +198,11 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
         onSavedRef.current?.();
       }
       end();
+      // Older messages were summarized first, so the divider (and the summary
+      // request's cost) only appear in a freshly loaded transcript.
+      if (reply.ok && reply.compacted && reply.conversationId) void openChat(reply.conversationId);
     },
-    [end, setConversation]
+    [end, openChat, setConversation]
   );
 
   const send = useCallback(
@@ -241,6 +267,24 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     void window.api.assistant.approve(approvalId, allow);
   }, []);
 
+  // Summarizes the older part of the open chat now. Failures show as an error
+  // line (the chat itself is untouched).
+  const compact = useCallback(async (): Promise<void> => {
+    const chatId = conversationIdRef.current;
+    if (!chatId || busyRef.current) return;
+    begin("compact");
+    const result = await window.api.assistant.chats.compact(chatId);
+    end();
+    if (result.ok) {
+      await openChat(chatId);
+    } else {
+      setItems((prev) => [
+        ...prev,
+        { id: nextId.current++, role: "error", text: result.reason ?? "Couldn't summarize this chat" },
+      ]);
+    }
+  }, [begin, end, openChat]);
+
   const reset = useCallback((): void => {
     if (busyRef.current) return;
     setConversation(null);
@@ -248,29 +292,6 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     setUsage(NO_USAGE);
     setItems([]);
   }, [setConversation]);
-
-  // Loads a saved chat into view. Returns false if it no longer exists.
-  const openChat = useCallback(
-    async (id: string): Promise<boolean> => {
-      if (busyRef.current) return false;
-      const chat = await window.api.assistant.chats.open(id);
-      if (!chat.ok) return false;
-      setConversation(id);
-      setTitle(chat.title);
-      setUsage(chat.usage);
-      setItems(
-        chat.items.map((item) => ({
-          id: nextId.current++,
-          role: item.role,
-          text: item.text,
-          toolCalls: item.toolCalls,
-          remembered: item.remembered,
-        }))
-      );
-      return true;
-    },
-    [setConversation]
-  );
 
   return {
     items,
@@ -281,6 +302,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     send,
     stop,
     regenerate,
+    compact,
     answerApproval,
     reset,
     openChat,

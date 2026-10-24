@@ -157,6 +157,17 @@ export default function AssistantWidget({
           {chat.items.some((i) => i.role !== "error" && i.text) && !chat.busy && (
             <SaveToNotes build={() => chatMarkdown(chat)} label="Save chat" />
           )}
+          {chat.conversationId && (
+            <button
+              type="button"
+              className="assistant-link"
+              onClick={() => void chat.compact()}
+              disabled={chat.busy}
+              title="Summarize the older part of this chat to cut what is re-sent each turn"
+            >
+              Compact
+            </button>
+          )}
           <button
             type="button"
             className="assistant-link"

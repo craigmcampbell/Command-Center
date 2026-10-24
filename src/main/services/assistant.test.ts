@@ -12,6 +12,7 @@ const settings = vi.hoisted(() => ({
     autoTitle?: boolean;
     titleModel?: string;
     askBeforeRemember?: boolean;
+    compactAtTokens?: number;
   },
 }));
 
@@ -142,6 +143,7 @@ import { completeTask } from "./todoist";
 import {
   answerApproval,
   askAssistant,
+  compactAssistantChat,
   deleteAssistantChat,
   listAssistantChats,
   onAssistantChatTitled,
@@ -1413,5 +1415,97 @@ describe("asking before saving to memory", () => {
     answerApproval(approvals[0].approvalId, false);
     await pending;
     expect(fs.existsSync(memoryFile)).toBe(false);
+  });
+});
+
+describe("compaction", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+    };
+    store.chats.clear();
+    store.failSave = false;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Six short turns in a chat that is saved but not yet over any threshold.
+  async function sixTurns(): Promise<string> {
+    scriptFetch(stop("ok"));
+    let id: string | null = null;
+    for (let i = 1; i <= 6; i++) {
+      const reply = await askAssistant(id, `question number ${i}`);
+      id = reply.conversationId;
+    }
+    return id!;
+  }
+
+  it("summarizes older turns before a turn that would pass the threshold", async () => {
+    settings.assistant.compactAtTokens = 0; // off while building the chat
+    const id = await sixTurns();
+    settings.assistant.compactAtTokens = 50;
+
+    const sent = scriptFetch(stop("A summary of questions one and two, long enough."), stop("the answer"));
+    const reply = await askAssistant(id, "question number 7");
+
+    expect(reply).toMatchObject({ ok: true, text: "the answer", compacted: true });
+    expect(sent).toHaveLength(2);
+    // Request 1: the summarizer — no tools, the old turns as data.
+    expect(sent[0].body.tools).toBeUndefined();
+    expect(sent[0].body.messages[1].content).toContain("question number 1");
+    // Request 2: the real turn sees the summary in the system prompt, not the old turns.
+    const wire = sent[1].body.messages;
+    expect(wire[0].content).toContain("A summary of questions one and two, long enough.");
+    expect(JSON.stringify(wire)).not.toContain("question number 1");
+    expect(JSON.stringify(wire)).toContain("question number 7");
+    expect(JSON.stringify(wire)).not.toContain("archived");
+
+    // Stored: nothing lost, the old part flagged, one summary in place.
+    const stored = store.chats.get(id)!.messages;
+    expect(stored.filter((m: any) => m.role === "user")).toHaveLength(7);
+    expect(stored.some((m: any) => m.archived && m.content === "question number 1")).toBe(true);
+    expect(stored.filter((m: any) => m.summary)).toHaveLength(1);
+    // And a reopened chat shows the full conversation with a divider.
+    const opened = openAssistantChat(id);
+    expect(opened.items.filter((i) => i.role === "user")).toHaveLength(7);
+    expect(opened.items.some((i) => i.role === "summary")).toBe(true);
+  });
+
+  it("goes ahead with the full history when the summary request fails", async () => {
+    settings.assistant.compactAtTokens = 0;
+    const id = await sixTurns();
+    settings.assistant.compactAtTokens = 50;
+
+    const sent = scriptFetch({ status: 500, json: { error: { message: "boom" } } }, stop("still answered"));
+    const reply = await askAssistant(id, "question number 7");
+    expect(reply).toMatchObject({ ok: true, text: "still answered" });
+    expect(reply.compacted).toBeUndefined();
+    expect(JSON.stringify(sent[sent.length - 1].body.messages)).toContain("question number 1");
+    expect(store.chats.get(id)!.messages.some((m: any) => m.archived || m.summary)).toBe(false);
+  });
+
+  it("leaves short chats alone, and respects 0 as off", async () => {
+    settings.assistant.compactAtTokens = 0;
+    const id = await sixTurns();
+    const sent = scriptFetch(stop("fine"));
+    expect(await askAssistant(id, "question number 7")).toMatchObject({ ok: true });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("compacts on demand, and says when there is nothing to summarize", async () => {
+    settings.assistant.compactAtTokens = 0;
+    const short = (await askAssistant(null, "hello")).conversationId;
+    scriptFetch(stop("unused"));
+    expect(await compactAssistantChat(short)).toMatchObject({ ok: false });
+
+    const id = await sixTurns();
+    scriptFetch(stop("An on-demand summary that is long enough."));
+    expect(await compactAssistantChat(id)).toEqual({ ok: true });
+    expect(store.chats.get(id)!.messages.filter((m: any) => m.summary)).toHaveLength(1);
+    expect(await compactAssistantChat("missing")).toMatchObject({ ok: false });
   });
 });

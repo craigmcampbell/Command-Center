@@ -208,6 +208,17 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
   const pending = Boolean(item.requestId);
   const approvals = item.approvals ?? [];
 
+  // Where older messages were folded into a summary. They are still above (and
+  // searchable); the model reads this in their place.
+  if (item.role === "summary") {
+    return (
+      <details className="assistant-summary">
+        <summary>Earlier messages were summarized to save space</summary>
+        <p>{item.text}</p>
+      </details>
+    );
+  }
+
   const liveTools = item.liveTools ?? [];
   const anyRunning = liveTools.some((t) => t.status === "running");
 
@@ -462,5 +473,10 @@ export function SaveToNotes({ build, label }: { build: () => string; label: stri
 // Used by the tab header: a whole conversation as one markdown block.
 export function chatMarkdown(chat: AssistantChatState): string {
   const firstQuestion = chat.items.find((i) => i.role === "user")?.text ?? null;
-  return chatToMarkdown(chat.title ?? firstQuestion, chat.items);
+  return chatToMarkdown(
+    chat.title ?? firstQuestion,
+    chat.items.filter(
+      (i): i is ChatItem & { role: "user" | "assistant" | "error" } => i.role !== "summary"
+    )
+  );
 }

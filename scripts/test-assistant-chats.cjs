@@ -37,7 +37,17 @@ const path = require('node:path');
     assert.deepEqual(api.listChats('kubernetes').map(c => c.id), ['legacy'], 'Backfilled search text finds what was said');
     assert.deepEqual(api.listChats('hiddenpayload'), [], 'Tool payloads are never searchable');
     assert.deepEqual(api.listChats('secretword'), [], 'Tool-call arguments are never searchable');
+    // The JSON column was copied into message rows, and is left as a backup.
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM assistant_messages WHERE chat_id = 'legacy'`).get().n, 4, 'Legacy messages were migrated to rows');
+    assert.equal(legacy.messages.length, 4);
+    assert.deepEqual(legacy.messages[1].tool_calls[0].function.name, 'docker_status', 'Tool calls survive the migration');
+    assert.equal(legacy.messages[1].content, null, 'A null assistant content stays null');
+    assert.notEqual(db.prepare(`SELECT messages FROM assistant_chats WHERE id = 'legacy'`).get().messages, '[]', 'The original JSON is kept as a backup');
+    db.prepare(`UPDATE assistant_messages SET content = 'EDITED' WHERE chat_id = 'legacy' AND seq = 0`).run();
+    api.initAssistantChats();
+    assert.equal(api.loadChat('legacy').messages[0].content, 'EDITED', 'Booting again never re-migrates a chat that already has rows');
     db.exec(`DELETE FROM assistant_chats`);
+    db.exec(`DELETE FROM assistant_messages`);
 
     assert.deepEqual(api.listChats(), []);
     assert.equal(api.loadChat('missing'), null);
@@ -47,6 +57,23 @@ const path = require('node:path');
     const a = api.loadChat('a');
     assert.deepEqual(a.messages, first, 'Tool-call messages round-trip exactly');
     assert.equal(a.title, 'First chat');
+
+    assert.equal(db.prepare(`SELECT messages FROM assistant_chats WHERE id = 'a'`).get().messages, '[]', 'New chats do not write the old JSON column');
+
+    // Compaction flags and the summary message round-trip, in order.
+    const compacted = [
+      { role: 'user', content: 'old question', archived: true },
+      { role: 'assistant', content: 'old answer', archived: true },
+      { role: 'system', content: 'The summary.', summary: true },
+      { role: 'user', content: 'new question' },
+    ];
+    api.saveChat('cmp', 'Compacted', compacted);
+    assert.deepEqual(api.loadChat('cmp').messages, compacted, 'archived and summary flags round-trip');
+    api.saveChat('cmp', 'Compacted', [...compacted.slice(0, 3), { role: 'user', content: 'again' }]);
+    assert.equal(api.loadChat('cmp').messages.length, 4, 'A save replaces the messages rather than appending');
+    assert.deepEqual(api.listChats('summary'), [], 'The summary is not searchable text');
+    api.deleteChat('cmp');
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM assistant_messages WHERE chat_id = 'cmp'`).get().n, 0, 'Deleting a chat deletes its message rows');
 
     // A later turn replaces the messages, ADDS usage, and leaves the title alone
     // (that is the user's to change) and created_at as it was.
@@ -136,7 +163,7 @@ const path = require('node:path');
     api.deleteChat('t-free');
 
     // A corrupt row reads as missing rather than breaking the list or the load.
-    db.prepare(`UPDATE assistant_chats SET messages = 'not json' WHERE id = 'b'`).run();
+    db.prepare(`INSERT INTO assistant_messages (chat_id, seq, role, content, tool_calls) VALUES ('b', 99, 'assistant', NULL, 'not json')`).run();
     assert.equal(api.loadChat('b'), null);
     assert.equal(api.listChats().length, 4, 'The list never parses message bodies');
 
@@ -144,6 +171,6 @@ const path = require('node:path');
     assert.equal(api.deleteChat('b'), false, 'Deleting twice reports nothing deleted');
     assert.equal(api.listChats().length, 3);
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

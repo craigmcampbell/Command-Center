@@ -35,6 +35,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AssistantApproval,
   AssistantChatResult,
+  AssistantCompactResult,
   AssistantChatSummary,
   AssistantReply,
   AssistantToolCall,
@@ -42,6 +43,17 @@ import type {
   AssistantUsage,
 } from "../../shared/types";
 import { complete } from "./assistantClient";
+import {
+  applyCompaction,
+  buildSummaryInput,
+  cleanSummary,
+  DEFAULT_COMPACT_AT_TOKENS,
+  estimateTokens,
+  planCompaction,
+  SUMMARY_MAX_TOKENS,
+  SUMMARY_SYSTEM,
+  toWire,
+} from "./assistantCompaction";
 import {
   addChatUsage,
   deleteChat,
@@ -277,6 +289,62 @@ export function deleteAssistantChat(id: string): { ok: boolean } {
   }
 }
 
+// ---- compaction ------------------------------------------------------------
+//
+// A long chat re-sends its whole history every turn. Past a size threshold the
+// older turns are summarized (see assistantCompaction.ts for how nothing is
+// actually deleted). Failing to summarize is never fatal: the turn just goes
+// ahead with the full history.
+
+const NO_USAGE: AssistantUsage = { promptTokens: 0, completionTokens: 0, costUsd: null };
+
+async function compactConversation(
+  id: string,
+  convo: Conversation,
+  apiKey: string,
+  model: string
+): Promise<AssistantCompactResult> {
+  const plan = planCompaction(convo.messages);
+  if (!plan) return { ok: false, reason: "There isn't enough older conversation to summarize yet" };
+  try {
+    const result = await complete({
+      apiKey,
+      model,
+      // No tools, no history beyond what is being condensed.
+      messages: [
+        { role: "system", content: SUMMARY_SYSTEM },
+        { role: "user", content: buildSummaryInput(convo.messages, plan) },
+      ],
+      onText: () => {},
+      maxTokens: SUMMARY_MAX_TOKENS,
+    });
+    // The request cost something whether or not the summary is usable.
+    if (result.usage) addChatUsage(id, result.usage);
+    if (!result.ok) return { ok: false, reason: result.reason ?? "The summary request failed" };
+    const summary = cleanSummary(result.message?.content ?? "");
+    if (!summary) return { ok: false, reason: "The model returned no usable summary" };
+    convo.messages.splice(0, convo.messages.length, ...applyCompaction(convo.messages, plan, summary));
+    // Saved now rather than with the next reply, so the paid-for summary
+    // survives a restart or a failed turn. A chat with no title has never been
+    // saved (its first turn hasn't succeeded), and nothing to compact yet anyway.
+    if (convo.title !== null) persist(id, convo, NO_USAGE);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "The summary request failed" };
+  }
+}
+
+// The "Compact" button: summarize now, whatever the size.
+export async function compactAssistantChat(id: string): Promise<AssistantCompactResult> {
+  const settings = getAssistantSettings();
+  const apiKey = settings.apiKey?.trim();
+  const model = settings.model?.trim();
+  if (!apiKey || !model) return { ok: false, reason: "The assistant isn't set up yet" };
+  const resolved = resolveConversation(id, { createIfMissing: false });
+  if (!resolved) return { ok: false, reason: "That chat no longer exists" };
+  return compactConversation(resolved.id, resolved.convo, apiKey, model);
+}
+
 // ---- AI-written titles -----------------------------------------------------
 //
 // A new chat is first titled with its opening question (instant, free, saved
@@ -391,6 +459,18 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
   convo.touched = Date.now();
   evictOldConversations();
 
+  // Summarize older turns first when this one would push the chat past the
+  // threshold. Before the snapshot, so a failed turn keeps the compaction (it is
+  // already saved). Not on regenerate: that replaces an answer, it doesn't grow.
+  let compacted = false;
+  const compactAt = Number.isFinite(settings.compactAtTokens)
+    ? (settings.compactAtTokens as number)
+    : DEFAULT_COMPACT_AT_TOKENS;
+  if (!regenerate && compactAt > 0) {
+    const size = estimateTokens(toWire(convo.messages)) + Math.ceil(text.length / 4);
+    if (size > compactAt) compacted = (await compactConversation(id, convo, apiKey, model)).ok;
+  }
+
   // Restored on any failure so history is never left half-written.
   const snapshot = convo.messages.slice();
   const rollback = (reason: string, needsSetup = false): AssistantReply => {
@@ -458,6 +538,7 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
       remembered,
       usage,
       ...(stopped ? { stopped: true } : {}),
+      ...(compacted ? { compacted: true } : {}),
     };
   };
 
@@ -481,7 +562,7 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
       const result = await complete({
         apiKey,
         model,
-        messages: convo.messages,
+        messages: toWire(convo.messages),
         tools: TOOLS,
         onText: emit,
         signal,

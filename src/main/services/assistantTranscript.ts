@@ -12,10 +12,15 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+// `archived` marks a message that compaction folded into a summary: it stays in
+// the stored history (the transcript and search still show it) but is never
+// sent to the model. `summary` marks the system message holding that summary.
+// Neither flag may reach the provider; assistantCompaction.ts's `toWire`
+// strips them.
 export type ChatMessage =
-  | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
-  | { role: "tool"; tool_call_id: string; content: string };
+  | { role: "system" | "user"; content: string; archived?: boolean; summary?: boolean }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean }
+  | { role: "tool"; tool_call_id: string; content: string; archived?: boolean };
 
 const MAX_FACT_CHARS = 500;
 const MAX_ARGS_CHARS = 160;
@@ -134,6 +139,11 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
   for (const m of messages) {
     if (m.role === "user") {
       items.push({ role: "user", text: m.content, toolCalls: [], remembered: [] });
+      current = null;
+      continue;
+    }
+    if (m.role === "system" && m.summary) {
+      items.push({ role: "summary", text: m.content, toolCalls: [], remembered: [] });
       current = null;
       continue;
     }

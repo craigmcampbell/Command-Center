@@ -123,6 +123,9 @@ export interface AssistantScalarConfig {
   // Global hotkey for the quick panel. Unset means the default combo; an empty
   // string means the user turned the hotkey off.
   quickHotkey?: string;
+  // Summarize the older part of a chat once it would exceed roughly this many
+  // tokens (estimated). Unset means the default; 0 turns automatic compaction off.
+  compactAtTokens?: number;
 }
 
 // Railway account and workspace tokens both use the Bearer header. The
@@ -229,6 +232,14 @@ export interface AssistantReply {
   toolCalls: AssistantToolCall[];
   // Facts the model saved to memory during this reply.
   remembered: string[];
+  // Older messages were summarized before this reply, so the on-screen
+  // transcript (which has a divider where they were) should be reloaded.
+  compacted?: boolean;
+}
+
+export interface AssistantCompactResult {
+  ok: boolean;
+  reason?: string;
 }
 
 // One row of the Assistant's chat history list.
@@ -250,7 +261,9 @@ export interface AssistantUsage {
 // One turn of a stored chat, rebuilt for display. An assistant item is the
 // whole reply to one user message (every model step, plus its tool chips).
 export interface AssistantTranscriptItem {
-  role: "user" | "assistant";
+  // "summary" is the divider compaction leaves where older messages were
+  // folded away; `text` is the summary the model now sees in their place.
+  role: "user" | "assistant" | "summary";
   text: string;
   toolCalls: AssistantToolCall[];
   remembered: string[];
@@ -1965,6 +1978,8 @@ export interface CommandCenterApi {
       remove: (id: string) => Promise<{ ok: boolean }>;
       rename: (id: string, title: string) => Promise<{ ok: boolean }>;
       pin: (id: string, pinned: boolean) => Promise<{ ok: boolean }>;
+      // Summarizes the older part of a chat now, regardless of its size.
+      compact: (id: string) => Promise<AssistantCompactResult>;
     };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
     hidePanel: () => Promise<void>;

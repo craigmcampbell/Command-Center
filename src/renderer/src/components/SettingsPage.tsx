@@ -1315,6 +1315,10 @@ function AssistantCard({
   // Unset means ask; only an explicit false relaxes it.
   const [askBeforeRemember, setAskBeforeRemember] = useState(value.askBeforeRemember !== false);
   const [memoryPath, setMemoryPath] = useState(value.memoryPath ?? "");
+  // Blank means the default; 0 turns automatic compaction off.
+  const [compactAt, setCompactAt] = useState(
+    value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)
+  );
   const [systemPrompt, setSystemPrompt] = useState(value.systemPrompt ?? "");
   const [hotkey, setHotkey] = useState(currentHotkey);
   const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
@@ -1326,6 +1330,7 @@ function AssistantCard({
     setTitleModel(value.titleModel ?? "");
     setAskBeforeRemember(value.askBeforeRemember !== false);
     setMemoryPath(value.memoryPath ?? "");
+    setCompactAt(value.compactAtTokens === undefined ? "" : String(value.compactAtTokens));
     setSystemPrompt(value.systemPrompt ?? "");
     setHotkey(value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
   }, [
@@ -1335,6 +1340,7 @@ function AssistantCard({
     value.titleModel,
     value.askBeforeRemember,
     value.memoryPath,
+    value.compactAtTokens,
     value.systemPrompt,
     value.quickHotkey,
   ]);
@@ -1349,6 +1355,7 @@ function AssistantCard({
     titleModel !== (value.titleModel ?? "") ||
     askBeforeRemember !== (value.askBeforeRemember !== false) ||
     memoryPath !== (value.memoryPath ?? "") ||
+    compactAt !== (value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)) ||
     systemPrompt !== (value.systemPrompt ?? "") ||
     hotkey !== currentHotkey;
   const hotkeyError = hotkey.trim() ? validateAccelerator(hotkey) : null;
@@ -1364,6 +1371,7 @@ function AssistantCard({
       titleModel: titleModel.trim() || undefined,
       askBeforeRemember,
       memoryPath: memoryPath.trim() || undefined,
+      compactAtTokens: /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : undefined,
       systemPrompt: systemPrompt.trim() || undefined,
       quickHotkey: hotkey.trim(),
     });
@@ -1442,6 +1450,22 @@ function AssistantCard({
           spellCheck={false}
         />
       </div>
+      <div className="settings-field-row">
+        <label>Compact at</label>
+        <input
+          className="settings-input"
+          inputMode="numeric"
+          value={compactAt}
+          onChange={(e) => setCompactAt(e.target.value)}
+          placeholder="30000 (estimated tokens; 0 = never)"
+          spellCheck={false}
+        />
+      </div>
+      <p className="settings-card-hint">
+        When a chat would grow past this, its older turns are summarized (one extra request on the
+        main model) and the model reads the summary instead. Nothing is deleted: the full chat stays
+        on screen and searchable. The Compact button in the tab does it on demand.
+      </p>
       <div className="settings-field-row settings-field-row-top">
         <label>Instructions</label>
         <textarea

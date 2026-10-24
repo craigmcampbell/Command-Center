@@ -125,6 +125,7 @@ import {
   onAssistantChatTitled,
   openAssistantChat,
   pinAssistantChat,
+  compactAssistantChat,
   regenerateAssistant,
   renameAssistantChat,
   saveAssistantMemory,
@@ -720,6 +721,10 @@ ipcMain.handle("assistant:chats:remove", (_evt, id: unknown) =>
 );
 ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
   renameAssistantChat(typeof id === "string" ? id : "", typeof title === "string" ? title : "")
+);
+// A summarize request costs money and isn't idempotent: plain handle, not readHandler.
+ipcMain.handle("assistant:chats:compact", (_evt, id: unknown) =>
+  compactAssistantChat(typeof id === "string" ? id : "")
 );
 ipcMain.handle("assistant:chats:pin", (_evt, id: unknown, pinned: unknown) =>
   pinAssistantChat(typeof id === "string" ? id : "", pinned === true)
