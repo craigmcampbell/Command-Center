@@ -76,6 +76,7 @@ import {
   saveChat,
   setChatPinned,
 } from "./assistantChats";
+import { outboundLinkWarning } from "./assistantLinks";
 import { localDate, readMemoryFile } from "./assistantMemory";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
 import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
@@ -410,6 +411,17 @@ export function deleteAssistantChat(id: string): { ok: boolean } {
   } catch {
     return { ok: false };
   }
+}
+
+// What `outboundLinkWarning` checks a clicked reply link against: the memory
+// file and everything this chat read. An unknown chat still gets the memory.
+export function assistantLinkWarning(href: string, conversationId: string | null): string | null {
+  const messages = resolveConversation(conversationId, { createIfMissing: false })?.convo.messages ?? [];
+  return outboundLinkWarning(href, {
+    memory: readMemoryFile(),
+    toolResults: messages.flatMap((m) => (m.role === "tool" ? [m.content] : [])),
+    userMessages: messages.flatMap((m) => (m.role === "user" ? [m.content] : [])),
+  });
 }
 
 // ---- compaction ------------------------------------------------------------
@@ -879,9 +891,10 @@ async function runTurn({
       if (calls.length > 0) {
         // Calls in one step run together, so a `remember` that arrives beside a
         // `search_notes` is judged as if the notes had already been read.
-        const untrustedSeen =
-          hasUntrustedContext(calledToolNames(convo.messages)) ||
-          hasUntrustedContext(calls.map((c) => c.function.name));
+        // web_search is judged only on earlier steps: the model emitted these
+        // calls together, before any of their results existed.
+        const untrustedBefore = hasUntrustedContext(calledToolNames(convo.messages));
+        const untrustedSeen = untrustedBefore || hasUntrustedContext(calls.map((c) => c.function.name));
         const askBeforeRemember = settings.askBeforeRemember !== false;
 
         // Two phases so that every change the model wants is shown in ONE card:
@@ -920,7 +933,7 @@ async function runTurn({
                     }),
                   }
                 : offered.has(name)
-                ? await prepareTool(name, call.function.arguments ?? "", { untrustedSeen, askBeforeRemember, knownUrls })
+                ? await prepareTool(name, call.function.arguments ?? "", { untrustedSeen, untrustedBefore, askBeforeRemember, knownUrls })
                 : {
                     // Defence in depth: the model was only shown the allowed
                     // tools, but a call to any other is refused here too.
