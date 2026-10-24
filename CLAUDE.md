@@ -424,6 +424,164 @@ All CodeMirror styling lives in `EditorView.theme()` next to the feature it
 belongs to, never in `styles.css` — which holds only the React chrome around
 the editor (`.md-toolbar`, `.md-conflict`, `.md-outline-*`, `.scratchpad-*`).
 
+## Assistant tab
+
+A chat harness: a tool-using agent loop over OpenRouter's OpenAI-compatible
+chat completions API (plain `fetch`, no SDK), with persistent chats, a memory
+file, and a quick panel summoned by a global hotkey. API key, model slug,
+standing instructions, memory-file path and the hotkey are Settings → Assistant
+(its own section, deliberately not buried in Integrations; the tab's header
+"Settings" link and any setup error open straight to it via `SettingsPage`'s
+`initialSection`).
+
+**Where things live** (all `src/main/services/`):
+`assistant.ts` the loop and conversation state · `assistantClient.ts` one
+streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
+the approval rules · `assistantMemory.ts` the memory file · `assistantChats.ts`
+SQLite · `assistantTranscript.ts` pure helpers (message types, titles,
+`toTranscript`) · `assistantWindow.ts` the quick panel. Renderer:
+`hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
+(transcript + composer, shared) · `AssistantWidget.tsx` (the tab: history,
+memory) · `AssistantQuickApp.tsx` (the panel). `src/shared/assistant.ts` holds
+constants both sides must agree on (`ASSISTANT_MUTATING_TOOLS`, the default
+hotkey) — a drift there is silent.
+
+- **The key is a regular OpenRouter inference key, not the Management key** the
+  OpenRouter usage widget uses — OpenRouter rejects management keys for
+  completions, so they're separate fields. The **model has no default** on
+  purpose: slugs churn, and it must support tool calling (OpenRouter's 400 for
+  one that doesn't is passed through verbatim). A rejected key sets
+  `needsSetup`, which makes the UI offer a button into Settings.
+- **Chats persist and resume.** One row per chat in `assistant_chats`; the
+  message list is a JSON column, since a chat is only ever read or replaced
+  whole. The renderer holds display text and an opaque `conversationId`; the
+  live `conversations` map is a cache — an unknown id is loaded from the
+  database, which is also how a chat resumes after a restart. A chat is written
+  only after a turn **succeeds**, so a failed first question leaves no row. A
+  failed save never fails the reply. **Titles are two-stage**: a new chat is saved
+  with its first question as a placeholder, then — in the background, after the
+  reply has already returned — upgraded to a 3–6 word model-written title (on by
+  default; Settings has an on/off toggle and a separate **Title model**, blank =
+  the main model, since a cheap one is plenty). The upgrade is one atomic
+  `UPDATE … WHERE title = <placeholder>` (`renameChatIfUnchanged`), so a rename
+  made while the request is in flight always wins; any failure, an empty or
+  unusable result (`cleanTitle` strips quotes/markdown/reasoning preambles), a
+  stopped first turn, or a resumed chat leaves things as they are. It sends only
+  the opening exchange (question ≤500 chars, answer ≤800), no tools — and the
+  client omits `tools` entirely rather than sending `[]`, which OpenAI-style APIs
+  reject. Its tokens and cost are added to the chat (`addChatUsage`, which does
+  not reorder the list) even when the title is thrown away; the tab header shows
+  that after the chat is next opened. The dashboard learns a title landed via
+  `app:command` → `assistantChatTitled` (no third push channel). A **rename or pin
+  is never overwritten by a later reply** (the upsert leaves `title`/`pinned`
+  alone). Columns were added by additive migration — keep it
+  that way.
+- **A turn is atomic.** History is only ever left in a state a provider accepts:
+  an assistant message with `tool_calls` and **all** its `tool` results are
+  pushed together after the tools finish; a failed turn restores a snapshot; a
+  stopped one is closed with an ordinary assistant message. Never push a
+  `tool_calls` message ahead of its results.
+- **The system prompt is never stored.** It carries today's date, a snapshot of
+  the memory file and the user's standing instructions, all stale by resume
+  time, so it is rebuilt on every (re)load and frozen within a running chat.
+- **The on-screen transcript is derived.** `toTranscript` rebuilds it from the
+  messages (one assistant item per user turn, all steps joined by a blank line,
+  chips from `tool_calls`, remembered facts from successful `remember` calls)
+  and must agree with what the live reply showed — `cleanFact` is shared for
+  that reason.
+- **Replies stream** over a second main→renderer channel, `assistant:delta`
+  (tagged with a renderer-chosen `requestId`, sent only to the asking window),
+  while `assistant:ask` is still pending; the resolved reply is authoritative
+  and replaces the streamed bubble. Tool-call fragments are assembled by
+  `index` and run only after the stream ends. A stream that ends with neither
+  `finish_reason` nor `[DONE]` is a failure, never a short answer. The timeout
+  is an **idle** timer re-armed per chunk (keep-alive comments count). OpenRouter
+  can report a failure as a **200 with an `error` body**, so `complete()` checks
+  the body, not just the status.
+- **Stop** aborts the request (`assistant:stop`, keyed by `requestId`); what had
+  streamed is kept, and a turn stopped before any text reads `(stopped)` (emitted
+  through the same path as real text so a reload matches the live bubble).
+- **Actions that change data wait for the user.** `complete_task`,
+  `reschedule_task`, `create_task` and `forget` return an approval from
+  `prepareTool`; the loop sends `assistant:approval` and awaits
+  `assistant:approve`. **The card is built from authoritative data, never from
+  the model's description**: tasks are looked up in Todoist by id and quoted by
+  their real title, `forget` quotes the exact lines it will delete (and removes
+  only those, by exact match). Silence (120s), Stop, or a closed window all mean
+  **no**. Google Calendar is read-only (`calendar.readonly`), so there is no
+  event-creation tool — adding one means re-authorising with a wider scope.
+- **Memory writes ask first.** `remember` shows an Allow/Deny card for **every**
+  save by default (Settings → Assistant → "Ask me before saving anything to
+  memory"; unset means on, only an explicit `false` relaxes it). Relaxed, it
+  still asks once **any** tool other than Docker/memory has been called in the
+  chat — tasks from collaborators, calendar invites, PR titles, note text and
+  payee names can all carry an injected instruction — and that floor is not
+  configurable. Judged per step, so a `remember` beside a `search_notes` in one
+  response is caught too. The prompt also tells the model tool results are data.
+- **Tool activity is visible.** Main pushes `assistant:tool` (start/end per call,
+  keyed by the provider's call id) so a running reply shows "Searching your
+  notes: query: sprint… 3s" instead of a bare "Thinking…"; the live line is
+  replaced by the finished reply. After a reply, "Show tool details (n)" opens a
+  log of each call — tool, a `key: value` summary of its arguments, and its result
+  (truncated to 1200 chars; an error shows its message) — with failed and
+  **declined** calls marked. The log is **derived, not stored**:
+  `describeToolCall` (assistantTranscript.ts) builds each entry from the call and
+  the result the model was given, and is used both when a reply is produced and
+  when a chat is reopened, so the two can't differ. Calls are recorded in the
+  order the model asked for them, not the order they finished. No durations are
+  kept (they'd need a second source of truth); a running call shows elapsed
+  seconds live only.
+- **Memory "Tidy with AI"** (`assistantTidy.ts`): asks the model to merge
+  duplicates and drop superseded facts and returns a **proposal — it never
+  writes**. The pane shows a line diff (`shared/memoryDiff.ts`), and the user
+  applies or discards it. Guardrails: the diff is against the text the model
+  actually saw (`current`), **Apply is refused if the file changed since** (a
+  `remember`, an Obsidian edit), Undo is refused if it changed after, and a
+  proposal is rejected if it is empty, cut off, or more than 10% longer than the
+  input (consolidation shouldn't embellish). The memory text is wrapped as data;
+  the call has no tools. It works on the *saved* file, so it is disabled while
+  the editor has unsaved edits.
+- **Regenerate** re-runs the last question and replaces the answer only on
+  success; it is refused (server-side, and hidden in the UI) when that reply
+  used a mutating tool, since repeating it would repeat the change.
+- **Cost** is tracked per chat (`usage: { include: true }`; tokens summed, cost
+  null — not 0 — when the provider reports none). It is an API-equivalent figure
+  from OpenRouter, shown in the tab header.
+- **History UI**: search (every term, in the title or in what was *said* —
+  `search_text` excludes tool payloads and call arguments, or "tasks" would match
+  everything), pinned-first, inline rename, delete with confirm. History controls
+  are disabled mid-reply so a delete can't race the end-of-turn save.
+- **Save to notes** goes through the existing `capture:submit` (same path as
+  Quick Capture, so the owning widget reloads instead of autosaving over it).
+  `formatCaptureEntry` indents continuation lines so a multi-line markdown
+  answer stays inside its list item.
+- **Quick panel** (`assistantWindow.ts`, `assistant-quick.html`): frameless
+  `type: "panel"` window like Quick Capture's — read `captureWindow.ts` before
+  touching the flags. Default hotkey `Cmd+Ctrl+Alt+Shift+A`; an empty setting
+  means off (unset means the default). It is built at boot only if the hotkey is
+  on. Blur hides but does **not** clear it: a reply can still be streaming or a
+  card waiting; each summon starts a fresh chat only when nothing is in flight.
+  "Open in dashboard" sends `openAssistantChat` over `app:command`.
+  Like `globalShortcut` anywhere on macOS, a combo another app owns isn't
+  detectable.
+- **Vault tools** (`search_notes`, `read_note`) use `notes.ts` (`searchNotes`),
+  which is bounded on file count, file size and wall-clock time and only walks
+  the same dot-folder-excluding index the wikilink resolver uses; it reports
+  `truncated` whenever it stopped with files unread.
+- **Assistant replies render as markdown** via `lib/markdown.ts`'s
+  `renderMarkdown`, injected with `dangerouslySetInnerHTML` — acceptable only
+  because that renderer escapes raw HTML and routes every link through
+  `safeUrl`. Don't swap in a renderer without that guarantee: this is model
+  output that may be echoing attacker-controlled text. User messages and errors
+  stay plain text.
+- `assistant:ask` and `assistant:regenerate` are plain `ipcMain.handle`,
+  deliberately **not** `readHandler`: asking isn't idempotent, so identical
+  calls must not be coalesced.
+- The Assistant tab is the one tab that **stays mounted while hidden**
+  (`App.tsx` toggles `display` instead of conditionally rendering), so the
+  transcript, conversation id and an in-flight stream survive a trip to another
+  tab. Mounting it at launch costs one local `assistant:chats:list` read.
+
 ## Managed Processes (Development tab)
 
 Settings-driven start/stop/log-tail for arbitrary long-running local processes
@@ -866,11 +1024,16 @@ no polling, no notifications, and a tray frozen at its last value. `quitting`
 distinguishes a real quit, which falls through to the existing `before-quit` →
 `stopAllProcesses()` → `app.exit()` path.
 
-**`app:command` is the only main→renderer channel** in the app; everything else
-is renderer→main `invoke`. It exists because the tray menu and notification
-clicks originate in main. The preload exposes a single subscription returning
-an unsubscribe — the raw `IpcRendererEvent` never crosses the bridge, since it
-carries `sender`.
+**`app:command` is the general main→renderer channel**; everything else is
+renderer→main `invoke`, with three deliberate exceptions, all the Assistant's
+and all tagged with a renderer-chosen `requestId` and sent only to the asking
+window: `assistant:delta` streams reply text, `assistant:approval` delivers a
+confirmation card, and `assistant:tool` reports a tool call starting or
+finishing — each while its `assistant:ask` invoke is still pending (see
+"Assistant tab"). `app:command` exists because the tray menu and notification clicks
+originate in main. Both are exposed as a subscription
+returning an unsubscribe — the raw `IpcRendererEvent` never crosses the bridge,
+since it carries `sender`.
 
 ### macOS gotchas (all found the hard way)
 

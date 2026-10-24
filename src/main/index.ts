@@ -108,6 +108,31 @@ import {
 import { getOpenRouterUsage } from "./services/openrouter";
 import { getOpenAIUsage } from "./services/openai";
 import { getFirecrawlUsage } from "./services/firecrawl";
+import {
+  answerApproval,
+  askAssistant,
+  deleteAssistantChat,
+  getAssistantMemory,
+  listAssistantChats,
+  onAssistantChatTitled,
+  openAssistantChat,
+  pinAssistantChat,
+  regenerateAssistant,
+  renameAssistantChat,
+  saveAssistantMemory,
+  stopAssistant,
+  type AskHooks,
+} from "./services/assistant";
+import { initAssistantChats } from "./services/assistantChats";
+import { proposeMemoryTidy } from "./services/assistantTidy";
+import {
+  assistantHotkeyStatus,
+  destroyAssistantWindow,
+  hideAssistantWindow,
+  initAssistantWindow,
+  registerAssistantHotkey,
+} from "./services/assistantWindow";
+import { DEFAULT_ASSISTANT_ACCELERATOR } from "../shared/assistant";
 import { getRailwayUsage } from "./services/railway";
 import { flushWindowState, restoreBounds, trackWindow } from "./services/windowState";
 import {
@@ -201,6 +226,8 @@ import {
   updateOpenAISettings,
   getFirecrawlSettings,
   updateFirecrawlSettings,
+  getAssistantSettings,
+  updateAssistantSettings,
   getRailwaySettings,
   updateRailwaySettings,
   listYouTubeChannelSettings,
@@ -256,6 +283,7 @@ import type {
   OpenAIScalarConfig,
   OpenAIPeriod,
   FirecrawlScalarConfig,
+  AssistantScalarConfig,
   RailwayScalarConfig,
   StatsSettings,
 } from "../shared/types";
@@ -264,6 +292,7 @@ initDatabase();
 initLinks();
 initProjects();
 initScratchpad();
+initAssistantChats();
 initHabits();
 initNotes();
 initSettings();
@@ -599,6 +628,86 @@ readHandler("openai:usage", (_evt, period: OpenAIPeriod) =>
   getOpenAIUsage(getOpenAISettings(), period)
 );
 
+// Assistant chat. Plain ipcMain.handle, not readHandler: asking is not an
+// idempotent read, so identical outstanding calls must never be coalesced.
+// Streams and confirmation cards go back to the asking window only, tagged
+// with the renderer's request id so a stale or concurrent reply (the dashboard
+// and the quick panel can both be mid-question) can't be mixed in.
+// Titles are written after a reply has finished, so there's no asking request to
+// carry them back; tell the dashboard, which owns the history list.
+onAssistantChatTitled((chatId) => sendCommand({ type: "assistantChatTitled", chatId }));
+
+function assistantHooks(sender: Electron.WebContents, requestId: unknown): AskHooks {
+  const id = typeof requestId === "string" ? requestId : null;
+  const send = (channel: string, payload: unknown): void => {
+    if (id && !sender.isDestroyed()) sender.send(channel, payload);
+  };
+  return {
+    onText: (text) => send("assistant:delta", { requestId: id, text }),
+    onApproval: (approval) => send("assistant:approval", approval),
+    onTool: (event) => send("assistant:tool", event),
+  };
+}
+
+ipcMain.handle(
+  "assistant:ask",
+  (evt, conversationId: unknown, message: unknown, requestId: unknown) =>
+    askAssistant(
+      typeof conversationId === "string" ? conversationId : null,
+      typeof message === "string" ? message : "",
+      assistantHooks(evt.sender, requestId),
+      typeof requestId === "string" ? requestId : undefined
+    )
+);
+ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId: unknown) =>
+  regenerateAssistant(
+    typeof conversationId === "string" ? conversationId : "",
+    assistantHooks(evt.sender, requestId),
+    typeof requestId === "string" ? requestId : undefined
+  )
+);
+ipcMain.handle("assistant:stop", (_evt, requestId: unknown) => {
+  if (typeof requestId === "string") stopAssistant(requestId);
+});
+ipcMain.handle("assistant:approve", (_evt, approvalId: unknown, allow: unknown) => {
+  if (typeof approvalId === "string") answerApproval(approvalId, allow === true);
+});
+ipcMain.handle("assistant:chats:list", (_evt, query: unknown) =>
+  listAssistantChats(typeof query === "string" ? query : undefined)
+);
+ipcMain.handle("assistant:chats:open", (_evt, id: unknown) =>
+  openAssistantChat(typeof id === "string" ? id : "")
+);
+ipcMain.handle("assistant:chats:remove", (_evt, id: unknown) =>
+  deleteAssistantChat(typeof id === "string" ? id : "")
+);
+ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
+  renameAssistantChat(typeof id === "string" ? id : "", typeof title === "string" ? title : "")
+);
+ipcMain.handle("assistant:chats:pin", (_evt, id: unknown, pinned: unknown) =>
+  pinAssistantChat(typeof id === "string" ? id : "", pinned === true)
+);
+// Proposes a tidier memory file; writes nothing (the renderer shows a diff and
+// the user decides, via the ordinary memory:save).
+ipcMain.handle("assistant:memory:tidy", () => proposeMemoryTidy());
+ipcMain.handle("assistant:hotkeyStatus", () => assistantHotkeyStatus());
+ipcMain.handle("assistant:hidePanel", () => hideAssistantWindow());
+// The quick panel hands its chat to the dashboard: hide it, bring the main
+// window forward (it may be hidden to the tray), and tell it what to show.
+ipcMain.handle("assistant:openInDashboard", (_evt, chatId: unknown, openSettings: unknown) => {
+  hideAssistantWindow();
+  showMainWindow();
+  sendCommand({
+    type: "openAssistantChat",
+    chatId: typeof chatId === "string" ? chatId : null,
+    openSettings: openSettings === true,
+  });
+});
+ipcMain.handle("assistant:memory:get", () => getAssistantMemory());
+ipcMain.handle("assistant:memory:save", (_evt, content: unknown) =>
+  saveAssistantMemory(typeof content === "string" ? content : "")
+);
+
 // Firecrawl: remaining credits + plan allotment + billing period.
 readHandler("firecrawl:usage", () => getFirecrawlUsage(getFirecrawlSettings()));
 
@@ -897,6 +1006,13 @@ ipcMain.handle("settings:openai:update", (_evt, values: OpenAIScalarConfig) =>
 ipcMain.handle("settings:firecrawl:update", (_evt, values: FirecrawlScalarConfig) =>
   updateFirecrawlSettings(values)
 );
+// Re-register immediately so a changed hotkey takes effect without a restart
+// and Settings can report right away whether it was claimable.
+ipcMain.handle("settings:assistant:update", (_evt, values: AssistantScalarConfig) => {
+  const saved = updateAssistantSettings(values);
+  registerAssistantHotkey(saved.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
+  return saved;
+});
 ipcMain.handle("settings:railway:update", (_evt, values: RailwayScalarConfig) =>
   updateRailwaySettings(values)
 );
@@ -974,6 +1090,11 @@ app.whenReady().then(() => {
   initCaptureWindow();
   registerCaptureHotkey(getCaptureSettings().accelerator ?? DEFAULT_CAPTURE_ACCELERATOR);
 
+  // Only build the quick panel's window up front if its hotkey is on.
+  const assistantHotkey = getAssistantSettings().quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR;
+  if (assistantHotkey) initAssistantWindow();
+  registerAssistantHotkey(assistantHotkey);
+
   initTray({
     onShow: showMainWindow,
     onRefresh: () => sendCommand({ type: "refreshAll" }),
@@ -1012,5 +1133,6 @@ app.on("before-quit", (event) => {
   // Also unregisters the global shortcut — leaving it claimed after quit
   // would make the hotkey dead until the next launch.
   destroyCaptureWindow();
+  destroyAssistantWindow();
   stopAllProcesses().finally(() => app.exit());
 });

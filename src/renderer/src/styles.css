@@ -289,6 +289,11 @@ body {
   grid-template-areas: "scratchpad";
 }
 
+.grid-assistant {
+  grid-template-columns: 1fr;
+  grid-template-areas: "assistant";
+}
+
 .grid-habits {
   grid-template-columns: 1fr;
   grid-template-areas: "habits";
@@ -5680,4 +5685,626 @@ body {
   --project-button-bg: #4b252c;
   --project-button-border: #a44c58;
   --project-button-hover: #ffe0e0;
+}
+
+
+/* ---- Assistant tab ---- */
+.grid-assistant .panel-body {
+  max-height: calc(100vh - 260px);
+  min-height: calc(100vh - 260px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.assistant-header-actions {
+  display: flex;
+  gap: 14px;
+}
+.assistant-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.assistant-link:hover:not(:disabled) {
+  color: var(--ink);
+}
+.assistant-link:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.assistant-layout {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.assistant-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+}
+.assistant-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 4px;
+}
+.assistant-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 78%;
+}
+.assistant-msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.assistant-bubble {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.55;
+  padding: 9px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-edge-soft);
+  background: rgba(255, 255, 255, 0.025);
+}
+.assistant-msg-user .assistant-bubble {
+  background: var(--accent-glow);
+  border-color: var(--accent-glow-strong);
+}
+.assistant-msg-error .assistant-bubble {
+  color: var(--alert);
+  border-color: var(--alert);
+  background: transparent;
+}
+.assistant-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.assistant-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.assistant-chip-memory {
+  color: var(--live);
+  border-color: var(--live);
+}
+.assistant-chip-bad {
+  color: var(--alert);
+  border-color: var(--alert);
+}
+.assistant-thinking {
+  font-style: italic;
+}
+.assistant-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.assistant-input,
+.assistant-memory-text {
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  padding: 9px 12px;
+  resize: none;
+}
+.assistant-input {
+  flex: 1;
+}
+.assistant-input:focus,
+.assistant-memory-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.assistant-memory {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  border-left: 1px solid var(--panel-edge-soft);
+  padding-left: 16px;
+}
+.assistant-memory h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.assistant-memory-text {
+  flex: 1;
+  min-height: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.assistant-memory-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.assistant-memory-path {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-memory-error {
+  color: var(--alert);
+  font-size: 12px;
+}
+.assistant-setup-button {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+/* Rendered markdown inside an assistant bubble (see lib/markdown.ts). The base
+   bubble is pre-wrap for plain text; with real block elements that would also
+   render the newlines between tags as blank lines, so it's reset here. */
+.assistant-bubble-md {
+  white-space: normal;
+  overflow-x: auto;
+}
+.assistant-bubble-md > :first-child {
+  margin-top: 0;
+}
+.assistant-bubble-md > :last-child {
+  margin-bottom: 0;
+}
+.assistant-bubble-md p,
+.assistant-bubble-md li {
+  font-size: 13.5px;
+}
+
+/* Chat history pane (left of the transcript). */
+.assistant-history {
+  width: 230px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--panel-edge-soft);
+  padding-right: 12px;
+}
+.assistant-chat-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.assistant-chat {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.assistant-chat:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.assistant-chat.active {
+  background: var(--accent-glow);
+  border-color: var(--accent-glow-strong);
+}
+.assistant-chat-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.assistant-chat-open:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.assistant-chat-title {
+  width: 100%;
+  font-size: 12.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-chat-when {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+/* Per-row actions (pin, rename, delete) appear on hover or keyboard focus. */
+.assistant-chat-actions {
+  display: flex;
+  align-items: center;
+  opacity: 0;
+}
+.assistant-chat:hover .assistant-chat-actions,
+.assistant-chat:focus-within .assistant-chat-actions {
+  opacity: 1;
+}
+.assistant-chat-actions button {
+  background: none;
+  border: none;
+  padding: 0 6px;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.assistant-chat-actions button:hover:not(:disabled) {
+  color: var(--ink);
+}
+.assistant-chat-actions button[aria-pressed="true"] {
+  color: var(--accent);
+}
+.assistant-chat-actions .assistant-chat-delete:hover:not(:disabled) {
+  color: var(--alert);
+}
+.assistant-chat-pin {
+  color: var(--accent);
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.assistant-history-search,
+.assistant-chat-rename {
+  width: 100%;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+.assistant-history-search {
+  margin-bottom: 8px;
+}
+.assistant-history-search:focus,
+.assistant-chat-rename:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.assistant-chat-rename {
+  margin: 3px 4px;
+  width: calc(100% - 8px);
+}
+.assistant-chat-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--alert);
+}
+
+/* Stop replaces Send while a reply is in flight. */
+.assistant-stop {
+  border-color: var(--alert);
+  color: var(--alert);
+}
+.assistant-usage {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Copy / Regenerate / Save under a finished reply. */
+.assistant-reply-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  opacity: 0.55;
+}
+.assistant-msg:hover .assistant-reply-actions,
+.assistant-reply-actions:focus-within {
+  opacity: 1;
+}
+.assistant-reply-actions .assistant-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.assistant-save-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.assistant-save-status {
+  font-size: 12px;
+}
+
+/* A write the assistant wants to make, waiting on the user. */
+.assistant-approval {
+  border: 1px solid var(--pending);
+  background: var(--pending-glow);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.assistant-approval-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pending);
+  margin-bottom: 2px;
+}
+.assistant-approval-actions {
+  display: flex;
+  gap: 8px;
+}
+.assistant-approval-deny {
+  background: transparent;
+}
+
+.settings-field-row-top {
+  align-items: flex-start;
+}
+.settings-textarea {
+  resize: vertical;
+  min-height: 64px;
+  font-family: var(--sans);
+  line-height: 1.45;
+}
+.settings-subhead {
+  margin-top: 18px;
+}
+
+/* ---- Quick Assistant panel (assistant-quick.html) ---- */
+.assistant-quick-body {
+  background: transparent;
+  overflow: hidden;
+  padding: 0;
+  min-height: 0;
+}
+.assistant-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+/* Draggable by its header only; everything interactive opts back out. */
+.assistant-quick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  -webkit-app-region: drag;
+  padding-bottom: 2px;
+}
+.assistant-quick-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.assistant-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.assistant-quick button,
+.assistant-quick textarea,
+.assistant-quick .assistant-log {
+  -webkit-app-region: no-drag;
+}
+.assistant-quick .assistant-main {
+  flex: 1;
+  min-height: 0;
+}
+.assistant-quick .assistant-msg {
+  max-width: 100%;
+}
+
+/* ---- Live tool activity (while a reply is still arriving) ---- */
+.assistant-live-tools {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.assistant-live-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+.assistant-live-done {
+  color: var(--live);
+}
+.assistant-live-failed,
+.assistant-live-declined {
+  color: var(--alert);
+}
+.assistant-live-args {
+  font-family: var(--mono);
+  font-size: 11px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--panel-edge);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: assistant-spin 0.8s linear infinite;
+}
+@keyframes assistant-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* ---- Tool log (what was called, with what, and what came back) ---- */
+.assistant-tool-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-tool-log-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 2px solid var(--panel-edge);
+  padding-left: 12px;
+}
+.assistant-tool-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.assistant-tool-entry-name {
+  color: var(--ink);
+}
+.assistant-tool-entry-head code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.assistant-tool-entry-state {
+  color: var(--alert);
+  font-size: 11.5px;
+}
+.assistant-tool-entry-args {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.assistant-tool-entry-result {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.assistant-tool-entry-result summary {
+  cursor: pointer;
+  color: var(--ink-dim);
+}
+.assistant-tool-entry-result pre {
+  margin-top: 4px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ground);
+  border: 1px solid var(--panel-edge-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.assistant-tool-entry-bad .assistant-tool-entry-head {
+  color: var(--alert);
+}
+
+/* ---- Memory tidy ---- */
+.assistant-memory-tools {
+  display: flex;
+  align-items: center;
+}
+.assistant-tidy-note {
+  font-size: 12px;
+}
+.assistant-tidy-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.assistant-tidy-summary {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.assistant-tidy-lines {
+  list-style: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.assistant-tidy-removed {
+  background: rgba(209, 121, 95, 0.1);
+  border: 1px solid rgba(209, 121, 95, 0.35);
+  color: var(--alert);
+}
+.assistant-tidy-added {
+  background: rgba(95, 184, 166, 0.1);
+  border: 1px solid rgba(95, 184, 166, 0.35);
+  color: var(--live);
+}
+.assistant-tidy-usage {
+  font-size: 11px;
+}
+.assistant-tidy-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* A flex column stretches its children, which centred the toggle's text. */
+.assistant-tool-log > .assistant-link {
+  align-self: flex-start;
+}
+.assistant-memory-tools .assistant-link {
+  color: var(--accent);
+}
+.assistant-memory-tools .assistant-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.assistant-memory-tools .assistant-link:disabled {
+  color: var(--ink-dim);
 }

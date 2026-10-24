@@ -124,6 +124,15 @@ export function IconTrash({ size = 13, className }: IconProps) {
   );
 }
 
+export function IconPin({ size = 13, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>
+      <path d="M9 4h6l-1 6 3 3H7l3-3-1-6Z" />
+      <path d="M12 13v7" />
+    </svg>
+  );
+}
+
 export function IconPencil({ size = 13, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} {...base}>

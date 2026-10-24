@@ -38,6 +38,7 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantScalarConfig,
   RailwayScalarConfig,
   ProcessConfig,
   SubredditConfig,
@@ -45,6 +46,7 @@ import type {
   YnabScalarConfig,
   YouTubeChannelConfig,
 } from "../../../shared/types";
+import { DEFAULT_ASSISTANT_ACCELERATOR } from "../../../shared/assistant";
 import { validateAccelerator } from "../../../shared/accelerator";
 import { normalizeSubreddit } from "../../../shared/subreddit";
 import { parseChannelInput } from "../../../shared/youtubeChannel";
@@ -70,6 +72,7 @@ type SectionId =
   | "general"
   | "grimoire"
   | "integrations"
+  | "assistant"
   | "vaults"
   | "githubRepos"
   | "processes"
@@ -80,6 +83,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "General" },
   { id: "grimoire", label: "Grimoire" },
   { id: "integrations", label: "Integrations" },
+  { id: "assistant", label: "Assistant" },
   { id: "vaults", label: "Vaults" },
   { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
@@ -89,6 +93,9 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 
 interface SettingsPageProps {
   open: boolean;
+  // Which section to land on when opened; the gear icon passes nothing and
+  // gets General, the Assistant tab's "Settings" link passes "assistant".
+  initialSection?: SectionId;
   onClose: () => void;
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
@@ -1237,6 +1244,200 @@ function FirecrawlCard({
   );
 }
 
+function AssistantCard({
+  value,
+  onSaved,
+}: {
+  value: AssistantScalarConfig;
+  onSaved: (v: AssistantScalarConfig) => void;
+}) {
+  // Unset means "the default combo"; an explicit empty string means "off".
+  const currentHotkey = value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR;
+  const [apiKey, setApiKey] = useState(value.apiKey ?? "");
+  const [model, setModel] = useState(value.model ?? "");
+  // Unset means on; only an explicit false turns AI titles off.
+  const [autoTitle, setAutoTitle] = useState(value.autoTitle !== false);
+  const [titleModel, setTitleModel] = useState(value.titleModel ?? "");
+  // Unset means ask; only an explicit false relaxes it.
+  const [askBeforeRemember, setAskBeforeRemember] = useState(value.askBeforeRemember !== false);
+  const [memoryPath, setMemoryPath] = useState(value.memoryPath ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(value.systemPrompt ?? "");
+  const [hotkey, setHotkey] = useState(currentHotkey);
+  const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setApiKey(value.apiKey ?? "");
+    setModel(value.model ?? "");
+    setAutoTitle(value.autoTitle !== false);
+    setTitleModel(value.titleModel ?? "");
+    setAskBeforeRemember(value.askBeforeRemember !== false);
+    setMemoryPath(value.memoryPath ?? "");
+    setSystemPrompt(value.systemPrompt ?? "");
+    setHotkey(value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
+  }, [
+    value.apiKey,
+    value.model,
+    value.autoTitle,
+    value.titleModel,
+    value.askBeforeRemember,
+    value.memoryPath,
+    value.systemPrompt,
+    value.quickHotkey,
+  ]);
+  useEffect(() => {
+    void window.api.assistant.hotkeyStatus().then(setStatus);
+  }, []);
+
+  const dirty =
+    apiKey !== (value.apiKey ?? "") ||
+    model !== (value.model ?? "") ||
+    autoTitle !== (value.autoTitle !== false) ||
+    titleModel !== (value.titleModel ?? "") ||
+    askBeforeRemember !== (value.askBeforeRemember !== false) ||
+    memoryPath !== (value.memoryPath ?? "") ||
+    systemPrompt !== (value.systemPrompt ?? "") ||
+    hotkey !== currentHotkey;
+  const hotkeyError = hotkey.trim() ? validateAccelerator(hotkey) : null;
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    if (hotkeyError) return;
+    setSaving(true);
+    const result = await window.api.settings.assistant.update({
+      apiKey: apiKey || undefined,
+      model: model.trim() || undefined,
+      autoTitle,
+      titleModel: titleModel.trim() || undefined,
+      askBeforeRemember,
+      memoryPath: memoryPath.trim() || undefined,
+      systemPrompt: systemPrompt.trim() || undefined,
+      quickHotkey: hotkey.trim(),
+    });
+    setStatus(await window.api.assistant.hotkeyStatus());
+    setSaving(false);
+    onSaved(result);
+  }
+
+  return (
+    <form className="settings-card" onSubmit={handleSave}>
+      <h3>Assistant</h3>
+      <p className="settings-card-hint">
+        The Assistant tab's chat runs on OpenRouter. It needs a <strong>regular API key</strong>{" "}
+        (create one under Keys on openrouter.ai) — the Management key in Integrations → OpenRouter
+        is rejected for chat. The model is an OpenRouter slug that supports tool calling, such as
+        anthropic/claude-sonnet-4.5. Memory file is an absolute path — point it into a vault to edit
+        it in Obsidian; blank keeps it in the app's data folder. Keep secrets out of it.
+      </p>
+      <div className="settings-field-row">
+        <label>API key</label>
+        <SecretField value={apiKey} onChange={setApiKey} placeholder="sk-or-…" />
+      </div>
+      <div className="settings-field-row">
+        <label>Model</label>
+        <input
+          className="settings-input"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="provider/model-name"
+          spellCheck={false}
+        />
+      </div>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={autoTitle}
+          onChange={(e) => setAutoTitle(e.target.checked)}
+        />
+        Write a short title for each new chat after its first reply
+      </label>
+      <div className="settings-field-row">
+        <label>Title model</label>
+        <input
+          className="settings-input"
+          value={titleModel}
+          onChange={(e) => setTitleModel(e.target.value)}
+          placeholder="(same as Model)"
+          spellCheck={false}
+          disabled={!autoTitle}
+        />
+      </div>
+      <p className="settings-card-hint">
+        Titles are a second, tiny request per new chat, billed to the model above. A cheap, fast
+        model is plenty. Until the title arrives (and if it fails), a chat is named after your
+        first question.
+      </p>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={askBeforeRemember}
+          onChange={(e) => setAskBeforeRemember(e.target.checked)}
+        />
+        Ask me before saving anything to memory
+      </label>
+      <p className="settings-card-hint">
+        Turn this off and the assistant saves what you ask it to remember straight away — except
+        after it has read tasks, calendar, notes or other third-party text, when it always asks.
+      </p>
+      <div className="settings-field-row">
+        <label>Memory file</label>
+        <input
+          className="settings-input"
+          value={memoryPath}
+          onChange={(e) => setMemoryPath(e.target.value)}
+          placeholder="(app data folder)/assistant-memory.md"
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-field-row settings-field-row-top">
+        <label>Instructions</label>
+        <textarea
+          className="settings-input settings-textarea"
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+          placeholder="Standing instructions added to every chat, e.g. “Be terse. Use metric units.”"
+          rows={3}
+          maxLength={4000}
+        />
+      </div>
+
+      <h3 className="settings-subhead">Quick panel</h3>
+      <p className="settings-card-hint">
+        A global hotkey that opens a small ask-anything panel from any app. Clear the field to turn
+        it off. Uses Electron accelerator syntax, e.g. <code>Cmd+Ctrl+Alt+Shift+A</code>.
+      </p>
+      {status && !status.registered && status.accelerator && (
+        <p className="settings-card-warning">
+          Couldn’t register <code>{status.accelerator}</code>. Pick a different combination.
+        </p>
+      )}
+      <div className="settings-field-row">
+        <label>Hotkey</label>
+        <input
+          className="settings-input"
+          value={hotkey}
+          onChange={(e) => setHotkey(e.target.value)}
+          placeholder="(off)"
+          spellCheck={false}
+        />
+      </div>
+      {hotkeyError && <p className="settings-field-error">{hotkeyError}</p>}
+      {/* macOS gives no usable signal here: globalShortcut.register() returns
+          true even for a combo another app already owns, so promising conflict
+          detection would be a lie. Say what to do instead. */}
+      <p className="settings-card-hint">
+        If the hotkey does nothing, another app has likely claimed it — macOS gives no way to detect
+        that. Try a different combination.
+      </p>
+
+      <div className="settings-card-footer">
+        <button type="submit" disabled={!dirty || saving || !!hotkeyError}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function RailwayCard({
   value,
   onSaved,
@@ -2365,6 +2566,7 @@ function ProcessesSection({
 
 export default function SettingsPage({
   open,
+  initialSection,
   onClose,
   onProcessConfigsChange,
   onAppRefreshMinutesChange,
@@ -2382,14 +2584,14 @@ export default function SettingsPage({
   onFirecrawlRefreshSecondsChange,
   onRailwayRefreshSecondsChange,
 }: SettingsPageProps) {
-  const [section, setSection] = useState<SectionId>("general");
+  const [section, setSection] = useState<SectionId>(initialSection ?? "general");
   const [data, setData] = useState<AppConfig | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setSection("general");
+    setSection(initialSection ?? "general");
     window.api.settings.getAll().then(setData);
-  }, [open]);
+  }, [open, initialSection]);
 
   useEffect(() => {
     if (!open) return;
@@ -2564,6 +2766,13 @@ export default function SettingsPage({
                     }}
                   />
                 </>
+              )}
+
+              {section === "assistant" && (
+                <AssistantCard
+                  value={data.assistant ?? {}}
+                  onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
+                />
               )}
 
               {section === "vaults" && (

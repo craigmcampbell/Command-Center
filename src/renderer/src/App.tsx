@@ -80,6 +80,7 @@ import GitHubReleasesWidget from "./components/GitHubReleasesWidget";
 import YouTubeWidget from "./components/YouTubeWidget";
 import RedditWidget from "./components/RedditWidget";
 import ScratchpadWidget from "./components/ScratchpadWidget";
+import AssistantWidget from "./components/AssistantWidget";
 import HabitsWidget from "./components/HabitsWidget";
 import NotesWidget from "./components/NotesWidget";
 import TabBar from "./components/TabBar";
@@ -102,7 +103,8 @@ type TabId =
   | "finances"
   | "ai"
   | "stats"
-  | "social";
+  | "social"
+  | "assistant";
 
 // The AI tab's own sub-navigation (Claude / Firecrawl / OpenRouter / OpenAI). Not
 // DB-backed like the top-level tabs — just local UI state, same as
@@ -132,6 +134,7 @@ const DEFAULT_TABS: TabConfig[] = [
   // existing install's DB actually holds. Drag-to-reorder handles placement.
   { id: "social", label: "Social", sortOrder: 9 },
   { id: "projects", label: "Projects", sortOrder: 10 },
+  { id: "assistant", label: "Assistant", sortOrder: 11 },
 ];
 
 const DEFAULT_REFRESH_MINUTES = 10;
@@ -219,6 +222,12 @@ export default function App() {
   const [githubRefreshSeconds, setGithubRefreshSeconds] = useState(DEFAULT_GITHUB_REFRESH_SECONDS);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Section to land on when Settings opens; undefined means the default (General).
+  const [settingsSection, setSettingsSection] = useState<"assistant" | undefined>(undefined);
+  // A chat the quick panel asked the dashboard to show, until the Assistant tab has opened it.
+  const [assistantPendingChat, setAssistantPendingChat] = useState<string | null>(null);
+  // Bumped when a chat gets its AI-written title, so the history list reloads.
+  const [assistantTitleTick, setAssistantTitleTick] = useState(0);
   const [github, setGithub] = useState<GitHubStatusResult | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
   const [claudeUsage, setClaudeUsage] = useState<ClaudeUsageResult | null>(null);
@@ -340,7 +349,15 @@ export default function App() {
     setAllTodoist(result);
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    setTodoist({ ...result, tasks: result.tasks.filter(task => task.deadline || (task.due && task.due.slice(0, 10) <= today)) });
+    // Home hides the Planet Depos project and everything nested under it.
+    const hidden = new Set(result.projects.filter(p => p.name.includes("Planet Depos")).map(p => p.id));
+    for (let grew = hidden.size > 0; grew; ) {
+      grew = false;
+      for (const p of result.projects) {
+        if (p.parentId && hidden.has(p.parentId) && !hidden.has(p.id)) { hidden.add(p.id); grew = true; }
+      }
+    }
+    setTodoist({ ...result, tasks: result.tasks.filter(task => !hidden.has(task.projectId) && (task.deadline || (task.due && task.due.slice(0, 10) <= today))) });
   }, []);
   const loadCalendar = useCallback(async () => {
     setCalendar(await window.api.calendar.events(calendarDate ?? undefined));
@@ -593,7 +610,16 @@ export default function App() {
     return window.api.onCommand((command) => {
       if (command.type === "refreshAll") void refreshAll();
       else if (command.type === "openTab") setActiveTab(command.tab as TabId);
-      else if (command.type === "captured" && command.target === "dailyNote") {
+      else if (command.type === "assistantChatTitled") setAssistantTitleTick((t) => t + 1);
+      else if (command.type === "openAssistantChat") {
+        // "Open in dashboard" from the quick panel.
+        setActiveTab("assistant");
+        setAssistantPendingChat(command.chatId);
+        if (command.openSettings) {
+          setSettingsSection("assistant");
+          setSettingsOpen(true);
+        }
+      } else if (command.type === "captured" && command.target === "dailyNote") {
         // Capture appended to today's note in main; re-read it so the widget
         // isn't holding a stale copy it would later autosave over the top of.
         // Only when we're actually showing today — if the user has navigated
@@ -628,7 +654,10 @@ export default function App() {
               <IconRefresh className={refreshing ? "spin" : ""} />
               Refresh
             </button>
-            <button className="settings-trigger" title="Settings" onClick={() => setSettingsOpen(true)}>
+            <button className="settings-trigger" title="Settings" onClick={() => {
+              setSettingsSection(undefined);
+              setSettingsOpen(true);
+            }}>
               <IconGear />
             </button>
           </div>
@@ -793,6 +822,25 @@ export default function App() {
           </div>
         </main>
       )}
+
+      {/* Unlike every other tab this one is never unmounted — only hidden — so
+          the transcript and an in-flight streamed reply survive switching tabs. */}
+      <main
+        className="grid grid-assistant"
+        style={activeTab === "assistant" ? undefined : { display: "none" }}
+      >
+        <div className="slot slot-assistant">
+          <AssistantWidget
+            onOpenSettings={() => {
+              setSettingsSection("assistant");
+              setSettingsOpen(true);
+            }}
+            refreshToken={assistantTitleTick}
+            pendingOpenChatId={assistantPendingChat}
+            onPendingOpenHandled={() => setAssistantPendingChat(null)}
+          />
+        </div>
+      </main>
 
       {activeTab === "habits" && (
         <main className="grid grid-habits">
@@ -1019,6 +1067,7 @@ export default function App() {
 
       <SettingsPage
         open={settingsOpen}
+        initialSection={settingsSection}
         onClose={() => setSettingsOpen(false)}
         onProcessConfigsChange={setProcessConfigs}
         onAppRefreshMinutesChange={(minutes) => setAppRefreshMinutes(minutes ?? DEFAULT_REFRESH_MINUTES)}

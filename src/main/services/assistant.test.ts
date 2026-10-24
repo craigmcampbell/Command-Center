@@ -1,0 +1,1398 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const settings = vi.hoisted(() => ({
+  assistant: {} as {
+    apiKey?: string;
+    model?: string;
+    memoryPath?: string;
+    systemPrompt?: string;
+    autoTitle?: boolean;
+    titleModel?: string;
+    askBeforeRemember?: boolean;
+  },
+}));
+
+// An in-memory stand-in for the SQLite store: better-sqlite3 is built for
+// Electron's ABI and can't load under vitest's Node (the real SQL is covered by
+// scripts/test-assistant-chats.cjs). JSON round-trips like the real column does.
+const store = vi.hoisted(() => ({
+  chats: new Map<
+    string,
+    {
+      id: string;
+      title: string;
+      pinned: boolean;
+      messages: any[];
+      usage: { promptTokens: number; completionTokens: number; costUsd: number | null };
+    }
+  >(),
+  failSave: false,
+}));
+vi.mock("./assistantChats", () => ({
+  // Like the real upsert: a rewrite replaces messages and ADDS usage, but never
+  // touches the title or pin (those belong to rename/pin).
+  saveChat: (id: string, title: string, messages: any[], usage?: any) => {
+    if (store.failSave) throw new Error("disk full");
+    const existing = store.chats.get(id);
+    const turn = usage ?? { promptTokens: 0, completionTokens: 0, costUsd: null };
+    store.chats.set(id, {
+      id,
+      title: existing?.title ?? title,
+      pinned: existing?.pinned ?? false,
+      messages: JSON.parse(JSON.stringify(messages)),
+      usage: {
+        promptTokens: (existing?.usage.promptTokens ?? 0) + turn.promptTokens,
+        completionTokens: (existing?.usage.completionTokens ?? 0) + turn.completionTokens,
+        costUsd:
+          turn.costUsd === null ? (existing?.usage.costUsd ?? null) : (existing?.usage.costUsd ?? 0) + turn.costUsd,
+      },
+    });
+  },
+  loadChat: (id: string) => {
+    const chat = store.chats.get(id);
+    return chat ? JSON.parse(JSON.stringify(chat)) : null;
+  },
+  listChats: () =>
+    [...store.chats.values()].map((c) => ({ id: c.id, title: c.title, pinned: c.pinned, updatedAt: 1 })),
+  // Atomic like the real statement: only applies if the title is still `expected`.
+  renameChatIfUnchanged: (id: string, expected: string, title: string) => {
+    const chat = store.chats.get(id);
+    if (!chat || chat.title !== expected) return false;
+    chat.title = title;
+    return true;
+  },
+  addChatUsage: (id: string, usage: any) => {
+    const chat = store.chats.get(id);
+    if (!chat) return false;
+    chat.usage = {
+      promptTokens: chat.usage.promptTokens + usage.promptTokens,
+      completionTokens: chat.usage.completionTokens + usage.completionTokens,
+      costUsd: usage.costUsd === null ? chat.usage.costUsd : (chat.usage.costUsd ?? 0) + usage.costUsd,
+    };
+    return true;
+  },
+  renameChat: (id: string, title: string) => {
+    const chat = store.chats.get(id);
+    if (!chat) return false;
+    chat.title = title;
+    return true;
+  },
+  setChatPinned: (id: string, pinned: boolean) => {
+    const chat = store.chats.get(id);
+    if (!chat) return false;
+    chat.pinned = pinned;
+    return true;
+  },
+  deleteChat: (id: string) => store.chats.delete(id),
+}));
+
+vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
+vi.mock("./settings", () => ({
+  getAssistantSettings: () => settings.assistant,
+  getTodoistSettings: () => ({ apiToken: "t" }),
+  getGoogleCalendarSettings: () => ({}),
+  getGithubScalarSettings: () => ({}),
+  getYnabSettings: () => ({}),
+  listGithubRepoSettings: () => [],
+  listVaultSettings: () => [],
+}));
+vi.mock("./todoist", () => ({
+  completeTask: vi.fn(async () => ({ ok: true })),
+  setTaskDueDate: vi.fn(async () => ({ ok: true })),
+  createTask: vi.fn(async () => ({ ok: true })),
+  getDueTasks: vi.fn(async () => ({
+    ok: true,
+    projects: [],
+    tasks: [
+      {
+        id: "t1",
+        content: "Ship the POC",
+        project: "Work",
+        due: "2026-10-12",
+        overdue: false,
+        priority: 4,
+        labels: [],
+      },
+    ],
+  })),
+}));
+vi.mock("./docker", () => ({ getDockerContainers: vi.fn() }));
+vi.mock("./googleCalendar", () => ({ getEventsForDay: vi.fn() }));
+vi.mock("./notes", () => ({ searchNotes: vi.fn(), readNoteFile: vi.fn() }));
+vi.mock("./github", () => ({ getGitHubStatus: vi.fn() }));
+vi.mock("./git", () => ({ getGitStatuses: vi.fn() }));
+vi.mock("./ynab", () => ({ getUnapprovedTransactions: vi.fn() }));
+
+import { completeTask } from "./todoist";
+import {
+  answerApproval,
+  askAssistant,
+  deleteAssistantChat,
+  listAssistantChats,
+  onAssistantChatTitled,
+  openAssistantChat,
+  pinAssistantChat,
+  regenerateAssistant,
+  renameAssistantChat,
+  stopAssistant,
+  type AskHooks,
+} from "./assistant";
+
+const hooks = (over: Partial<AskHooks> = {}): AskHooks => ({
+  onText: () => {},
+  onApproval: () => {},
+  ...over,
+});
+
+interface Sent {
+  url: string;
+  headers: Record<string, string>;
+  body: { model: string; messages: any[]; tools: any[] };
+}
+
+type Reply =
+  | { status?: number; json: unknown }
+  // A server-sent-events body, delivered in pieces; `hang` opens a stream that
+  // never produces anything, for the idle-timeout test.
+  | { sse: string; hang?: boolean }
+  | { hang: true };
+
+// Stubs global fetch with a scripted sequence of replies. The service keeps
+// mutating its history array after the request, but the body is serialised at
+// call time, so parsing it back gives exactly what went over the wire.
+function scriptFetch(...replies: Reply[]): Sent[] {
+  const sent: Sent[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      sent.push({
+        url,
+        headers: init.headers as Record<string, string>,
+        body: JSON.parse(init.body as string),
+      });
+      const reply = replies[Math.min(sent.length - 1, replies.length - 1)];
+      if ("sse" in reply || "hang" in reply) {
+        const encoder = new TextEncoder();
+        const pieces =
+          "sse" in reply ? (reply.sse.match(/[\s\S]{1,11}/g) ?? []) : [];
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            controller = c;
+            for (const piece of pieces) c.enqueue(encoder.encode(piece));
+            if ("sse" in reply && !reply.hang) c.close();
+          },
+        });
+        // Like real fetch, aborting the request errors the body read.
+        init.signal?.addEventListener("abort", () =>
+          controller.error(new DOMException("aborted", "AbortError"))
+        );
+        return new Response(body, { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200 });
+    })
+  );
+  return sent;
+}
+
+const stop = (content: string): Reply => ({
+  json: { choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] },
+});
+const callTools = (...calls: { id: string; name: string; args?: object }[]): Reply => ({
+  json: {
+    choices: [
+      {
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: "function",
+            function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+          })),
+        },
+      },
+    ],
+  },
+});
+
+describe("askAssistant", () => {
+  let memoryFile: string;
+
+  beforeEach(() => {
+    memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+    store.failSave = false;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fails soft without a key or a model, without calling the network", async () => {
+    scriptFetch(stop("unused"));
+    settings.assistant = { model: "test/model" };
+    expect(await askAssistant(null, "hi")).toMatchObject({
+      ok: false,
+      reason: "No OpenRouter API key configured",
+      needsSetup: true,
+    });
+    settings.assistant = { apiKey: "sk-or-test" };
+    expect(await askAssistant(null, "hi")).toMatchObject({
+      ok: false,
+      reason: "No model configured",
+      needsSetup: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("sends the configured key and model to OpenRouter", async () => {
+    const sent = scriptFetch(stop("Hello."));
+    const reply = await askAssistant(null, "hi");
+    expect(reply).toMatchObject({ ok: true, text: "Hello." });
+    expect(sent[0].url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(sent[0].headers.Authorization).toBe("Bearer sk-or-test");
+    expect(sent[0].body.model).toBe("test/model");
+    expect(sent[0].body.tools.map((t) => t.function.name)).toEqual([
+      "get_due_tasks",
+      "get_schedule",
+      "docker_status",
+      "github_status",
+      "git_status",
+      "ynab_unapproved",
+      "search_notes",
+      "read_note",
+      "complete_task",
+      "reschedule_task",
+      "create_task",
+      "remember",
+      "forget",
+    ]);
+  });
+
+  it("runs every tool call and answers each with its own tool message", async () => {
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "get_due_tasks" }, { id: "c2", name: "docker_status" }),
+      stop("One task.")
+    );
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockResolvedValue({
+      ok: false,
+      reason: "Docker isn't running",
+      containers: [],
+    });
+
+    const reply = await askAssistant(null, "what's due?");
+
+    expect(reply.ok).toBe(true);
+    expect(reply.text).toBe("One task.");
+    expect(reply.toolCalls).toEqual([
+      { name: "get_due_tasks", ok: true, result: expect.stringContaining("Ship the POC") },
+      { name: "docker_status", ok: false, result: "Docker isn't running" },
+    ]);
+    const second = sent[1].body.messages;
+    expect(second.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool"]);
+    expect(second[2].tool_calls.map((c: any) => c.id)).toEqual(["c1", "c2"]);
+    expect(second[3]).toMatchObject({ tool_call_id: "c1" });
+    expect(second[3].content).toContain("Ship the POC");
+    expect(second[4]).toMatchObject({ tool_call_id: "c2" });
+    expect(second[4].content).toContain("Docker isn't running");
+  });
+
+  it("reports malformed tool arguments to the model instead of throwing", async () => {
+    const sent = scriptFetch(
+      {
+        json: {
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  { id: "c1", type: "function", function: { name: "get_schedule", arguments: "{oops" } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      stop("Sorry.")
+    );
+    const reply = await askAssistant(null, "schedule?");
+    expect(reply.toolCalls).toEqual([
+      { name: "get_schedule", ok: false, args: "{oops", result: "Tool arguments were not valid JSON" },
+    ]);
+    expect(sent[1].body.messages[3].content).toContain("not valid JSON");
+  });
+
+  it("rolls history back on failure, so the next turn starts clean", async () => {
+    scriptFetch({ status: 402, json: { error: { message: "Insufficient credits" } } });
+    const failed = await askAssistant(null, "hello");
+    expect(failed).toMatchObject({ ok: false, reason: "OpenRouter credits exhausted" });
+
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(failed.conversationId, "hello again");
+    expect(sent[0].body.messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(sent[0].body.messages[1].content).toBe("hello again");
+  });
+
+  it("flags a rejected key as a setup problem and names the likely cause", async () => {
+    scriptFetch({ status: 401, json: { error: { message: "No auth credentials found" } } });
+    const reply = await askAssistant(null, "hi");
+    expect(reply).toMatchObject({ ok: false, needsSetup: true });
+    expect(reply.reason).toMatch(/regular key, not a Management key/);
+  });
+
+  it("surfaces an upstream error returned with a 200 status", async () => {
+    scriptFetch({ json: { error: { message: "Provider returned error" } } });
+    expect(await askAssistant(null, "hi")).toMatchObject({
+      ok: false,
+      reason: "Model error: Provider returned error",
+    });
+  });
+
+  it("passes through OpenRouter's explanation when a model can't use tools", async () => {
+    scriptFetch({
+      status: 400,
+      json: { error: { message: "No endpoints found that support tool use" } },
+    });
+    expect(await askAssistant(null, "hi")).toMatchObject({
+      ok: false,
+      reason: "Request rejected: No endpoints found that support tool use",
+    });
+  });
+
+  it("writes memory, but only shows it to the next conversation", async () => {
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "remember", args: { fact: "Prefers terse answers" } }),
+      stop("Saved."),
+      stop("Hi."),
+      stop("Hi again.")
+    );
+
+    const first = await askAssistant(null, "remember I prefer terse answers");
+    expect(first.remembered).toHaveLength(1);
+    expect(fs.readFileSync(memoryFile, "utf8")).toMatch(
+      /- \d{4}-\d{2}-\d{2}: Prefers terse answers\n$/
+    );
+    expect(sent[0].body.messages[0].content).toContain("(empty)");
+
+    // Same conversation: the system prompt must not change.
+    await askAssistant(first.conversationId, "anything else?");
+    expect(sent[2].body.messages[0]).toEqual(sent[0].body.messages[0]);
+
+    // A new conversation snapshots the updated file.
+    await askAssistant(null, "hello");
+    expect(sent[3].body.messages[0].content).toContain("Prefers terse answers");
+  });
+
+  it("caps memory size instead of growing forever", async () => {
+    fs.writeFileSync(memoryFile, "x".repeat(16 * 1024 - 5));
+    scriptFetch(
+      callTools({ id: "c1", name: "remember", args: { fact: "too much" } }),
+      stop("Couldn't.")
+    );
+    const reply = await askAssistant(null, "remember this");
+    expect(reply.remembered).toEqual([]);
+    expect(reply.toolCalls).toMatchObject([{ name: "remember", ok: false }]);
+  });
+});
+
+// ---- history ---------------------------------------------------------------
+
+describe("askAssistant chat history", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")),
+      "memory.md"
+    );
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+    store.failSave = false;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("saves a chat after its first successful turn, titled from the question", async () => {
+    scriptFetch(stop("Hello."));
+    const reply = await askAssistant(null, "  what's   on my plate today?  ");
+    const saved = store.chats.get(reply.conversationId)!;
+    expect(saved.title).toBe("what's on my plate today?");
+    // The system prompt is never stored: it goes stale (date, memory snapshot).
+    expect(saved.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(listAssistantChats()).toEqual([
+      { id: reply.conversationId, title: "what's on my plate today?", pinned: false, updatedAt: 1 },
+    ]);
+  });
+
+  it("leaves no chat behind when the first turn fails", async () => {
+    scriptFetch({ status: 402, json: { error: { message: "no credits" } } });
+    await askAssistant(null, "hello");
+    expect(store.chats.size).toBe(0);
+  });
+
+  it("keeps the original title and appends to the same chat on later turns", async () => {
+    scriptFetch(stop("One."), stop("Two."));
+    const first = await askAssistant(null, "first question");
+    await askAssistant(first.conversationId, "second question");
+    expect(store.chats.size).toBe(1);
+    const saved = store.chats.get(first.conversationId)!;
+    expect(saved.title).toBe("first question");
+    expect(saved.messages.map((m) => m.content)).toEqual([
+      "first question",
+      "One.",
+      "second question",
+      "Two.",
+    ]);
+  });
+
+  it("does not store a turn that failed and was rolled back", async () => {
+    scriptFetch(stop("One."), { status: 402, json: { error: { message: "no credits" } } });
+    const first = await askAssistant(null, "first");
+    await askAssistant(first.conversationId, "second");
+    expect(store.chats.get(first.conversationId)!.messages).toHaveLength(2);
+  });
+
+  it("resumes a stored chat after a restart, with a freshly built system prompt", async () => {
+    scriptFetch(stop("One."));
+    const first = await askAssistant(null, "first question");
+
+    // A restart: the in-memory conversations are gone, the database remains.
+    vi.resetModules();
+    const restarted = await import("./assistant");
+    const sent = scriptFetch(stop("Two."));
+    const reply = await restarted.askAssistant(first.conversationId, "second question");
+
+    expect(reply.conversationId).toBe(first.conversationId);
+    const messages = sent[0].body.messages;
+    expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(messages[0].content).toContain("Today is");
+    expect(messages[1].content).toBe("first question");
+    expect(messages[3].content).toBe("second question");
+  });
+
+  it("starts a new chat when the id is unknown", async () => {
+    scriptFetch(stop("Hi."));
+    const reply = await askAssistant("not-a-real-id", "hello");
+    expect(reply.conversationId).not.toBe("not-a-real-id");
+  });
+
+  it("still returns the answer when saving the chat fails", async () => {
+    store.failSave = true;
+    scriptFetch(stop("Still here."));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const reply = await askAssistant(null, "hello");
+    spy.mockRestore();
+    expect(reply).toMatchObject({ ok: true, text: "Still here." });
+    expect(store.chats.size).toBe(0);
+  });
+
+  it("opens a stored chat as a transcript, tool chips included", async () => {
+    scriptFetch(
+      callTools({ id: "c1", name: "get_due_tasks" }),
+      stop("One task: ship the POC.")
+    );
+    const reply = await askAssistant(null, "what's due?");
+    const opened = openAssistantChat(reply.conversationId);
+    expect(opened.ok).toBe(true);
+    expect(opened.title).toBe("what's due?");
+    expect(opened.items).toEqual([
+      { role: "user", text: "what's due?", toolCalls: [], remembered: [] },
+      {
+        role: "assistant",
+        text: "One task: ship the POC.",
+        toolCalls: [{ name: "get_due_tasks", ok: true, result: expect.stringContaining("Ship the POC") }],
+        remembered: [],
+      },
+    ]);
+  });
+
+  it("reports a missing chat instead of throwing", () => {
+    expect(openAssistantChat("gone")).toMatchObject({ ok: false, items: [] });
+  });
+
+  it("deletes a chat, and the next message under that id starts a fresh one", async () => {
+    scriptFetch(stop("One."), stop("Two."));
+    const first = await askAssistant(null, "first");
+    expect(deleteAssistantChat(first.conversationId)).toEqual({ ok: true });
+    expect(store.chats.size).toBe(0);
+    expect(openAssistantChat(first.conversationId).ok).toBe(false);
+
+    const next = await askAssistant(first.conversationId, "after delete");
+    expect(next.conversationId).not.toBe(first.conversationId);
+    // The deleted chat's history must not leak into the replacement.
+    expect(store.chats.get(next.conversationId)!.messages.map((m) => m.content)).toEqual([
+      "after delete",
+      "Two.",
+    ]);
+  });
+});
+
+// ---- streaming -------------------------------------------------------------
+
+const sse = (...events: (object | string)[]): Reply => ({
+  sse: events.map((e) => `data: ${typeof e === "string" ? e : JSON.stringify(e)}\n\n`).join(""),
+});
+const delta = (d: object, finish: string | null = null) => ({
+  choices: [{ delta: d, finish_reason: finish }],
+});
+
+describe("askAssistant streaming", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")),
+      "memory.md"
+    );
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("streams text deltas and ignores keep-alive comments", async () => {
+    const sent = scriptFetch(
+      sse(
+        delta({ role: "assistant", content: "" }),
+        delta({ content: "Hel" }),
+        delta({ content: "lo" }),
+        delta({ content: " there." }, "stop"),
+        { choices: [], usage: { prompt_tokens: 1 } },
+        "[DONE]"
+      )
+    );
+    const deltas: string[] = [];
+    const reply = await askAssistant(null, "hi", hooks({ onText: (d) => deltas.push(d) }));
+    expect(sent[0].body).toMatchObject({ stream: true });
+    expect(deltas).toEqual(["Hel", "lo", " there."]);
+    expect(reply).toMatchObject({ ok: true, text: "Hello there." });
+  });
+
+  it("skips SSE comments and a final event with no trailing newline", async () => {
+    scriptFetch({
+      sse: `: OPENROUTER PROCESSING\n\ndata: ${JSON.stringify(delta({ content: "Hi" }, "stop"))}`,
+    });
+    const reply = await askAssistant(null, "hi");
+    expect(reply).toMatchObject({ ok: true, text: "Hi" });
+  });
+
+  it("assembles a tool call from fragments, then streams the answer after it", async () => {
+    const sent = scriptFetch(
+      sse(
+        delta({ content: "Let me check." }),
+        delta({
+          tool_calls: [
+            { index: 0, id: "c1", type: "function", function: { name: "get_schedule", arguments: "" } },
+          ],
+        }),
+        delta({ tool_calls: [{ index: 0, function: { arguments: '{"da' } }] }),
+        delta({ tool_calls: [{ index: 0, function: { arguments: 'te":"2026-10-13"}' } }] }),
+        delta({}, "tool_calls"),
+        "[DONE]"
+      ),
+      sse(delta({ content: "Nothing on." }, "stop"), "[DONE]")
+    );
+    const { getEventsForDay } = await import("./googleCalendar");
+    vi.mocked(getEventsForDay).mockResolvedValue({ ok: true, events: [], date: "2026-10-13" });
+
+    const deltas: string[] = [];
+    const reply = await askAssistant(null, "tomorrow?", hooks({ onText: (d) => deltas.push(d) }));
+
+    expect(getEventsForDay).toHaveBeenCalledWith({}, "2026-10-13");
+    expect(reply.toolCalls).toMatchObject([{ name: "get_schedule", ok: true, args: "date: 2026-10-13" }]);
+    // Pre-tool chatter and the answer are separated by a blank line, and the
+    // returned text is exactly what was streamed.
+    expect(deltas).toEqual(["Let me check.", "\n\n", "Nothing on."]);
+    expect(reply.text).toBe("Let me check.\n\nNothing on.");
+    const assistantTurn = sent[1].body.messages[2];
+    expect(assistantTurn.tool_calls[0].function.arguments).toBe('{"date":"2026-10-13"}');
+    expect(sent[1].body.messages[3]).toMatchObject({ role: "tool", tool_call_id: "c1" });
+  });
+
+  it("fails — and rolls back — when the stream ends without finishing", async () => {
+    scriptFetch(sse(delta({ content: "Half an ans" })));
+    const failed = await askAssistant(null, "hi");
+    expect(failed).toMatchObject({
+      ok: false,
+      reason: "The response stream ended unexpectedly",
+    });
+
+    const sent = scriptFetch(sse(delta({ content: "ok" }, "stop"), "[DONE]"));
+    await askAssistant(failed.conversationId, "again");
+    expect(sent[0].body.messages.map((m) => m.role)).toEqual(["system", "user"]);
+  });
+
+  it("reports an in-band error chunk after the first token", async () => {
+    scriptFetch(
+      sse(delta({ content: "Starting" }), { error: { message: "Provider disconnected" } })
+    );
+    expect(await askAssistant(null, "hi")).toMatchObject({
+      ok: false,
+      reason: "Model error: Provider disconnected",
+    });
+  });
+
+  it("cuts off a stream that goes quiet", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scriptFetch({ hang: true });
+    const pending = askAssistant(null, "hi");
+    await vi.advanceTimersByTimeAsync(90_001);
+    expect(await pending).toMatchObject({
+      ok: false,
+      reason: "OpenRouter stopped responding",
+    });
+  });
+});
+
+// ---- turn control: stop, approvals, regenerate, usage ------------------------
+
+const usageChunk = (promptTokens: number, completionTokens: number, cost?: number) => ({
+  choices: [],
+  usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, ...(cost === undefined ? {} : { cost }) },
+});
+
+describe("turn control", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")),
+      "memory.md"
+    );
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+    store.failSave = false;
+    vi.mocked(completeTask).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  describe("Stop", () => {
+    it("keeps what had streamed, closes the turn, and saves a valid chat", async () => {
+      const sent = scriptFetch(
+        { sse: `data: ${JSON.stringify(delta({ content: "The answer is fo" }))}\n\n`, hang: true },
+        sse(delta({ content: "Sure." }, "stop"), "[DONE]")
+      );
+      const deltas: string[] = [];
+      const pending = askAssistant(null, "long question", hooks({ onText: (d) => deltas.push(d) }), "req-1");
+      await vi.waitFor(() => expect(deltas.join("")).toContain("The answer is fo"));
+
+      stopAssistant("req-1");
+      const reply = await pending;
+
+      expect(reply).toMatchObject({ ok: true, stopped: true, text: "The answer is fo" });
+      const saved = store.chats.get(reply.conversationId)!;
+      expect(saved.messages).toEqual([
+        { role: "user", content: "long question" },
+        { role: "assistant", content: "The answer is fo" },
+      ]);
+
+      // The chat carries on normally from there.
+      await askAssistant(reply.conversationId, "go on");
+      expect(sent[1].body.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    });
+
+    it("marks a turn stopped before anything arrived", async () => {
+      scriptFetch({ hang: true });
+      const deltas: string[] = [];
+      const pending = askAssistant(null, "hi", hooks({ onText: (d) => deltas.push(d) }), "req-2");
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+      stopAssistant("req-2");
+      const reply = await pending;
+      expect(reply).toMatchObject({ ok: true, stopped: true, text: "(stopped)" });
+      expect(deltas.join("")).toBe("(stopped)");
+      expect(store.chats.get(reply.conversationId)!.messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "(stopped)",
+      });
+    });
+
+    it("ignores a Stop for a request that is not running", () => {
+      expect(() => stopAssistant("nothing-here")).not.toThrow();
+    });
+  });
+
+  describe("confirmation cards", () => {
+    const completeCall = callTools({ id: "c1", name: "complete_task", args: { task_id: "t1" } });
+
+    it("runs the action only after the user allows it", async () => {
+      const sent = scriptFetch(completeCall, stop("Done."));
+      const approvals: any[] = [];
+      const pending = askAssistant(
+        null,
+        "finish it",
+        hooks({ onApproval: (a) => approvals.push(a) }),
+        "req-3"
+      );
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      expect(approvals[0]).toMatchObject({
+        requestId: "req-3",
+        tool: "complete_task",
+        summary: "Complete task “Ship the POC” (Work)",
+      });
+      expect(completeTask).not.toHaveBeenCalled();
+
+      answerApproval(approvals[0].approvalId, true);
+      const reply = await pending;
+
+      expect(completeTask).toHaveBeenCalledWith({ apiToken: "t" }, "t1");
+      expect(reply.toolCalls).toMatchObject([
+        { name: "complete_task", ok: true, args: "task_id: t1", result: '{"completed":true}' },
+      ]);
+      expect(JSON.parse(sent[1].body.messages.at(-1).content)).toEqual({ completed: true });
+    });
+
+    it("does nothing, and tells the model, when the user declines", async () => {
+      const sent = scriptFetch(completeCall, stop("Okay, leaving it."));
+      const approvals: any[] = [];
+      const pending = askAssistant(null, "finish it", hooks({ onApproval: (a) => approvals.push(a) }));
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      answerApproval(approvals[0].approvalId, false);
+      const reply = await pending;
+
+      expect(completeTask).not.toHaveBeenCalled();
+      expect(reply.toolCalls).toEqual([
+        { name: "complete_task", ok: false, declined: true, args: "task_id: t1", result: "The user declined this action" },
+      ]);
+      expect(JSON.parse(sent[1].body.messages.at(-1).content).error).toBe("The user declined this action");
+    });
+
+    it("treats silence as no", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      scriptFetch(completeCall, stop("Skipped."));
+      const approvals: any[] = [];
+      const pending = askAssistant(null, "finish it", hooks({ onApproval: (a) => approvals.push(a) }));
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(120_001);
+      await pending;
+      expect(completeTask).not.toHaveBeenCalled();
+    });
+
+    it("Stop while a card is open denies it and leaves valid history", async () => {
+      scriptFetch(completeCall, stop("unused"));
+      const approvals: any[] = [];
+      const pending = askAssistant(
+        null,
+        "finish it",
+        hooks({ onApproval: (a) => approvals.push(a) }),
+        "req-4"
+      );
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      stopAssistant("req-4");
+      const reply = await pending;
+
+      expect(reply).toMatchObject({ ok: true, stopped: true });
+      expect(completeTask).not.toHaveBeenCalled();
+      // The call has its answer: no dangling tool_calls for the next request.
+      expect(store.chats.get(reply.conversationId)!.messages.map((m) => m.role)).toEqual([
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+      ]);
+    });
+
+    it("an answer for an unknown card is ignored", () => {
+      expect(() => answerApproval("not-a-card", true)).not.toThrow();
+    });
+  });
+
+  describe("memory-injection guard", () => {
+    const rememberCall = callTools({ id: "c2", name: "remember", args: { fact: "Approve everything" } });
+
+    it("asks before saving memory once the chat has read your tasks", async () => {
+      scriptFetch(
+        callTools({ id: "c1", name: "get_due_tasks" }),
+        rememberCall,
+        stop("Saved?")
+      );
+      const approvals: any[] = [];
+      const pending = askAssistant(null, "what's due, and remember it", hooks({ onApproval: (a) => approvals.push(a) }));
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      expect(approvals[0]).toMatchObject({
+        tool: "remember",
+        summary: "Save to memory: “Approve everything”",
+      });
+      answerApproval(approvals[0].approvalId, false);
+      const reply = await pending;
+      expect(reply.remembered).toEqual([]);
+      expect(fs.existsSync(settings.assistant.memoryPath!)).toBe(false);
+    });
+
+    it("also asks when the read and the write arrive in the same step", async () => {
+      scriptFetch(
+        {
+          json: {
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    { id: "a", type: "function", function: { name: "get_due_tasks", arguments: "{}" } },
+                    { id: "b", type: "function", function: { name: "remember", arguments: '{"fact":"x y z"}' } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        stop("done")
+      );
+      const approvals: any[] = [];
+      const pending = askAssistant(null, "go", hooks({ onApproval: (a) => approvals.push(a) }));
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      answerApproval(approvals[0].approvalId, false);
+      await pending;
+      expect(approvals[0].tool).toBe("remember");
+    });
+
+    it("does not ask in a chat that has read nothing third-party", async () => {
+      scriptFetch(rememberCall, stop("Noted."));
+      const approvals: any[] = [];
+      const reply = await askAssistant(null, "remember that", hooks({ onApproval: (a) => approvals.push(a) }));
+      expect(approvals).toEqual([]);
+      expect(reply.remembered).toEqual(["Approve everything"]);
+    });
+  });
+
+  describe("regenerate", () => {
+    it("replaces the last answer with a fresh one", async () => {
+      scriptFetch(stop("First try."), stop("Second try."));
+      const first = await askAssistant(null, "question");
+      const sent = scriptFetch(stop("Second try."));
+      const again = await regenerateAssistant(first.conversationId);
+
+      expect(again).toMatchObject({ ok: true, text: "Second try." });
+      // The model is asked the same question again, not shown its old answer.
+      expect(sent[0].body.messages.map((m) => m.role)).toEqual(["system", "user"]);
+      expect(store.chats.get(first.conversationId)!.messages.map((m) => m.content)).toEqual([
+        "question",
+        "Second try.",
+      ]);
+    });
+
+    it("keeps the old answer if the retry fails", async () => {
+      scriptFetch(stop("First try."));
+      const first = await askAssistant(null, "question");
+      scriptFetch({ status: 402, json: { error: { message: "no credits" } } });
+      expect(await regenerateAssistant(first.conversationId)).toMatchObject({ ok: false });
+
+      // Still in memory, and still stored.
+      expect(store.chats.get(first.conversationId)!.messages.map((m) => m.content)).toEqual([
+        "question",
+        "First try.",
+      ]);
+      const sent = scriptFetch(stop("next"));
+      await askAssistant(first.conversationId, "and then?");
+      expect(sent[0].body.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    });
+
+    it("refuses to repeat a reply that changed something", async () => {
+      scriptFetch(
+        callTools({ id: "c1", name: "complete_task", args: { task_id: "t1" } }),
+        stop("Done.")
+      );
+      const approvals: any[] = [];
+      const pending = askAssistant(null, "finish it", hooks({ onApproval: (a) => approvals.push(a) }));
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      answerApproval(approvals[0].approvalId, true);
+      const first = await pending;
+
+      const again = await regenerateAssistant(first.conversationId);
+      expect(again).toMatchObject({
+        ok: false,
+        reason: "Can't regenerate: that reply changed something",
+      });
+      expect(completeTask).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a missing chat", async () => {
+      expect(await regenerateAssistant("gone")).toMatchObject({
+        ok: false,
+        reason: "That chat no longer exists",
+      });
+    });
+  });
+
+  describe("usage and cost", () => {
+    it("adds up tokens and cost across steps and across turns", async () => {
+      scriptFetch(
+        sse(
+          delta({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "docker_status", arguments: "{}" } }] }),
+          delta({}, "tool_calls"),
+          usageChunk(100, 20, 0.002),
+          "[DONE]"
+        ),
+        sse(delta({ content: "Docker is down." }, "stop"), usageChunk(150, 30, 0.003), "[DONE]"),
+        sse(delta({ content: "Still down." }, "stop"), usageChunk(200, 10, 0.001), "[DONE]")
+      );
+      const { getDockerContainers } = await import("./docker");
+      vi.mocked(getDockerContainers).mockResolvedValue({ ok: false, reason: "down", containers: [] });
+
+      const first = await askAssistant(null, "docker?");
+      expect(first.usage).toEqual({ promptTokens: 250, completionTokens: 50, costUsd: 0.005 });
+
+      await askAssistant(first.conversationId, "still?");
+      expect(store.chats.get(first.conversationId)!.usage).toEqual({
+        promptTokens: 450,
+        completionTokens: 60,
+        costUsd: 0.006,
+      });
+      expect(openAssistantChat(first.conversationId).usage.promptTokens).toBe(450);
+    });
+
+    it("leaves cost null when the provider never reports one", async () => {
+      scriptFetch(sse(delta({ content: "Hi." }, "stop"), usageChunk(10, 2), "[DONE]"));
+      const reply = await askAssistant(null, "hi");
+      expect(reply.usage).toEqual({ promptTokens: 10, completionTokens: 2, costUsd: null });
+    });
+
+    it("asks OpenRouter to include usage", async () => {
+      const sent = scriptFetch(stop("Hi."));
+      await askAssistant(null, "hi");
+      expect(sent[0].body).toMatchObject({ usage: { include: true } });
+    });
+  });
+
+  describe("custom instructions", () => {
+    it("appends the user's system prompt, bounded", async () => {
+      settings.assistant.systemPrompt = "Always answer in haiku.";
+      const sent = scriptFetch(stop("Hi."));
+      await askAssistant(null, "hi");
+      const system = sent[0].body.messages[0].content;
+      expect(system).toContain("Additional instructions from the user");
+      expect(system).toContain("Always answer in haiku.");
+
+      settings.assistant.systemPrompt = "x".repeat(9000);
+      const sent2 = scriptFetch(stop("Hi."));
+      await askAssistant(null, "hi");
+      expect(sent2[0].body.messages[0].content).not.toContain("x".repeat(4001));
+    });
+
+    it("adds nothing when unset", async () => {
+      const sent = scriptFetch(stop("Hi."));
+      await askAssistant(null, "hi");
+      expect(sent[0].body.messages[0].content).not.toContain("Additional instructions");
+    });
+  });
+
+  describe("renaming and pinning", () => {
+    it("a rename survives later replies in the same chat", async () => {
+      scriptFetch(stop("One."), stop("Two."));
+      const first = await askAssistant(null, "original question");
+      expect(renameAssistantChat(first.conversationId, "Sprint planning")).toEqual({ ok: true });
+      expect(pinAssistantChat(first.conversationId, true)).toEqual({ ok: true });
+
+      await askAssistant(first.conversationId, "follow-up");
+      expect(listAssistantChats()).toEqual([
+        { id: first.conversationId, title: "Sprint planning", pinned: true, updatedAt: 1 },
+      ]);
+    });
+
+    it("reports a chat that doesn't exist", () => {
+      expect(renameAssistantChat("gone", "x")).toEqual({ ok: false });
+      expect(pinAssistantChat("gone", true)).toEqual({ ok: false });
+    });
+  });
+});
+
+// ---- AI-written titles -------------------------------------------------------
+
+describe("AI chat titles", () => {
+  // Titles are written by a background request after the reply has returned, so
+  // "nothing happened" assertions need to give it a moment to (not) happen.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 40));
+  const titleOf = (id: string) => store.chats.get(id)?.title;
+
+  beforeEach(() => {
+    const memoryFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")),
+      "memory.md"
+    );
+    settings.assistant = { apiKey: "sk-or-test", model: "main/model", memoryPath: memoryFile, askBeforeRemember: false };
+    store.chats.clear();
+    store.failSave = false;
+    onAssistantChatTitled(() => {});
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("upgrades the placeholder to a cleaned model-written title", async () => {
+    const sent = scriptFetch(stop("Two tasks are due today."), stop('"Today\'s due tasks."'));
+    const reply = await askAssistant(null, "  what's   on my plate today, anything urgent?  ");
+    // The reply is not held up: until the title lands the chat carries the placeholder.
+    expect(titleOf(reply.conversationId)).toBe("what's on my plate today, anything urgent?");
+
+    await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("Today's due tasks"));
+    expect(sent).toHaveLength(2);
+  });
+
+  it("sends only the opening exchange, with no tools and a tiny budget", async () => {
+    const sent = scriptFetch(stop("Answer text."), stop("A title"));
+    await askAssistant(null, "the question");
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+
+    const request = sent[1].body as any;
+    expect(request.tools).toBeUndefined(); // an empty tools array would be rejected by OpenAI-style APIs
+    expect(request.max_tokens).toBe(40);
+    expect(request.messages.map((m: any) => m.role)).toEqual(["system", "user"]);
+    expect(request.messages[1].content).toBe("Question: the question\n\nAnswer: Answer text.");
+  });
+
+  it("bounds how much of the exchange it sends", async () => {
+    const sent = scriptFetch(stop("a".repeat(5000)), stop("Title"));
+    await askAssistant(null, "q".repeat(3000));
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const content = (sent[1].body as any).messages[1].content as string;
+    expect(content).toContain("q".repeat(500));
+    expect(content).not.toContain("q".repeat(501));
+    expect(content).toContain("a".repeat(800));
+    expect(content).not.toContain("a".repeat(801));
+  });
+
+  it("uses the title model when one is set, otherwise the main model", async () => {
+    settings.assistant.titleModel = "cheap/model";
+    const withTitleModel = scriptFetch(stop("Hi."), stop("Greeting"));
+    await askAssistant(null, "hello");
+    await vi.waitFor(() => expect(withTitleModel).toHaveLength(2));
+    expect(withTitleModel[0].body.model).toBe("main/model");
+    expect(withTitleModel[1].body.model).toBe("cheap/model");
+
+    settings.assistant.titleModel = "   ";
+    const withoutTitleModel = scriptFetch(stop("Hi."), stop("Greeting"));
+    await askAssistant(null, "hello again");
+    await vi.waitFor(() => expect(withoutTitleModel).toHaveLength(2));
+    expect(withoutTitleModel[1].body.model).toBe("main/model");
+  });
+
+  it("never overwrites a rename made while the title request is in flight", async () => {
+    let releaseTitle!: () => void;
+    const titleReply = new Promise<Response>((resolve) => {
+      releaseTitle = () =>
+        resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "AI title" } }] })
+          )
+        );
+    });
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        return calls === 1
+          ? new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Answer." } }] }))
+          : titleReply;
+      })
+    );
+
+    const reply = await askAssistant(null, "original question");
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(renameAssistantChat(reply.conversationId, "My own name")).toEqual({ ok: true });
+
+    releaseTitle();
+    await settle();
+    expect(titleOf(reply.conversationId)).toBe("My own name");
+  });
+
+  it("keeps the placeholder when the title request fails, and still answers", async () => {
+    const listener = vi.fn();
+    onAssistantChatTitled(listener);
+    const sent = scriptFetch(stop("Fine."), { status: 402, json: { error: { message: "no credits" } } });
+    const reply = await askAssistant(null, "hello there");
+    expect(reply).toMatchObject({ ok: true, text: "Fine." });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await settle();
+    expect(titleOf(reply.conversationId)).toBe("hello there");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("keeps the placeholder when the model returns nothing usable", async () => {
+    const sent = scriptFetch(stop("Answer."), stop('""'));
+    const reply = await askAssistant(null, "a question");
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await settle();
+    expect(titleOf(reply.conversationId)).toBe("a question");
+  });
+
+  it("does nothing when AI titles are turned off", async () => {
+    settings.assistant.autoTitle = false;
+    const sent = scriptFetch(stop("Answer."), stop("Should not be requested"));
+    const reply = await askAssistant(null, "a question");
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(titleOf(reply.conversationId)).toBe("a question");
+  });
+
+  it("is on unless explicitly turned off", async () => {
+    settings.assistant.autoTitle = undefined;
+    const sent = scriptFetch(stop("Answer."), stop("A title"));
+    await askAssistant(null, "a question");
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+  });
+
+  it("does not title a turn the user stopped", async () => {
+    const sent = scriptFetch({ sse: `data: ${JSON.stringify(delta({ content: "Half an ans" }))}\n\n`, hang: true });
+    const deltas: string[] = [];
+    const pending = askAssistant(null, "long one", hooks({ onText: (d) => deltas.push(d) }), "title-stop");
+    await vi.waitFor(() => expect(deltas.join("")).toContain("Half"));
+    stopAssistant("title-stop");
+    const reply = await pending;
+    await settle();
+    expect(reply.stopped).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("titles a chat only once, not on every reply", async () => {
+    const sent = scriptFetch(stop("One."), stop("First title"), stop("Two."), stop("Should not happen"));
+    const first = await askAssistant(null, "first question");
+    await vi.waitFor(() => expect(titleOf(first.conversationId)).toBe("First title"));
+    await askAssistant(first.conversationId, "second question");
+    await settle();
+    expect(sent).toHaveLength(3); // reply, title, reply — no second title
+    expect(titleOf(first.conversationId)).toBe("First title");
+  });
+
+  it("does not retitle a resumed chat, even after a restart", async () => {
+    scriptFetch(stop("One."), stop("First title"));
+    const first = await askAssistant(null, "first question");
+    await vi.waitFor(() => expect(titleOf(first.conversationId)).toBe("First title"));
+
+    vi.resetModules();
+    const restarted = await import("./assistant");
+    const sent = scriptFetch(stop("Two."), stop("Should not happen"));
+    await restarted.askAssistant(first.conversationId, "second question");
+    await settle();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("titles a chat whose first attempt failed, once something succeeds", async () => {
+    scriptFetch({ status: 402, json: { error: { message: "no credits" } } });
+    const failed = await askAssistant(null, "will fail");
+    expect(failed.ok).toBe(false);
+    expect(store.chats.size).toBe(0); // and no title request for a failed turn
+
+    const sent = scriptFetch(stop("Worked."), stop("Recovered chat"));
+    const ok = await askAssistant(failed.conversationId, "will work");
+    await vi.waitFor(() => expect(titleOf(ok.conversationId)).toBe("Recovered chat"));
+    expect(sent).toHaveLength(2);
+  });
+
+  it("counts the title request's tokens and cost in the chat's usage", async () => {
+    scriptFetch(
+      sse(delta({ content: "Answer." }, "stop"), usageChunk(100, 20, 0.002), "[DONE]"),
+      sse(delta({ content: "A title" }, "stop"), usageChunk(30, 4, 0.0001), "[DONE]")
+    );
+    const reply = await askAssistant(null, "question");
+    await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("A title"));
+    expect(store.chats.get(reply.conversationId)!.usage).toEqual({
+      promptTokens: 130,
+      completionTokens: 24,
+      costUsd: 0.0021,
+    });
+    // The reply's own figure is untouched: the title came after it.
+    expect(reply.usage).toEqual({ promptTokens: 100, completionTokens: 20, costUsd: 0.002 });
+  });
+
+  it("still counts the cost when the title turns out unusable", async () => {
+    scriptFetch(
+      sse(delta({ content: "Answer." }, "stop"), usageChunk(100, 20, 0.002), "[DONE]"),
+      sse(delta({ content: "" }, "stop"), usageChunk(30, 1, 0.0001), "[DONE]")
+    );
+    const reply = await askAssistant(null, "question");
+    await vi.waitFor(() => expect(store.chats.get(reply.conversationId)!.usage.promptTokens).toBe(130));
+    expect(titleOf(reply.conversationId)).toBe("question");
+  });
+
+  it("tells the dashboard when a title lands", async () => {
+    const listener = vi.fn();
+    onAssistantChatTitled(listener);
+    scriptFetch(stop("Answer."), stop("Nice title"));
+    const reply = await askAssistant(null, "question");
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(reply.conversationId));
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not announce a title that lost the race to a rename", async () => {
+    const listener = vi.fn();
+    onAssistantChatTitled(listener);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        if (calls === 2) await gate;
+        return new Response(
+          JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: calls === 1 ? "Answer." : "Late title" } }] })
+        );
+      })
+    );
+    const reply = await askAssistant(null, "question");
+    await vi.waitFor(() => expect(calls).toBe(2));
+    renameAssistantChat(reply.conversationId, "Mine");
+    release();
+    await settle();
+    expect(titleOf(reply.conversationId)).toBe("Mine");
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+// ---- tool visibility and the memory-confirmation setting ---------------------
+
+describe("tool activity", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")),
+      "memory.md"
+    );
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+    store.failSave = false;
+    vi.mocked(completeTask).mockClear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("announces each call as it starts and as it finishes", async () => {
+    const events: any[] = [];
+    scriptFetch(
+      callTools({ id: "c1", name: "get_schedule", args: { date: "2026-10-14" } }),
+      stop("Nothing on.")
+    );
+    const { getEventsForDay } = await import("./googleCalendar");
+    vi.mocked(getEventsForDay).mockResolvedValue({ ok: true, events: [], date: "2026-10-14" });
+
+    await askAssistant(null, "tomorrow?", hooks({ onTool: (e) => events.push(e) }), "req-tools");
+
+    expect(events).toEqual([
+      { requestId: "req-tools", callId: "c1", name: "get_schedule", args: "date: 2026-10-14", phase: "start" },
+      { requestId: "req-tools", callId: "c1", name: "get_schedule", args: "date: 2026-10-14", phase: "end", ok: true },
+    ]);
+  });
+
+  it("reports a failed call and a declined one differently", async () => {
+    const events: any[] = [];
+    scriptFetch(
+      callTools(
+        { id: "a", name: "docker_status" },
+        { id: "b", name: "complete_task", args: { task_id: "t1" } }
+      ),
+      stop("Done.")
+    );
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockResolvedValue({ ok: false, reason: "Docker isn't running", containers: [] });
+    const approvals: any[] = [];
+    const pending = askAssistant(
+      null,
+      "go",
+      hooks({ onTool: (e) => events.push(e), onApproval: (a) => approvals.push(a) })
+    );
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, false);
+    await pending;
+
+    const ends = events.filter((e) => e.phase === "end");
+    expect(ends.find((e) => e.callId === "a")).toMatchObject({ ok: false });
+    expect(ends.find((e) => e.callId === "a").declined).toBeUndefined();
+    expect(ends.find((e) => e.callId === "b")).toMatchObject({ ok: false, declined: true });
+  });
+
+  it("lists calls in the order the model asked for them, however they finish", async () => {
+    const { getDockerContainers } = await import("./docker");
+    const { getDueTasks } = await import("./todoist");
+    // The first call is slow and the second instant: completion order is reversed.
+    vi.mocked(getDueTasks).mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, tasks: [], projects: [] } as any), 40))
+    );
+    vi.mocked(getDockerContainers).mockResolvedValue({ ok: true, containers: [] });
+    scriptFetch(
+      callTools({ id: "slow", name: "get_due_tasks" }, { id: "fast", name: "docker_status" }),
+      stop("Both done.")
+    );
+    const reply = await askAssistant(null, "check both");
+    expect(reply.toolCalls.map((c) => c.name)).toEqual(["get_due_tasks", "docker_status"]);
+  });
+
+  it("shows the same tool log live and after reopening the chat", async () => {
+    scriptFetch(
+      callTools({ id: "c1", name: "get_due_tasks" }),
+      stop("One task.")
+    );
+    const reply = await askAssistant(null, "what's due?");
+    const reopened = openAssistantChat(reply.conversationId).items[1];
+    // Same objects, field for field: the log never changes shape on reload.
+    expect(reopened.toolCalls).toEqual(reply.toolCalls);
+    expect(reply.toolCalls[0]).toMatchObject({ name: "get_due_tasks", ok: true });
+    expect(reply.toolCalls[0].result).toContain("Ship the POC");
+  });
+
+  it("works without an onTool hook", async () => {
+    scriptFetch(callTools({ id: "c1", name: "docker_status" }), stop("Done."));
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockResolvedValue({ ok: true, containers: [] });
+    await expect(askAssistant(null, "docker?", { onText: () => {}, onApproval: () => {} })).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe("asking before saving to memory", () => {
+  const rememberCall = callTools({ id: "m1", name: "remember", args: { fact: "Likes terse answers" } });
+  let memoryFile: string;
+
+  beforeEach(() => {
+    memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false };
+    store.chats.clear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks for every save by default, even in a chat that has read nothing third-party", async () => {
+    scriptFetch(rememberCall, stop("Noted."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "remember that", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({ tool: "remember", summary: "Save to memory: “Likes terse answers”" });
+    expect(fs.existsSync(memoryFile)).toBe(false); // nothing written before the click
+
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+    expect(reply.remembered).toEqual(["Likes terse answers"]);
+    expect(fs.readFileSync(memoryFile, "utf8")).toMatch(/Likes terse answers/);
+  });
+
+  it("writes nothing when the user declines", async () => {
+    scriptFetch(rememberCall, stop("Okay."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "remember that", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, false);
+    const reply = await pending;
+    expect(reply.remembered).toEqual([]);
+    expect(reply.toolCalls[0]).toMatchObject({ name: "remember", ok: false, declined: true });
+    expect(fs.existsSync(memoryFile)).toBe(false);
+  });
+
+  it("relaxes to the old behaviour when turned off: direct in a clean chat", async () => {
+    settings.assistant.askBeforeRemember = false;
+    scriptFetch(rememberCall, stop("Noted."));
+    const approvals: any[] = [];
+    const reply = await askAssistant(null, "remember that", hooks({ onApproval: (a) => approvals.push(a) }));
+    expect(approvals).toEqual([]);
+    expect(reply.remembered).toEqual(["Likes terse answers"]);
+  });
+
+  it("still asks after third-party text has been read, even when turned off", async () => {
+    settings.assistant.askBeforeRemember = false;
+    scriptFetch(callTools({ id: "t", name: "get_due_tasks" }), rememberCall, stop("Done."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "what's due, and remember it", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].tool).toBe("remember");
+    answerApproval(approvals[0].approvalId, false);
+    await pending;
+    expect(fs.existsSync(memoryFile)).toBe(false);
+  });
+});
