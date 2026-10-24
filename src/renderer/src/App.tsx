@@ -35,6 +35,9 @@ import type {
   YnabCategoriesResult,
   YnabPayeesResult,
   YnabMonthResult,
+  YnabTrendsResult,
+  YnabNetWorthResult,
+  YnabMoneyMovementsResult,
   NoteContent,
   BillItem,
   CardItem,
@@ -55,6 +58,9 @@ import YnabAccountsWidget from "./components/YnabAccountsWidget";
 import YnabUnapprovedWidget from "./components/YnabUnapprovedWidget";
 import BillsWidget from "./components/BillsWidget";
 import BudgetHealthWidget from "./components/BudgetHealthWidget";
+import SpendingTrendsWidget from "./components/SpendingTrendsWidget";
+import NetWorthWidget from "./components/NetWorthWidget";
+import MoneyMovementsWidget from "./components/MoneyMovementsWidget";
 import TodayStrip from "./components/TodayStrip";
 import FinanceReviewLogWidget from "./components/FinanceReviewLogWidget";
 import ManagedProcessesWidget from "./components/ManagedProcessesWidget";
@@ -254,6 +260,9 @@ export default function App() {
   const [ynabCategories, setYnabCategories] = useState<YnabCategoriesResult | null>(null);
   const [ynabPayees, setYnabPayees] = useState<YnabPayeesResult | null>(null);
   const [budgetHealth, setBudgetHealth] = useState<YnabMonthResult | null>(null);
+  const [ynabTrends, setYnabTrends] = useState<YnabTrendsResult | null>(null);
+  const [ynabNetWorth, setYnabNetWorth] = useState<YnabNetWorthResult | null>(null);
+  const [ynabMovements, setYnabMovements] = useState<YnabMoneyMovementsResult | null>(null);
   const [financeReviewLog, setFinanceReviewLog] = useState<NoteContent | null>(null);
   const [bills, setBills] = useState<BillItem[]>([]);
   const [cards, setCards] = useState<CardItem[]>([]);
@@ -328,6 +337,9 @@ export default function App() {
       window.api.ynab.scheduledTransactions().then(setYnabScheduled),
       window.api.ynab.categories().then(setYnabCategories),
       window.api.ynab.payees().then(setYnabPayees),
+      window.api.ynab.trends().then(setYnabTrends),
+      window.api.ynab.netWorth().then(setYnabNetWorth),
+      window.api.ynab.moneyMovements().then(setYnabMovements),
     ]);
   }, [loadYnabUnapproved]);
   const loadFinanceReviewLog = useCallback(async () => {
@@ -910,6 +922,15 @@ export default function App() {
           </div>
           <div className="slot slot-ynab-budgethealth">
             <BudgetHealthWidget data={budgetHealth} />
+          </div>
+          <div className="slot slot-ynab-trends">
+            <SpendingTrendsWidget data={ynabTrends} />
+          </div>
+          <div className="slot slot-ynab-networth">
+            <NetWorthWidget data={ynabNetWorth} />
+          </div>
+          <div className="slot slot-ynab-movements">
+            <MoneyMovementsWidget data={ynabMovements} />
           </div>
         </main>
       )}

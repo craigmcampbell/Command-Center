@@ -127,7 +127,9 @@ Three walled-off parts — this separation is the security model, keep it intact
   - `services/ynab.ts` — YNAB REST API (api.ynab.com/v1): account balances,
     unapproved transactions, this month's scheduled transactions, categories,
     and the approve/clear/categorise/memo mutations behind the Finances tab.
-    Fails soft like the other API services.
+    Fails soft like the other API services. Accounts, payees and scheduled
+    transactions go through the delta cache in `ynabDelta.ts` (see "YNAB history
+    and delta requests" below); `ynabInsights.ts` holds the read-only history views.
   - `services/bills.ts` / `services/cards.ts` — manually-tracked recurring bills
     and credit cards for the Finances tab. Plain SQLite CRUD, same shape as
     `links.ts`. Deliberately independent of YNAB's own scheduled transactions:
@@ -431,6 +433,43 @@ that creates the view.
 All CodeMirror styling lives in `EditorView.theme()` next to the feature it
 belongs to, never in `styles.css` — which holds only the React chrome around
 the editor (`.md-toolbar`, `.md-conflict`, `.md-outline-*`, `.scratchpad-*`).
+
+## YNAB history and delta requests
+
+`services/ynabDelta.ts` keeps an in-memory copy of each unfiltered YNAB collection
+and sends `last_knowledge_of_server`, merging the changed rows (deleted ones are
+flagged, not omitted). Nothing is persisted: a restart is one full fetch. **Never
+use it on a server-side-filtered request** — a delta against `?type=unapproved`
+never reports a row that *left* the filter, so approved transactions would stay in
+the cache; that is why `getUnapprovedTransactions` still fetches in full.
+Categories are not delta-cached either: their nested groups would need a merge
+whose semantics weren't verifiable without a live token.
+
+`services/ynabInsights.ts` stores nothing. **Spending trends** come from
+`/months` (delta-cached) plus one `/months/{m}` per month for category detail;
+past months are reused for 30 minutes unless their totals change, the current
+month is always refetched. The "Credit Card Payments" group is excluded or every
+card purchase would count twice. **Net worth** is worked backwards from current
+balances (balance now minus everything dated after each month), so it is right
+from the first poll with no snapshots to record; closed accounts are kept (a
+transfer out of one needs both legs) and accounts hidden in the Accounts widget
+are left out. **Money movements** is `/money_movements`, null side = Ready to
+Assign.
+
+**Credit-card utilization trend** (Bills/Cards widget → Utilization) uses the same
+backwards reconstruction per account (`getAccountBalanceHistory`, sharing net
+worth's transaction fetch). The renderer combines it with each card's manually
+tracked limit — measured against *today's* limit for every month, since YNAB has
+no record of past limits — and the last point is the live balance. Only a
+negative balance counts as owed; an overpaid card is zero, not debt.
+
+Mutations (all plain `ipcMain.handle`, never `readHandler`): `importTransactions`
+(Direct Import), `approveTransactions` (bulk PATCH, chunks of 100, reports how far
+it got), `splitTransaction` (re-reads the transaction from YNAB and checks the
+lines sum to its real amount in milliunits before PATCHing `subtransactions`; YNAB
+cannot edit the lines of an existing split, so the UI offers Split only on plain
+rows). The renderer sends the ids it showed for bulk approve, only categorised or
+split rows, behind a confirm click.
 
 ## Assistant tab
 

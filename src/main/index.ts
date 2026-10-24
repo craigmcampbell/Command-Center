@@ -162,7 +162,16 @@ import {
   setTransactionCategory as setYnabTransactionCategory,
   setTransactionMemo as setYnabTransactionMemo,
   createTransaction as createYnabTransaction,
+  importTransactions as importYnabTransactions,
+  approveTransactions as approveYnabTransactions,
+  splitTransaction as splitYnabTransaction,
 } from "./services/ynab";
+import {
+  getSpendingTrends as getYnabTrends,
+  getNetWorthHistory as getYnabNetWorth,
+  getAccountBalanceHistory as getYnabAccountHistory,
+  getMoneyMovements as getYnabMoneyMovements,
+} from "./services/ynabInsights";
 import {
   initBills,
   listBills,
@@ -286,6 +295,7 @@ import type {
   ProcessConfig,
   YnabScalarConfig,
   YnabNewTransactionInput,
+  YnabSplitPart,
   OpenRouterScalarConfig,
   OpenRouterPeriod,
   OpenAIScalarConfig,
@@ -827,6 +837,21 @@ ipcMain.handle("ynab:setTransactionMemo", (_evt, transactionId: string, memo: st
 ipcMain.handle("ynab:createTransaction", (_evt, input: YnabNewTransactionInput) =>
   createYnabTransaction(getYnabSettings(), input)
 );
+// Import, bulk approve and split change YNAB data, so they are plain handlers:
+// a coalesced duplicate call would silently drop a second click.
+ipcMain.handle("ynab:importTransactions", () => importYnabTransactions(getYnabSettings()));
+ipcMain.handle("ynab:approveTransactions", (_evt, transactionIds: string[]) =>
+  approveYnabTransactions(getYnabSettings(), transactionIds)
+);
+ipcMain.handle("ynab:splitTransaction", (_evt, transactionId: string, parts: YnabSplitPart[]) =>
+  splitYnabTransaction(getYnabSettings(), transactionId, parts)
+);
+readHandler("ynab:trends", () => getYnabTrends(getYnabSettings()));
+readHandler("ynab:netWorth", () => getYnabNetWorth(getYnabSettings()));
+readHandler("ynab:accountHistory", (_evt, accountIds: string[]) =>
+  getYnabAccountHistory(getYnabSettings(), accountIds)
+);
+readHandler("ynab:moneyMovements", () => getYnabMoneyMovements(getYnabSettings()));
 ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);
   return getYnabAccounts(getYnabSettings());

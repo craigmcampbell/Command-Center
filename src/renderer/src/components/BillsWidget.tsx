@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
-import type { BillItem, CardItem, YnabAccount, YnabAccountsResult } from "../../../shared/types";
+import type {
+  BillItem,
+  CardItem,
+  YnabAccount,
+  YnabAccountHistoryResult,
+  YnabAccountsResult,
+} from "../../../shared/types";
 import Panel from "./Panel";
 import Select from "./Select";
 import { IconCheck, IconNote, IconPencil, IconPlus, IconTrash, IconX } from "./icons";
@@ -13,7 +19,7 @@ interface BillsWidgetProps {
   ynabAccounts: YnabAccountsResult | null;
 }
 
-type Tab = "bills" | "cards";
+type Tab = "bills" | "cards" | "utilization";
 
 function formatCurrency(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -298,6 +304,46 @@ const HIGH_APR_THRESHOLD = 7;
 // Utilization above this is colored red (--alert), same "carry too much of a
 // balance" signal as HIGH_APR_THRESHOLD, not a credit-score-modeling figure.
 const UTILIZATION_WARN_THRESHOLD = 30;
+// Amber band just under the warning line, so a card creeping toward it shows
+// before it crosses.
+const UTILIZATION_NEAR_THRESHOLD = 20;
+
+function utilizationTone(pct: number): "ok" | "near" | "over" {
+  if (pct > UTILIZATION_WARN_THRESHOLD) return "over";
+  if (pct >= UTILIZATION_NEAR_THRESHOLD) return "near";
+  return "ok";
+}
+
+// A card contributes only when it's linked to a live YNAB account and has a
+// limit to divide by. A YNAB credit-card balance is negative when money is
+// owed; a positive one (overpaid) is a credit, not debt, so it counts as zero.
+function cardUsage(
+  item: CardItem,
+  accounts: YnabAccount[]
+): { owed: number; pct: number } | null {
+  if (!item.ynabAccountId || item.creditLimit <= 0) return null;
+  const account = accounts.find((a) => a.id === item.ynabAccountId);
+  if (!account) return null;
+  const owed = Math.max(0, -account.balance);
+  return { owed, pct: (owed / item.creditLimit) * 100 };
+}
+
+function UtilizationBar({ owed, limit, pct }: { owed: number; limit: number; pct: number }) {
+  return (
+    <span
+      className="budget-spent"
+      title={`${formatCurrency(owed)} of ${formatCurrency(limit)} limit`}
+    >
+      <span className="budget-spent-track">
+        <span
+          className={`budget-spent-fill ${utilizationTone(pct)}`}
+          style={{ width: `${Math.min(100, pct)}%` }}
+        />
+      </span>
+      <span className="budget-spent-pct">{Math.round(pct)}%</span>
+    </span>
+  );
+}
 
 function CardFields({
   name,
@@ -471,19 +517,14 @@ function CardRow({
     balanceCell = <span className="muted">—</span>;
   } else if (!linkedAccount) {
     balanceCell = <span className="muted">Link unavailable</span>;
+  } else if (item.creditLimit <= 0) {
+    balanceCell = <span className="muted">No limit set</span>;
   } else {
-    // A YNAB credit-card balance is negative when money is owed.
-    const liveBalance = Math.abs(linkedAccount.balance);
-    const utilizationPct = item.creditLimit > 0 ? (liveBalance / item.creditLimit) * 100 : null;
-    balanceCell = (
-      <>
-        <span className={utilizationPct != null && utilizationPct > UTILIZATION_WARN_THRESHOLD ? "ynab-balance negative" : "ynab-balance"}>
-          {formatCurrency(liveBalance)}
-        </span>
-        {utilizationPct != null && (
-          <span className="card-utilization">{Math.round(utilizationPct)}%</span>
-        )}
-      </>
+    const usage = cardUsage(item, ynabAccountOptions);
+    balanceCell = usage ? (
+      <UtilizationBar owed={usage.owed} limit={item.creditLimit} pct={usage.pct} />
+    ) : (
+      <span className="muted">—</span>
     );
   }
 
@@ -601,7 +642,7 @@ function CardsBody({
           <th className="card-col-name">Name</th>
           <th className="card-col-limit">Limit</th>
           <th className="card-col-apr">APR</th>
-          <th className="card-col-balance">Balance</th>
+          <th className="card-col-balance">Utilization</th>
           <th className="card-col-actions" aria-label="Actions" />
         </tr>
       </thead>
@@ -627,6 +668,202 @@ function CardsBody({
         <CardAddRow ynabAccountOptions={ynabAccountOptions} onAdd={handleAdd} />
       </tbody>
     </table>
+  );
+}
+
+const SEGMENT_COUNT = 5;
+
+// Overall utilization across every linked card: total owed over total limit,
+// drawn as one bar split into a segment per card (so you can see which card is
+// the weight), with the 30% line marked. Cards that aren't linked to a YNAB
+// account, or have no limit, can't contribute and are counted but left out.
+const TREND_VIEW_WIDTH = 320;
+const TREND_VIEW_HEIGHT = 110;
+const TREND_PAD = 8;
+
+function monthLabel(month: string): string {
+  return new Date(month + "T12:00:00").toLocaleDateString("en-US", { month: "short" });
+}
+
+// Overall utilization at each month-end: what was owed across the counted cards
+// over their combined limit. Uses today's limits for every month — a limit
+// raised last spring would otherwise make older months look worse than they
+// were, but YNAB has no record of past limits to use instead.
+function UtilizationTrend({ months, values }: { months: string[]; values: number[] }) {
+  const yMax = Math.max(40, Math.ceil(Math.max(...values) / 10) * 10);
+  const stepX = (TREND_VIEW_WIDTH - TREND_PAD * 2) / Math.max(1, values.length - 1);
+  const x = (i: number) => TREND_PAD + i * stepX;
+  const y = (v: number) => TREND_PAD + (1 - v / yMax) * (TREND_VIEW_HEIGHT - TREND_PAD * 2);
+  const line = values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const first = values[0];
+  const last = values[values.length - 1];
+  const change = last - first;
+
+  return (
+    <div className="util-trend">
+      <div className="util-trend-head">
+        <span className="util-trend-title">Last {values.length} months</span>
+        <span className="muted">
+          {Math.abs(change) < 0.5 ? "about the same as" : `${change > 0 ? "up" : "down"} ${Math.abs(Math.round(change))} points from`}{" "}
+          {monthLabel(months[0])}
+        </span>
+      </div>
+      <svg
+        className="util-trend-chart"
+        viewBox={`0 0 ${TREND_VIEW_WIDTH} ${TREND_VIEW_HEIGHT}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Overall credit utilization by month"
+      >
+        <line
+          className="util-trend-threshold"
+          x1={TREND_PAD}
+          x2={TREND_VIEW_WIDTH - TREND_PAD}
+          y1={y(UTILIZATION_WARN_THRESHOLD)}
+          y2={y(UTILIZATION_WARN_THRESHOLD)}
+          vectorEffect="non-scaling-stroke"
+        />
+        <path className="util-trend-line" d={line} vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="util-trend-axis">
+        <span>{monthLabel(months[0])}</span>
+        <span>{UTILIZATION_WARN_THRESHOLD}% line dashed</span>
+        <span>{monthLabel(months[months.length - 1])}</span>
+      </div>
+      <ul className="util-trend-values">
+        {values.map((v, i) => (
+          <li key={months[i]} className={utilizationTone(v)} title={`${monthLabel(months[i])}: ${v.toFixed(1)}%`}>
+            <span>{Math.round(v)}%</span>
+            <span>{monthLabel(months[i])}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function UtilizationBody({
+  cards,
+  ynabAccounts,
+}: {
+  cards: CardItem[];
+  ynabAccounts: YnabAccountsResult | null;
+}) {
+  const accounts = ynabAccounts?.ok ? ynabAccounts.accounts : [];
+  const counted = cards
+    .map((card) => ({ card, usage: cardUsage(card, accounts) }))
+    .filter((c): c is { card: CardItem; usage: { owed: number; pct: number } } => c.usage !== null);
+  const skipped = cards.length - counted.length;
+
+  // History is keyed on which accounts are counted, not on balances, so a
+  // balance ticking over on the 5-minute poll doesn't refetch it.
+  const accountKey = counted.map((c) => c.card.ynabAccountId).join(",");
+  const [history, setHistory] = useState<YnabAccountHistoryResult | null>(null);
+  useEffect(() => {
+    if (!accountKey) {
+      setHistory(null);
+      return;
+    }
+    let cancelled = false;
+    window.api.ynab.accountHistory(accountKey.split(",")).then((res) => {
+      if (!cancelled) setHistory(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
+
+  const series = useMemo(() => {
+    if (!history?.ok || history.months.length === 0) return null;
+    const present = counted.filter((c) => history.balances[c.card.ynabAccountId as string]);
+    const limit = present.reduce((sum, c) => sum + c.card.creditLimit, 0);
+    if (present.length === 0 || limit <= 0) return null;
+    return history.months.map((_, i) => {
+      const owed = present.reduce(
+        (sum, c) => sum + Math.max(0, -history.balances[c.card.ynabAccountId as string][i]),
+        0
+      );
+      return (owed / limit) * 100;
+    });
+    // `counted` is rebuilt every render; its identity is carried by accountKey
+    // plus the limits, which can't change without the cards prop doing so.
+  }, [history, cards, accountKey]);
+
+  if (ynabAccounts && !ynabAccounts.ok) {
+    return <p className="muted">{ynabAccounts.reason}</p>;
+  }
+  if (counted.length === 0) {
+    return (
+      <p className="muted">
+        Link a card to a YNAB account (and give it a limit) on the Cards tab to see utilization.
+      </p>
+    );
+  }
+
+  const totalOwed = counted.reduce((sum, c) => sum + c.usage.owed, 0);
+  const totalLimit = counted.reduce((sum, c) => sum + c.card.creditLimit, 0);
+  const overall = (totalOwed / totalLimit) * 100;
+  const tone = utilizationTone(overall);
+  const underTarget = (totalLimit * UTILIZATION_WARN_THRESHOLD) / 100;
+  const payDown = Math.max(0, totalOwed - underTarget);
+  // Segments are widths of the *limit*, so the filled part of the bar is the
+  // utilization itself and the threshold marker sits at a true 30%.
+  const ordered = counted.slice().sort((a, b) => b.usage.owed - a.usage.owed);
+
+  return (
+    <div className="util">
+      <div className="util-headline">
+        <span className={`util-pct ${tone}`}>{overall.toFixed(overall < 10 ? 1 : 0)}%</span>
+        <span className="muted">
+          {formatCurrency(totalOwed)} of {formatCurrency(totalLimit)} across {counted.length}{" "}
+          {counted.length === 1 ? "card" : "cards"}
+        </span>
+      </div>
+      <div className="util-track" role="img" aria-label={`Overall utilization ${Math.round(overall)}%`}>
+        {ordered.map((c, i) => (
+          <span
+            key={c.card.id}
+            className={`util-segment seg-${i % SEGMENT_COUNT}`}
+            style={{ width: `${(c.usage.owed / totalLimit) * 100}%` }}
+            title={`${c.card.name}: ${formatCurrency(c.usage.owed)}`}
+          />
+        ))}
+        <span className="util-marker" style={{ left: `${UTILIZATION_WARN_THRESHOLD}%` }} />
+      </div>
+      <div className="util-scale">
+        <span>0%</span>
+        <span style={{ left: `${UTILIZATION_WARN_THRESHOLD}%` }} className="util-scale-mark">
+          {UTILIZATION_WARN_THRESHOLD}%
+        </span>
+        <span>100%</span>
+      </div>
+      <ul className="util-legend">
+        {ordered.map((c, i) => (
+          <li key={c.card.id}>
+            <span className={`util-swatch seg-${i % SEGMENT_COUNT}`} />
+            <span className="util-legend-name">{c.card.name}</span>
+            <span className="util-legend-value">
+              {formatCurrency(c.usage.owed)} · {Math.round(c.usage.pct)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted util-note">
+        {payDown > 0
+          ? `Paying down ${formatCurrency(payDown)} would bring you under ${UTILIZATION_WARN_THRESHOLD}%.`
+          : `Under the ${UTILIZATION_WARN_THRESHOLD}% line.`}
+        {skipped > 0 &&
+          ` ${skipped} ${skipped === 1 ? "card isn't" : "cards aren't"} linked to a YNAB account or ${skipped === 1 ? "has" : "have"} no limit, so ${skipped === 1 ? "it's" : "they're"} not counted.`}
+      </p>
+      {history && !history.ok && <p className="muted util-note">Trend unavailable: {history.reason}</p>}
+      {series && history?.ok && <UtilizationTrend months={history.months} values={series} />}
+      {series && (
+        <p className="muted util-note">
+          Worked back from each card's transactions and measured against today's limits, so it's
+          month-end balance rather than statement balance.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -656,16 +893,28 @@ export default function BillsWidget({
         >
           Cards
         </button>
+        <button
+          type="button"
+          className={`scratchpad-mode ${tab === "utilization" ? "active" : ""}`}
+          onClick={() => setTab("utilization")}
+        >
+          Utilization
+        </button>
       </div>
     </div>
   );
 
   return (
-    <Panel title={tab === "bills" ? "Bills" : "Cards"} headerRight={headerRight}>
+    <Panel
+      title={tab === "bills" ? "Bills" : tab === "cards" ? "Cards" : "Credit Utilization"}
+      headerRight={headerRight}
+    >
       {tab === "bills" ? (
         <BillsBody bills={bills} onChange={onChange} />
-      ) : (
+      ) : tab === "cards" ? (
         <CardsBody cards={cards} onCardsChange={onCardsChange} ynabAccounts={ynabAccounts} />
+      ) : (
+        <UtilizationBody cards={cards} ynabAccounts={ynabAccounts} />
       )}
     </Panel>
   );
