@@ -486,12 +486,18 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         </div>
       )}
       {!pending && Boolean(item.toolCalls?.length) && <ToolLog calls={item.toolCalls!} />}
+      {item.role === "assistant" && !pending && item.costUnreported && (
+        <p className="muted assistant-cost-note">
+          The provider reported no cost for part of this reply, so the spending caps couldn’t count it.
+        </p>
+      )}
       {item.role === "assistant" && !pending && (
         <ReplyActions
           text={item.text}
           question={question}
           canRegenerate={canRegenerate}
           onRegenerate={onRegenerate}
+          model={item.model}
         />
       )}
     </div>
@@ -743,11 +749,14 @@ function ReplyActions({
   question,
   canRegenerate,
   onRegenerate,
+  model,
 }: {
   text: string;
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  // Who answered; a fallback model when the configured one failed.
+  model?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -770,6 +779,11 @@ function ReplyActions({
         </button>
       )}
       <SaveToNotes build={() => replyToMarkdown(question, text)} label="Save" />
+      {model && (
+        <span className="muted assistant-reply-model" title="The model that answered">
+          {model}
+        </span>
+      )}
     </div>
   );
 }

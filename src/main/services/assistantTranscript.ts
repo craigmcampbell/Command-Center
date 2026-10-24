@@ -44,7 +44,9 @@ export type ChatMessage =
       // accepted (assistantAttachments.ts); see `toWire` for how they are sent.
       attachments?: AssistantAttachment[];
     }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean }
+  // `model` is who answered (OpenRouter's report; a fallback differs from the
+  // configured model). Display only: `toWire` never sends it.
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean; model?: string }
   // `attachments` on a tool message are files the tool produced (a generated
   // image): shown with the reply, never sent back to the model.
   | { role: "tool"; tool_call_id: string; content: string; archived?: boolean; attachments?: AssistantAttachment[] };
@@ -220,6 +222,7 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
     }
     const text = m.content?.trim();
     if (text) current.text += (current.text ? "\n\n" : "") + text;
+    if (m.model) current.model = m.model;
 
     for (const call of m.tool_calls ?? []) {
       const described = describeToolCall(call, toolResults.get(call.id));

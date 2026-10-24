@@ -38,7 +38,9 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantModelCheck,
   AssistantScalarConfig,
+  AssistantSpendToday,
   RailwayScalarConfig,
   ProcessConfig,
   SubredditConfig,
@@ -1364,6 +1366,41 @@ function FirecrawlCard({
   );
 }
 
+// "1.50", "$2" → dollars; blank, zero or junk → no cap.
+function parseUsd(text: string): number | undefined {
+  const n = Number(text.trim().replace(/^\$/, ""));
+  return text.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function usdText(value: number | undefined): string {
+  return value === undefined ? "" : String(value);
+}
+
+// One slug per line or comma-separated, in the order they should be tried.
+function parseSlugList(text: string): string[] {
+  return [...new Set(text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean))];
+}
+
+function formatSpend(today: AssistantSpendToday): string {
+  const cost = `$${today.costUsd < 0.01 && today.costUsd > 0 ? today.costUsd.toFixed(4) : today.costUsd.toFixed(2)}`;
+  const unseen = today.unpriced
+    ? `, plus ${today.unpriced} request${today.unpriced === 1 ? "" : "s"} with no reported cost`
+    : "";
+  return `${cost} across ${today.requests} request${today.requests === 1 ? "" : "s"}${unseen}`;
+}
+
+// Warnings from OpenRouter's model list about the slugs just saved. Advisory:
+// the settings are saved either way.
+function modelWarnings(checks: AssistantModelCheck[]): string[] {
+  const out: string[] = [];
+  for (const c of checks) {
+    if (!c.ok) out.push(`Couldn't check ${c.slug || "the model"}: ${c.reason ?? "unknown error"}.`);
+    else if (!c.known) out.push(`${c.slug} isn't in OpenRouter's model list. Check the spelling.`);
+    else if (!c.tools) out.push(`${c.slug} doesn't list tool calling, which the assistant needs.`);
+  }
+  return out;
+}
+
 function AssistantCard({
   value,
   onSaved,
@@ -1386,6 +1423,11 @@ function AssistantCard({
     value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)
   );
   const [systemPrompt, setSystemPrompt] = useState(value.systemPrompt ?? "");
+  const [fallbacks, setFallbacks] = useState((value.fallbackModels ?? []).join("\n"));
+  const [replyCap, setReplyCap] = useState(usdText(value.maxCostPerReplyUsd));
+  const [dailyCap, setDailyCap] = useState(usdText(value.maxCostPerDayUsd));
+  const [spend, setSpend] = useState<AssistantSpendToday | null>(null);
+  const [checks, setChecks] = useState<AssistantModelCheck[] | null>(null);
   const [hotkey, setHotkey] = useState(currentHotkey);
   const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1398,6 +1440,9 @@ function AssistantCard({
     setMemoryPath(value.memoryPath ?? "");
     setCompactAt(value.compactAtTokens === undefined ? "" : String(value.compactAtTokens));
     setSystemPrompt(value.systemPrompt ?? "");
+    setFallbacks((value.fallbackModels ?? []).join("\n"));
+    setReplyCap(usdText(value.maxCostPerReplyUsd));
+    setDailyCap(usdText(value.maxCostPerDayUsd));
     setHotkey(value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
   }, [
     value.apiKey,
@@ -1408,10 +1453,14 @@ function AssistantCard({
     value.memoryPath,
     value.compactAtTokens,
     value.systemPrompt,
+    value.fallbackModels,
+    value.maxCostPerReplyUsd,
+    value.maxCostPerDayUsd,
     value.quickHotkey,
   ]);
   useEffect(() => {
     void window.api.assistant.hotkeyStatus().then(setStatus);
+    void window.api.assistant.spendToday().then(setSpend);
   }, []);
 
   const dirty =
@@ -1423,6 +1472,9 @@ function AssistantCard({
     memoryPath !== (value.memoryPath ?? "") ||
     compactAt !== (value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)) ||
     systemPrompt !== (value.systemPrompt ?? "") ||
+    parseSlugList(fallbacks).join("\n") !== (value.fallbackModels ?? []).join("\n") ||
+    replyCap !== usdText(value.maxCostPerReplyUsd) ||
+    dailyCap !== usdText(value.maxCostPerDayUsd) ||
     hotkey !== currentHotkey;
   const hotkeyError = hotkey.trim() ? validateAccelerator(hotkey) : null;
 
@@ -1430,6 +1482,10 @@ function AssistantCard({
     e.preventDefault();
     if (hotkeyError) return;
     setSaving(true);
+    const fallbackModels = parseSlugList(fallbacks);
+    const slugs = [model.trim(), ...fallbackModels].filter(Boolean);
+    const slugsChanged =
+      slugs.join("\n") !== [value.model?.trim() ?? "", ...(value.fallbackModels ?? [])].filter(Boolean).join("\n");
     const result = await window.api.settings.assistant.update({
       apiKey: apiKey || undefined,
       model: model.trim() || undefined,
@@ -1439,12 +1495,28 @@ function AssistantCard({
       memoryPath: memoryPath.trim() || undefined,
       compactAtTokens: /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : undefined,
       systemPrompt: systemPrompt.trim() || undefined,
+      fallbackModels: fallbackModels.length ? fallbackModels : undefined,
+      maxCostPerReplyUsd: parseUsd(replyCap),
+      maxCostPerDayUsd: parseUsd(dailyCap),
       quickHotkey: hotkey.trim(),
     });
     setStatus(await window.api.assistant.hotkeyStatus());
     setSaving(false);
     onSaved(result);
+    // Checked after saving, never instead of it: the list can lag a new model.
+    if (slugsChanged && slugs.length) {
+      setChecks(null);
+      setChecks(await Promise.all(slugs.map((slug) => window.api.assistant.checkModel(slug))));
+    }
   }
+
+  const warnings = checks ? modelWarnings(checks) : [];
+  // The primary model's context window, for a compaction suggestion that is
+  // only worth showing when it differs from what's set.
+  const primary = checks?.[0]?.slug === model.trim() ? checks[0] : null;
+  const effectiveCompactAt = /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : 30000;
+  const suggestion =
+    primary?.suggestedCompactAt && primary.suggestedCompactAt !== effectiveCompactAt ? primary : null;
 
   return (
     <form className="settings-card" onSubmit={handleSave}>
@@ -1470,6 +1542,33 @@ function AssistantCard({
           spellCheck={false}
         />
       </div>
+      {warnings.map((w) => (
+        <p key={w} className="settings-card-warning">
+          {w}
+        </p>
+      ))}
+      {primary?.known && primary.tools && !suggestion && warnings.length === 0 && (
+        <p className="settings-card-hint">
+          {primary.slug} supports tool calling
+          {primary.contextLength ? ` (${primary.contextLength.toLocaleString()}-token context)` : ""}.
+        </p>
+      )}
+      <div className="settings-field-row settings-field-row-top">
+        <label>Fallbacks</label>
+        <textarea
+          className="settings-input settings-textarea"
+          value={fallbacks}
+          onChange={(e) => setFallbacks(e.target.value)}
+          placeholder="One model slug per line, tried in order (optional)"
+          rows={2}
+          spellCheck={false}
+        />
+      </div>
+      <p className="settings-card-hint">
+        If the model is rate-limited, down or rejects a request, OpenRouter tries these in order and
+        bills whichever one answers. Each reply shows which model answered. They need tool calling
+        too.
+      </p>
       <label className="settings-checkbox-label">
         <input
           type="checkbox"
@@ -1528,10 +1627,53 @@ function AssistantCard({
           spellCheck={false}
         />
       </div>
+      {suggestion && (
+        <p className="settings-card-hint">
+          {suggestion.slug} has a {suggestion.contextLength!.toLocaleString()}-token context window;{" "}
+          {suggestion.suggestedCompactAt!.toLocaleString()} would suit it.{" "}
+          <button
+            type="button"
+            className="assistant-link"
+            onClick={() => setCompactAt(String(suggestion.suggestedCompactAt))}
+          >
+            Use {suggestion.suggestedCompactAt!.toLocaleString()}
+          </button>
+        </p>
+      )}
       <p className="settings-card-hint">
         When a chat would grow past this, its older turns are summarized (one extra request on the
         main model) and the model reads the summary instead. Nothing is deleted: the full chat stays
         on screen and searchable. The Compact button in the tab does it on demand.
+      </p>
+      <div className="settings-field-row">
+        <label>Max per reply</label>
+        <input
+          className="settings-input"
+          inputMode="decimal"
+          value={replyCap}
+          onChange={(e) => setReplyCap(e.target.value)}
+          placeholder="(no cap) USD, e.g. 0.50"
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Max per day</label>
+        <input
+          className="settings-input"
+          inputMode="decimal"
+          value={dailyCap}
+          onChange={(e) => setDailyCap(e.target.value)}
+          placeholder="(no cap) USD, e.g. 5"
+          spellCheck={false}
+        />
+      </div>
+      <p className="settings-card-hint">
+        Spending caps use the cost OpenRouter reports. A reply stops calling the model once it has
+        cost the per-reply amount (it can overshoot by the one step that crossed it). Once today’s
+        assistant spend — replies, titles and summaries — reaches the daily amount, new questions are
+        refused until tomorrow. A request whose provider reports no cost can’t be counted and is
+        flagged instead of treated as free.
+        {spend && <> Today so far: {formatSpend(spend)}.</>}
       </p>
       <div className="settings-field-row settings-field-row-top">
         <label>Instructions</label>

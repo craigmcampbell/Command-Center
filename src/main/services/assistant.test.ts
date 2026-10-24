@@ -21,7 +21,22 @@ const settings = vi.hoisted(() => ({
     titleModel?: string;
     askBeforeRemember?: boolean;
     compactAtTokens?: number;
+    fallbackModels?: string[];
+    maxCostPerReplyUsd?: number;
+    maxCostPerDayUsd?: number;
   },
+}));
+
+// Today's spend ledger (SQLite in the app). Tests set `today` directly.
+const spend = vi.hoisted(() => ({ today: { costUsd: 0, requests: 0, unpriced: 0 } }));
+vi.mock("./assistantSpend", () => ({
+  recordSpend: (usage: { costUsd: number | null } | undefined) => {
+    if (!usage) return;
+    spend.today.requests += 1;
+    if (usage.costUsd === null) spend.today.unpriced += 1;
+    else spend.today.costUsd += usage.costUsd;
+  },
+  spendToday: () => ({ ...spend.today }),
 }));
 
 // An in-memory stand-in for the SQLite store: better-sqlite3 is built for
@@ -184,6 +199,7 @@ import { completeTask, createTask } from "./todoist";
 import { scrapePage, searchWeb } from "./firecrawlWeb";
 import { generateImage } from "./openaiImages";
 import { estimateTokens } from "./assistantCompaction";
+import { RETRY_POLICY } from "./assistantClient";
 import {
   answerApproval,
   askAssistant,
@@ -199,6 +215,13 @@ import {
   type AskHooks,
 } from "./assistant";
 
+// Retries back off for real in the app; here they happen at once unless a test
+// is about the waiting.
+beforeEach(() => {
+  RETRY_POLICY.baseDelayMs = 0;
+  spend.today = { costUsd: 0, requests: 0, unpriced: 0 };
+});
+
 const hooks = (over: Partial<AskHooks> = {}): AskHooks => ({
   onText: () => {},
   onApproval: () => {},
@@ -208,11 +231,13 @@ const hooks = (over: Partial<AskHooks> = {}): AskHooks => ({
 interface Sent {
   url: string;
   headers: Record<string, string>;
-  body: { model: string; messages: any[]; tools: any[] };
+  body: { model: string; models?: string[]; messages: any[]; tools: any[] };
 }
 
 type Reply =
-  | { status?: number; json: unknown }
+  | { status?: number; json: unknown; headers?: Record<string, string> }
+  // The connection never opened (fetch itself rejects).
+  | { unreachable: true }
   // A server-sent-events body, delivered in pieces; `hang` opens a stream that
   // never produces anything, for the idle-timeout test.
   | { sse: string; hang?: boolean }
@@ -232,6 +257,7 @@ function scriptFetch(...replies: Reply[]): Sent[] {
         body: JSON.parse(init.body as string),
       });
       const reply = replies[Math.min(sent.length - 1, replies.length - 1)];
+      if ("unreachable" in reply) throw new TypeError("fetch failed");
       if ("sse" in reply || "hang" in reply) {
         const encoder = new TextEncoder();
         const pieces =
@@ -250,7 +276,7 @@ function scriptFetch(...replies: Reply[]): Sent[] {
         );
         return new Response(body, { headers: { "content-type": "text/event-stream" } });
       }
-      return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200 });
+      return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200, headers: reply.headers });
     })
   );
   return sent;
@@ -1805,7 +1831,7 @@ describe("compaction", () => {
     const id = await sixTurns();
     settings.assistant.compactAtTokens = 50;
 
-    const sent = scriptFetch({ status: 500, json: { error: { message: "boom" } } }, stop("still answered"));
+    const sent = scriptFetch({ status: 400, json: { error: { message: "boom" } } }, stop("still answered"));
     const reply = await askAssistant(id, "question number 7");
     expect(reply).toMatchObject({ ok: true, text: "still answered" });
     expect(reply.compacted).toBeUndefined();
@@ -2500,5 +2526,293 @@ describe("image generation", () => {
     const reply = await pending;
     expect(approvals).toHaveLength(1);
     expect(reply.remembered).toEqual(["Likes foxes"]);
+  });
+});
+
+// ---- resilience: retries, fallbacks, spending caps ---------------------------
+
+describe("retries", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    RETRY_POLICY.baseDelayMs = 0;
+  });
+
+  const rateLimited = (headers?: Record<string, string>): Reply => ({
+    status: 429,
+    json: { error: { message: "Rate limit exceeded" } },
+    headers,
+  });
+  const serverError: Reply = { status: 502, json: { error: { message: "Bad gateway" } } };
+
+  it("retries a 429, a 5xx and a connection failure before anything has streamed", async () => {
+    const sent = scriptFetch(rateLimited(), serverError, stop("Answered."));
+    const deltas: string[] = [];
+    const reply = await askAssistant(null, "hi", hooks({ onText: (d) => deltas.push(d) }));
+    expect(reply).toMatchObject({ ok: true, text: "Answered." });
+    expect(sent).toHaveLength(3);
+    expect(deltas).toEqual(["Answered."]);
+
+    const again = scriptFetch({ unreachable: true }, stop("Back."));
+    expect(await askAssistant(null, "hi")).toMatchObject({ ok: true, text: "Back." });
+    expect(again).toHaveLength(2);
+  });
+
+  it("gives up after two retries and rolls the turn back", async () => {
+    const sent = scriptFetch(serverError);
+    const reply = await askAssistant(null, "hi");
+    expect(reply).toMatchObject({ ok: false, reason: "Request rejected: Bad gateway" });
+    expect(sent).toHaveLength(3);
+    expect(store.chats.size).toBe(0);
+  });
+
+  it("does not retry a request that can't succeed", async () => {
+    const sent = scriptFetch({ status: 402, json: { error: { message: "Insufficient credits" } } });
+    expect((await askAssistant(null, "hi")).ok).toBe(false);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("retries a stream that drops before any text, without running a tool twice", async () => {
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockReset().mockResolvedValue({ ok: true, containers: [] });
+    const sent = scriptFetch(
+      // Tool-call fragments only, then the connection ends: nothing was shown
+      // and no tool ran, so it is safe to ask again.
+      sse(delta({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "docker_status", arguments: "{" } }] })),
+      sse(
+        delta({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "docker_status", arguments: "{}" } }] }),
+        delta({}, "tool_calls"),
+        "[DONE]"
+      ),
+      sse(delta({ content: "All quiet." }, "stop"), "[DONE]")
+    );
+    const reply = await askAssistant(null, "docker?");
+    expect(reply).toMatchObject({ ok: true, text: "All quiet." });
+    expect(sent).toHaveLength(3);
+    expect(getDockerContainers).toHaveBeenCalledTimes(1);
+  });
+
+  it("never retries once text has streamed", async () => {
+    const sent = scriptFetch(sse(delta({ content: "Half an ans" })), stop("A second answer"));
+    const deltas: string[] = [];
+    const reply = await askAssistant(null, "hi", hooks({ onText: (d) => deltas.push(d) }));
+    expect(reply).toMatchObject({ ok: false, reason: "The response stream ended unexpectedly" });
+    expect(sent).toHaveLength(1);
+    expect(deltas).toEqual(["Half an ans"]);
+  });
+
+  it("never retries a later step once an earlier one has streamed text", async () => {
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockReset().mockResolvedValue({ ok: true, containers: [] });
+    const sent = scriptFetch(
+      sse(
+        delta({ content: "Checking." }),
+        delta({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "docker_status", arguments: "{}" } }] }),
+        delta({}, "tool_calls"),
+        "[DONE]"
+      ),
+      // The second step fails before ITS first token: retried, and the tool
+      // that already ran is not run again.
+      serverError,
+      sse(delta({ content: "Nothing running." }, "stop"), "[DONE]")
+    );
+    const reply = await askAssistant(null, "docker?");
+    expect(reply).toMatchObject({ ok: true, text: "Checking.\n\nNothing running." });
+    expect(sent).toHaveLength(3);
+    expect(getDockerContainers).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits as long as Retry-After asks", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sent = scriptFetch(rateLimited({ "Retry-After": "2" }), stop("Done."));
+    const pending = askAssistant(null, "hi");
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await pending).toMatchObject({ ok: true, text: "Done." });
+    expect(sent).toHaveLength(2);
+  });
+
+  it("backs off between attempts when no Retry-After is given", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    RETRY_POLICY.baseDelayMs = 1000;
+    const sent = scriptFetch(serverError, serverError, stop("Done."));
+    const pending = askAssistant(null, "hi");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sent).toHaveLength(2);
+    // The second wait is longer (1s, then 3s).
+    await vi.advanceTimersByTimeAsync(2800);
+    expect(sent).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await pending).toMatchObject({ ok: true });
+    expect(sent).toHaveLength(3);
+  });
+
+  it("reports a long Retry-After instead of waiting it out", async () => {
+    const sent = scriptFetch(rateLimited({ "Retry-After": "120" }), stop("unused"));
+    expect(await askAssistant(null, "hi")).toMatchObject({ ok: false, reason: "Rate limited — try again shortly" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("stops cleanly when Stop is pressed during the wait", async () => {
+    RETRY_POLICY.baseDelayMs = 10_000;
+    const sent = scriptFetch(serverError, stop("unused"));
+    const pending = askAssistant(null, "hi", hooks(), "r-wait");
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    stopAssistant("r-wait");
+    expect(await pending).toMatchObject({ ok: true, stopped: true, text: "(stopped)" });
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("fallback models", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answeredBy = (model: string, content: string): Reply => ({
+    json: { model, choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] },
+  });
+
+  it("sends no fallback list when none is configured", async () => {
+    const sent = scriptFetch(stop("Hi."));
+    await askAssistant(null, "hi");
+    expect(sent[0].body).not.toHaveProperty("models");
+  });
+
+  it("lets OpenRouter fall back, in order, without repeating the main model", async () => {
+    settings.assistant.fallbackModels = [" backup/one ", "test/model", "backup/two", "backup/one", ""];
+    const sent = scriptFetch(answeredBy("backup/one", "Hi from the backup."));
+    const reply = await askAssistant(null, "hi");
+    expect(sent[0].body).toMatchObject({ model: "test/model", models: ["test/model", "backup/one", "backup/two"] });
+    expect(reply).toMatchObject({ ok: true, model: "backup/one" });
+  });
+
+  it("says which model answered, live and after reopening, from a streamed reply too", async () => {
+    settings.assistant.fallbackModels = ["backup/one"];
+    scriptFetch(sse({ model: "backup/one", ...delta({ content: "Streamed." }, "stop") }, "[DONE]"));
+    const reply = await askAssistant(null, "hi");
+    expect(reply.model).toBe("backup/one");
+    const reopened = openAssistantChat(reply.conversationId);
+    expect(reopened.items.at(-1)).toMatchObject({ role: "assistant", model: "backup/one" });
+    // Never sent back to the provider.
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(reply.conversationId, "again");
+    expect(sent[0].body.messages[2]).toEqual({ role: "assistant", content: "Streamed." });
+  });
+
+  it("uses the fallbacks for an automatic summary too", async () => {
+    settings.assistant.fallbackModels = ["backup/one"];
+    settings.assistant.compactAtTokens = 0;
+    scriptFetch(stop("x".repeat(4000)));
+    let id: string | null = null;
+    for (let i = 0; i < 6; i++) id = (await askAssistant(id, `question ${i} ${"y".repeat(400)}`)).conversationId;
+    settings.assistant.compactAtTokens = 50;
+    const sent = scriptFetch(stop("Summary."), stop("Answer."));
+    await askAssistant(id, "next");
+    expect(sent[0].body.messages[0].content).toMatch(/condense/);
+    expect(sent[0].body.models).toEqual(["test/model", "backup/one"]);
+  });
+});
+
+describe("spending caps", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = { apiKey: "sk-or-test", model: "test/model", memoryPath: memoryFile, autoTitle: false, askBeforeRemember: false };
+    store.chats.clear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const dockerStep = (id: string, cost?: number): Reply =>
+    sse(
+      delta({ tool_calls: [{ index: 0, id, type: "function", function: { name: "docker_status", arguments: "{}" } }] }),
+      delta({}, "tool_calls"),
+      usageChunk(100, 10, cost),
+      "[DONE]"
+    );
+
+  beforeEach(async () => {
+    const { getDockerContainers } = await import("./docker");
+    vi.mocked(getDockerContainers).mockReset().mockResolvedValue({ ok: true, containers: [] });
+  });
+
+  it("stops calling the model once a reply reaches its cap, closing the turn like a failure", async () => {
+    settings.assistant.maxCostPerReplyUsd = 0.25;
+    const sent = scriptFetch(dockerStep("c1", 0.2), dockerStep("c2", 0.1), stop("never sent"));
+    const reply = await askAssistant(null, "docker?");
+    expect(reply).toMatchObject({
+      ok: false,
+      needsSetup: true,
+      reason: "Stopped at the $0.25 per-reply spending cap",
+    });
+    // Two requests: the second crossed the cap, so a third was never made.
+    expect(sent).toHaveLength(2);
+    // Nothing changed, so the turn rolls back like any failure.
+    expect(store.chats.size).toBe(0);
+  });
+
+  it("does not stop a reply that stays under its cap", async () => {
+    settings.assistant.maxCostPerReplyUsd = 1;
+    scriptFetch(dockerStep("c1", 0.2), sse(delta({ content: "Quiet." }, "stop"), usageChunk(10, 2, 0.1), "[DONE]"));
+    const reply = await askAssistant(null, "docker?");
+    expect(reply).toMatchObject({ ok: true, text: "Quiet." });
+    expect(reply.costUnreported).toBeUndefined();
+  });
+
+  it("refuses new turns at the daily cap, with a way into Settings and no request", async () => {
+    settings.assistant.maxCostPerDayUsd = 5;
+    spend.today = { costUsd: 5.01, requests: 40, unpriced: 2 };
+    const sent = scriptFetch(stop("unused"));
+    const reply = await askAssistant(null, "hi");
+    expect(reply).toMatchObject({ ok: false, needsSetup: true });
+    expect(reply.reason).toBe(
+      "Today's assistant spending cap of $5.00 is reached: $5.01 spent (plus 2 requests with no reported cost). Raise or clear it in Settings → Assistant."
+    );
+    expect(sent).toHaveLength(0);
+
+    spend.today.costUsd = 4.99;
+    expect((await askAssistant(null, "hi")).ok).toBe(true);
+  });
+
+  it("counts titles and summaries toward today's spend, as well as failed turns", async () => {
+    settings.assistant.autoTitle = true;
+    scriptFetch(sse(delta({ content: "Hi." }, "stop"), usageChunk(10, 2, 0.01), "[DONE]"));
+    await askAssistant(null, "hello");
+    // The reply and its title request.
+    await vi.waitFor(() => expect(spend.today.requests).toBe(2));
+    expect(spend.today.costUsd).toBeCloseTo(0.02);
+
+    settings.assistant.autoTitle = false;
+    scriptFetch(sse(delta({ content: "partial" }), usageChunk(5, 1, 0.005)));
+    expect((await askAssistant(null, "fails")).ok).toBe(false);
+    expect(spend.today.costUsd).toBeCloseTo(0.025);
+  });
+
+  it("is unset by default: no cap, and no cost note", async () => {
+    spend.today = { costUsd: 1000, requests: 1, unpriced: 0 };
+    scriptFetch(sse(delta({ content: "Hi." }, "stop"), usageChunk(10, 2), "[DONE]"));
+    const reply = await askAssistant(null, "hi");
+    expect(reply.ok).toBe(true);
+    expect(reply.costUnreported).toBeUndefined();
+  });
+
+  it("says when the provider reported no cost, instead of counting it as $0", async () => {
+    settings.assistant.maxCostPerReplyUsd = 0.05;
+    const sent = scriptFetch(dockerStep("c1"), dockerStep("c2"), stop("Done."));
+    const reply = await askAssistant(null, "docker?");
+    // An unpriced step can't trip the cap, so the reply goes on — flagged.
+    expect(reply).toMatchObject({ ok: true, text: "Done.", costUnreported: true });
+    expect(sent).toHaveLength(3);
+    expect(spend.today).toMatchObject({ costUsd: 0, unpriced: 3 });
   });
 });

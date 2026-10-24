@@ -139,6 +139,8 @@ import {
 } from "./services/assistant";
 import { attachmentPath, cleanName, readImageDataUrl } from "./services/assistantAttachments";
 import { initAssistantChats } from "./services/assistantChats";
+import { initAssistantSpend, spendToday } from "./services/assistantSpend";
+import { checkAssistantModel } from "./services/assistantModels";
 import {
   getCommandSettings,
   initAssistantCommands,
@@ -346,6 +348,7 @@ initLinks();
 initProjects();
 initScratchpad();
 initAssistantChats();
+initAssistantSpend();
 initAssistantCommands();
 initHabits();
 initNotes();
@@ -822,6 +825,8 @@ ipcMain.handle("assistant:chats:pin", (_evt, id: unknown, pinned: unknown) =>
 // the user decides, via the ordinary memory:save).
 ipcMain.handle("assistant:memory:tidy", () => proposeMemoryTidy());
 ipcMain.handle("assistant:hotkeyStatus", () => assistantHotkeyStatus());
+ipcMain.handle("assistant:spendToday", () => spendToday());
+ipcMain.handle("assistant:checkModel", (_evt, slug: unknown) => checkAssistantModel(slug));
 ipcMain.handle("assistant:hidePanel", () => hideAssistantWindow());
 // The quick panel hands its chat to the dashboard: hide it, bring the main
 // window forward (it may be hidden to the tray), and tell it what to show.

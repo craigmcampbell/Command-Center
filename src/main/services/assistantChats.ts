@@ -51,6 +51,7 @@ interface MessageRow {
   command: string | null;
   injected: string | null;
   attachments: string | null;
+  model: string | null;
 }
 
 const MAX_SEARCH_TEXT_CHARS = 100_000;
@@ -67,6 +68,7 @@ function toRow(m: ChatMessage): MessageRow {
     injected: m.role === "user" && m.injected ? m.injected : null,
     attachments:
       (m.role === "user" || m.role === "tool") && m.attachments?.length ? JSON.stringify(m.attachments) : null,
+    model: m.role === "assistant" && m.model ? m.model : null,
   };
 }
 
@@ -92,7 +94,13 @@ function fromRow(row: MessageRow): ChatMessage {
     case "assistant": {
       const calls: ToolCall[] | null = row.tool_calls ? JSON.parse(row.tool_calls) : null;
       if (calls !== null && !Array.isArray(calls)) throw new Error("tool_calls is not a list");
-      return { role: "assistant", content: row.content, ...(calls ? { tool_calls: calls } : {}), ...archived };
+      return {
+        role: "assistant",
+        content: row.content,
+        ...(calls ? { tool_calls: calls } : {}),
+        ...(row.model ? { model: row.model } : {}),
+        ...archived,
+      };
     }
     case "system":
       return { role: "system", content: row.content ?? "", ...(row.summary === 1 ? { summary: true } : {}), ...archived };
@@ -114,8 +122,8 @@ function writeMessages(chatId: string, messages: ChatMessage[]): void {
   db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(chatId);
   const insert = db.prepare(
     `INSERT INTO assistant_messages
-       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments)
-     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected, @attachments)`
+       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments, model)
+     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected, @attachments, @model)`
   );
   messages.forEach((m, seq) => insert.run({ chatId, seq, ...toRow(m) }));
 }
@@ -185,6 +193,8 @@ export function initAssistantChats(): void {
   addColumnIfMissing("assistant_messages", "command", "TEXT");
   addColumnIfMissing("assistant_messages", "injected", "TEXT");
   addColumnIfMissing("assistant_messages", "attachments", "TEXT");
+  // Which model answered (fallbacks can differ from the configured one).
+  addColumnIfMissing("assistant_messages", "model", "TEXT");
 
   // One-time, idempotent: a chat with no message rows yet is copied over from
   // its JSON column. A chat that has rows is never touched again, so this is
@@ -274,7 +284,7 @@ export function loadChat(id: string): StoredChat | null {
   try {
     const rows = getDatabase()
       .prepare(
-        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments
+        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments, model
            FROM assistant_messages WHERE chat_id = ? ORDER BY seq`
       )
       .all(id) as MessageRow[];

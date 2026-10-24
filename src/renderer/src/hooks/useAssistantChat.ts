@@ -51,6 +51,10 @@ export interface ChatItem {
   stopped?: boolean;
   toolCalls?: AssistantToolCall[];
   remembered?: string[];
+  // On an assistant reply: the model that answered.
+  model?: string;
+  // Part of the reply's cost went unreported, so the caps couldn't count it.
+  costUnreported?: boolean;
 }
 
 export interface UseAssistantChatOptions {
@@ -189,6 +193,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           role: item.role,
           text: item.text,
           ...(item.command ? { command: item.command } : {}),
+          ...(item.model ? { model: item.model } : {}),
           ...(item.attachments ? { attachments: item.attachments } : {}),
           toolCalls: item.toolCalls,
           remembered: item.remembered,
@@ -208,6 +213,8 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           toolCalls: reply.toolCalls,
           remembered: reply.remembered,
           stopped: reply.stopped,
+          ...(reply.model ? { model: reply.model } : {}),
+          ...(reply.costUnreported ? { costUnreported: true } : {}),
           ...(reply.attachments?.length ? { attachments: reply.attachments } : {}),
         }
       : {

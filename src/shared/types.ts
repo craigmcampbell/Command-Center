@@ -135,6 +135,35 @@ export interface AssistantScalarConfig {
   // Summarize the older part of a chat once it would exceed roughly this many
   // tokens (estimated). Unset means the default; 0 turns automatic compaction off.
   compactAtTokens?: number;
+  // Models OpenRouter tries, in order, when `model` fails (its `models`
+  // parameter). Empty or unset means none.
+  fallbackModels?: string[];
+  // Spending caps in USD, from the cost OpenRouter reports. Unset means no cap.
+  // Per reply: the loop stops calling the model once a reply has cost this
+  // much. Per day: new turns are refused once today's assistant spend (replies,
+  // titles, summaries) has reached it.
+  maxCostPerReplyUsd?: number;
+  maxCostPerDayUsd?: number;
+}
+
+// Today's assistant spend, for the daily cap. `unpriced` counts requests whose
+// provider reported no cost: they are NOT in `costUsd`, and are not $0.
+export interface AssistantSpendToday {
+  costUsd: number;
+  requests: number;
+  unpriced: number;
+}
+
+// What OpenRouter's model list says about a slug, checked when Settings saves it.
+export interface AssistantModelCheck {
+  ok: boolean;
+  reason?: string;
+  slug: string;
+  known?: boolean;
+  tools?: boolean;
+  contextLength?: number;
+  // A compactAtTokens value that fits the model's context window.
+  suggestedCompactAt?: number;
 }
 
 // Railway account and workspace tokens both use the Bearer header. The
@@ -246,6 +275,12 @@ export interface AssistantReply {
   // Older messages were summarized before this reply, so the on-screen
   // transcript (which has a divider where they were) should be reloaded.
   compacted?: boolean;
+  // The model that wrote the final step, as OpenRouter reports it — a
+  // fallback when the configured model failed.
+  model?: string;
+  // Some request in this reply reported no cost, so the spending caps could
+  // not count it. Set only when a cap is configured.
+  costUnreported?: boolean;
 }
 
 // A file attached to a user message. Images live on disk (named by their hash);
@@ -347,6 +382,8 @@ export interface AssistantTranscriptItem {
   text: string;
   // On a user item: the slash command that started the turn.
   command?: string;
+  // On an assistant item: the model that answered, when it was recorded.
+  model?: string;
   attachments?: AssistantAttachmentInfo[];
   toolCalls: AssistantToolCall[];
   remembered: string[];
@@ -2104,6 +2141,10 @@ export interface CommandCenterApi {
       removePrompt: (name: string) => Promise<AssistantCommandResult>;
     };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
+    // Today's spend across every assistant request, for the daily cap.
+    spendToday: () => Promise<AssistantSpendToday>;
+    // Looks a slug up in OpenRouter's public model list.
+    checkModel: (slug: string) => Promise<AssistantModelCheck>;
     hidePanel: () => Promise<void>;
     // `openSettings` also opens Settings → Assistant (for a setup error).
     openInDashboard: (chatId: string | null, openSettings?: boolean) => Promise<void>;
