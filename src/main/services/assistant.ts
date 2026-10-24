@@ -79,13 +79,16 @@ import {
 import { localDate, readMemoryFile } from "./assistantMemory";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
 import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
+import { listMcpTools } from "./assistantMcp";
 import {
+  changesData,
   collectKnownUrls,
   customSystemPrompt,
   hasUntrustedContext,
   IMAGE_TOOLS,
   MAX_IMAGES_PER_TURN,
   MAX_WEB_CALLS_PER_TURN,
+  mcpToolSchemas,
   MUTATING_TOOLS,
   prepareTool,
   SKILL_FILE_TOOL,
@@ -578,14 +581,17 @@ export function defaultCommandTools(): string[] {
 // The tool names the model is shown (and may call) for one turn. A plain turn
 // gets everything, except the skill-file reader unless a slash command has been
 // used in this chat. A command's turn gets exactly its allowlist; a skill also
-// gets the file reader, since its instructions point at its own files.
+// gets the file reader, since its instructions point at its own files. MCP
+// tools are never in the default allowlist (it is built from TOOL_DEFS), so a
+// command only gets one that its custom list names.
 function offeredToolNames(
   restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null,
   chatUsesCommands: boolean,
   webEnabled: boolean,
-  imagesEnabled: boolean
+  imagesEnabled: boolean,
+  mcpNames: string[] = []
 ): Set<string> {
-  const known = new Set(TOOL_DEFS.map((t) => t.name));
+  const known = new Set([...TOOL_DEFS.map((t) => t.name), ...mcpNames]);
   if (!imagesEnabled) for (const name of IMAGE_TOOLS) known.delete(name);
   // The web tools can't work without a Firecrawl key, so they aren't offered.
   if (!webEnabled) for (const name of WEB_TOOLS) known.delete(name);
@@ -707,6 +713,10 @@ async function runTurn({
     return fail(reason, id, needsSetup);
   };
 
+  // MCP servers connect on first use; one that fails just has no tools. Listed
+  // before the regenerate check, which needs to know which MCP tools only read.
+  const mcpTools = await listMcpTools();
+
   let regenerated: { command?: string; injected?: string; attachments?: AssistantAttachment[] } | null = null;
   let restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null = command;
   if (regenerate) {
@@ -714,7 +724,7 @@ async function runTurn({
     if (lastUser < 0) return rollback("There's nothing to regenerate");
     const tail = convo.messages.slice(lastUser);
     // Re-running a reply that changed something would change it again.
-    if (calledToolNames(tail).some((name) => MUTATING_TOOLS.has(name))) {
+    if (calledToolNames(tail).some(changesData)) {
       return rollback("Can't regenerate: that reply changed something");
     }
     const prior = convo.messages[lastUser] as {
@@ -836,12 +846,13 @@ async function runTurn({
     restricted,
     convo.messages.some((m) => m.role === "user" && m.command),
     Boolean(getFirecrawlSettings().apiKey?.trim()),
-    Boolean(getOpenAISettings().apiKey?.trim())
+    Boolean(getOpenAISettings().apiKey?.trim()),
+    mcpTools.map((t) => t.name)
   );
   let webCalls = 0;
   let imageCalls = 0;
   const generated: AssistantAttachment[] = [];
-  const tools = TOOLS.filter((t) => offered.has(t.function.name));
+  const tools = [...TOOLS, ...mcpToolSchemas(mcpTools)].filter((t) => offered.has(t.function.name));
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -976,7 +987,7 @@ async function runTurn({
         // Recorded in the order the model asked for them (not the order they
         // happened to finish), which is also how a reopened chat lists them.
         for (const { call, outcome, described } of outcomes) {
-          if (!outcome.isError && (MUTATING_TOOLS.has(call.function.name) || call.function.name === "remember")) {
+          if (!outcome.isError && (changesData(call.function.name) || call.function.name === "remember")) {
             changed = true;
           }
           toolCalls.push(described);

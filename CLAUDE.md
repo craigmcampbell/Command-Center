@@ -494,7 +494,7 @@ standing instructions, memory-file path and the hotkey are Settings → Assistan
 streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
 the approval rules · `assistantMemory.ts` the memory file · `assistantChats.ts`
 SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTranscript.ts` pure helpers (message types, titles,
-`toTranscript`) · `assistantWindow.ts` the quick panel. Renderer:
+`toTranscript`) · `assistantMcp.ts` MCP server connections · `assistantWindow.ts` the quick panel. Renderer:
 `hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
 (transcript + composer, shared) · `AssistantWidget.tsx` (the tab: history,
 memory) · `AssistantQuickApp.tsx` (the panel). `src/shared/assistant.ts` holds
@@ -695,6 +695,54 @@ hotkey) — a drift there is silent.
   transcript gets names and ids only; thumbnails load through
   `assistant:attachments:read`. A model without vision fails with OpenRouter's own
   error. PDFs are not supported.
+- **MCP servers** (`assistantMcp.ts`, Settings → Assistant → MCP servers,
+  `AssistantMcpCard.tsx`): tools from Model Context Protocol servers the user
+  configures, through the official SDK (`@modelcontextprotocol/sdk`, v1). Two
+  transports, the two the spec defines: **stdio** (command + one-arg-per-line
+  args + `KEY=value` env) and **Streamable HTTP** (URL + optional bearer token,
+  sent as `Authorization`). The list is the `assistant_mcp_servers` table, same
+  CRUD shape as `processes`. **Main process only**: the renderer edits rows and
+  reads `assistant:mcp:status`, never talks to a server.
+  - **Lazy, fail-soft connections.** Nothing spawns at boot. Each turn calls
+    `listMcpTools()`, which connects enabled servers it isn't connected to,
+    reuses the rest, reconnects one whose transport settings changed
+    (fingerprint), and closes removed/disabled ones. A server that fails to
+    start or list contributes no tools, its reason (with the tail of stderr)
+    shows in Settings, and it isn't retried for 60s, except via Settings'
+    Connect button, which forces it and is also run on save. A stdio child
+    gets only the SDK's safe env defaults plus a PATH widened with Homebrew and
+    `~/.local/bin` (a GUI app has launchd's bare PATH), then the user's env.
+    `closeAllMcp()` runs on `before-quit` beside `stopAllProcesses()`; the SDK
+    closes stdin, then SIGTERM, then SIGKILL.
+  - **Names** are `mcp__<server>__<tool>`: `[A-Za-z0-9_]` only (also what
+    `assistantCommands.ts`'s allowlist check accepts), at most 64 characters,
+    de-duplicated with `_2`… No built-in tool may start with `mcp__`
+    (`shared/assistant.ts` holds the prefix and `isMcpToolName`). Up to 64
+    tools per server; `$schema` is dropped and a missing/oversized schema
+    becomes an empty object.
+  - **Safety.** Everything a server sends is untrusted, including its tool
+    descriptions and its `readOnlyHint`. (1) **Every call asks first**
+    (`prepareMcpTool` in `assistantTools.ts`), unless the tool is marked
+    `readOnlyHint: true` **and** the user ticked "Trust read-only tools" for
+    that server (off by default). Both are re-checked against current settings
+    at call time. The card quotes the server, the tool's real name and the
+    **exact arguments JSON** that will be sent; arguments over 4000 characters
+    are refused rather than shown cut. (2) MCP tools are never in
+    `TRUSTED_TOOLS`, so one call makes `remember` ask. (3) **Never in a
+    command's default allowlist** (that list is built from `TOOL_DEFS`); a
+    custom list can name one, and the Settings tool picker leaves them
+    unticked. (4) `changesData()` treats an MCP call as a change unless the
+    current listing says the tool is read-only (an unknown tool counts as a
+    change), so Regenerate is refused and a later failure doesn't roll the
+    turn back. The renderer can't see hints, so it hides Regenerate after
+    **any** MCP call, which errs safe. (5) Results are flattened to text
+    (images/audio left out with a note), capped at 12,000 characters and
+    returned with `note_untrusted`; a result with `isError` reaches the model
+    as an error.
+  - Chips and the activity line show `server: tool` (`mcpToolLabel`) when
+    there's no friendly label. Not offered to a turn: MCP resources, prompts,
+    sampling and OAuth. An HTTP server that needs OAuth has to accept a
+    bearer token instead.
 - **Web tools** (`firecrawlWeb.ts`; `web_search`, `web_scrape`) reuse the Firecrawl
   key from Settings → Integrations, so there is nothing new to configure, and are
   **only offered when that key is set**. Shapes were checked against Firecrawl's

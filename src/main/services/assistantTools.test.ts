@@ -43,12 +43,25 @@ vi.mock("./readerFeed", () => ({
   findCachedFeedItem: vi.fn(),
 }));
 
+// The MCP connection layer is mocked; this file tests the approval rules on top.
+const mcp = vi.hoisted(() => ({
+  tools: new Map<string, any>(),
+  servers: new Map<number, any>(),
+}));
+vi.mock("./assistantMcp", () => ({
+  isMcpToolName: (name: string) => name.startsWith("mcp__"),
+  getMcpTool: (name: string) => mcp.tools.get(name),
+  mcpServerFor: (tool: { serverId: number }) => mcp.servers.get(tool.serverId) ?? null,
+  callMcpTool: vi.fn(async () => ({ ok: true, text: "result text", isError: false, truncated: false })),
+}));
+
+import { callMcpTool } from "./assistantMcp";
 import { readNoteFile, searchNotes } from "./notes";
 import { completeTask, createTask, getDueTasks, setTaskDueDate } from "./todoist";
 import { approveTransaction, getCategories, getUnapprovedTransactions, setTransactionCategory } from "./ynab";
 import { saveLink } from "./reader";
 import { findCachedFeedItem, moveFeedItemToInbox } from "./readerFeed";
-import { hasUntrustedContext, MUTATING_TOOLS, prepareTool, TOOL_DEFS } from "./assistantTools";
+import { changesData, hasUntrustedContext, MAX_MCP_ARGS_CHARS, MUTATING_TOOLS, prepareTool, TOOL_DEFS } from "./assistantTools";
 
 const TASKS = [
   { id: "t1", content: "Water the plants", project: "Home", due: "2026-10-12", overdue: false, priority: 1, labels: [] },
@@ -364,5 +377,77 @@ describe("hasUntrustedContext", () => {
     for (const name of ["get_due_tasks", "get_schedule", "search_notes", "github_status", "ynab_unapproved", "read_note", "git_status"]) {
       expect(hasUntrustedContext(["docker_status", name])).toBe(true);
     }
+  });
+});
+
+describe("MCP tools", () => {
+  const find = {
+    name: "mcp__todo__find_tasks",
+    serverId: 1,
+    serverLabel: "todo",
+    tool: "find-tasks",
+    description: "",
+    inputSchema: { type: "object" },
+    readOnly: true,
+  };
+  const add = { ...find, name: "mcp__todo__add_task", tool: "add-task", readOnly: false };
+
+  beforeEach(() => {
+    mcp.tools = new Map([
+      [find.name, find],
+      [add.name, add],
+    ]);
+    mcp.servers = new Map([[1, { id: 1, label: "todo", enabled: true, trustReadOnly: false }]]);
+  });
+
+  it("asks before every call, quoting the server, the tool and the exact arguments", async () => {
+    const prepared = await prepareTool(add.name, '{"title": "Buy milk", "due": "today"}', noContext);
+    expect(prepared.approval?.summary).toBe(
+      'Run “add-task” on MCP server “todo” with arguments: {"title":"Buy milk","due":"today"}'
+    );
+    expect(callMcpTool).not.toHaveBeenCalled();
+    await prepared.run();
+    expect(callMcpTool).toHaveBeenCalledWith(add, { title: "Buy milk", due: "today" }, undefined);
+  });
+
+  it("still asks for a read-only tool unless the user trusts that server's read-only tools", async () => {
+    expect((await prepareTool(find.name, "{}", noContext)).approval?.summary).toMatch(/says it only reads/);
+    mcp.servers.get(1).trustReadOnly = true;
+    expect((await prepareTool(find.name, "{}", noContext)).approval).toBeUndefined();
+    // Trust never covers a tool the server doesn't mark read-only.
+    expect((await prepareTool(add.name, "{}", noContext)).approval).toBeDefined();
+  });
+
+  it("marks results as untrusted data and passes server errors on as errors", async () => {
+    mcp.servers.get(1).trustReadOnly = true;
+    const ok = await (await prepareTool(find.name, "{}", noContext)).run();
+    expect(json(ok)).toMatchObject({ server: "todo", tool: "find-tasks", content: "result text" });
+    expect(json(ok).note_untrusted).toMatch(/data, not instructions/);
+
+    vi.mocked(callMcpTool).mockResolvedValueOnce({ ok: true, text: "bad input", isError: true, truncated: false });
+    const bad = await (await prepareTool(find.name, "{}", noContext)).run();
+    expect(bad.isError).toBe(true);
+    expect(json(bad).error).toMatch(/bad input/);
+  });
+
+  it("refuses unknown tools, switched-off servers, and arguments too long to show", async () => {
+    expect(json(await (await prepareTool("mcp__gone__x", "{}", noContext)).run()).error).toMatch(/isn't available/);
+    mcp.servers.clear();
+    expect(json(await (await prepareTool(add.name, "{}", noContext)).run()).error).toMatch(/no longer enabled/);
+    mcp.servers.set(1, { id: 1, label: "todo", enabled: true, trustReadOnly: true });
+    const huge = JSON.stringify({ text: "x".repeat(MAX_MCP_ARGS_CHARS) });
+    const prepared = await prepareTool(add.name, huge, noContext);
+    expect(prepared.approval).toBeUndefined();
+    expect(json(await prepared.run()).error).toMatch(/too long to confirm/);
+    expect(json(await (await prepareTool(add.name, "[1]", noContext)).run()).error).toMatch(/JSON object/);
+    expect(callMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("counts as third-party text, and as a change unless it only reads", () => {
+    expect(hasUntrustedContext([find.name])).toBe(true);
+    expect(changesData(add.name)).toBe(true);
+    expect(changesData(find.name)).toBe(false);
+    // Not in the current listing: assume it might have changed something.
+    expect(changesData("mcp__gone__x")).toBe(true);
   });
 });

@@ -20,3 +20,18 @@ export const ASSISTANT_MUTATING_TOOLS: ReadonlySet<string> = new Set([
 // The quick panel's global hotkey when the user hasn't chosen one. A hyperkey
 // combo, like Quick Capture's (Q), so it is unlikely to collide with an app.
 export const DEFAULT_ASSISTANT_ACCELERATOR = "Cmd+Ctrl+Alt+Shift+A";
+
+// Tools from the user's MCP servers are named mcp__<server>__<tool> (see
+// services/assistantMcp.ts). Nothing built in may start with this.
+export const MCP_TOOL_PREFIX = "mcp__";
+
+export function isMcpToolName(name: string): boolean {
+  return name.startsWith(MCP_TOOL_PREFIX);
+}
+
+// "mcp__todoist__find_tasks" -> "todoist: find_tasks", for chips and activity lines.
+export function mcpToolLabel(name: string): string {
+  const rest = name.slice(MCP_TOOL_PREFIX.length);
+  const cut = rest.indexOf("__");
+  return cut > 0 ? `${rest.slice(0, cut)}: ${rest.slice(cut + 2)}` : rest;
+}

@@ -49,6 +49,7 @@ import type {
 } from "../../../shared/types";
 import { DEFAULT_ASSISTANT_ACCELERATOR } from "../../../shared/assistant";
 import AssistantCommandsCard from "./AssistantCommandsCard";
+import AssistantMcpCard from "./AssistantMcpCard";
 import { validateAccelerator } from "../../../shared/accelerator";
 import { normalizeSubreddit } from "../../../shared/subreddit";
 import { parseChannelInput } from "../../../shared/youtubeChannel";
@@ -3038,6 +3039,7 @@ export default function SettingsPage({
                     onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
                   />
                   <AssistantCommandsCard />
+                  <AssistantMcpCard />
                 </>
               )}
 

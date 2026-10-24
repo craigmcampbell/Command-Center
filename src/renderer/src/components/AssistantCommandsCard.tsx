@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { isMcpToolName } from "../../../shared/assistant";
 import type {
   AssistantCommandConfig,
   AssistantCommandSetting,
@@ -34,7 +35,8 @@ function ToolsEditor({ tools, value, onChange }: ToolsEditorProps) {
         <input
           type="radio"
           checked={custom}
-          onChange={() => onChange(tools.filter((t) => !t.mutating).map((t) => t.name))}
+          // MCP tools start unticked: a command gets one only if you tick it.
+          onChange={() => onChange(tools.filter((t) => !t.mutating && !isMcpToolName(t.name)).map((t) => t.name))}
         />
         Choose tools
       </label>

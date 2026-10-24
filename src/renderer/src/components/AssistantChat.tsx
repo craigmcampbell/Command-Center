@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { AssistantToolCall, CaptureTarget } from "../../../shared/types";
-import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
+import { ASSISTANT_MUTATING_TOOLS, isMcpToolName, mcpToolLabel } from "../../../shared/assistant";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
@@ -49,6 +49,12 @@ const TOOL_LABELS: Record<string, string> = {
   remember: "Memory",
   forget: "Memory",
 };
+
+// A friendly name, falling back to "server: tool" for MCP tools and to the raw
+// name for anything else unknown.
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? (isMcpToolName(name) ? mcpToolLabel(name) : name);
+}
 
 // What the assistant is doing while a call runs, and the same thing once done.
 const TOOL_ACTIVITY: Record<string, { doing: string; done: string }> = {
@@ -290,7 +296,10 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
               isLastAssistant &&
               !busy &&
               chat.conversationId !== null &&
-              !item.toolCalls?.some((c) => ASSISTANT_MUTATING_TOOLS.has(c.name))
+              // Any MCP call hides it. Main refuses only after one that wasn't
+              // read-only, but this side can't see the server's hints, so it
+              // errs towards not offering a repeat.
+              !item.toolCalls?.some((c) => ASSISTANT_MUTATING_TOOLS.has(c.name) || isMcpToolName(c.name))
             }
             onRegenerate={() => void chat.regenerate()}
             onApprove={chat.answerApproval}
@@ -474,7 +483,7 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         <div className="assistant-chips">
           {item.toolCalls?.map((call, i) => (
             <span key={i} className={`assistant-chip${call.ok ? "" : " assistant-chip-bad"}`}>
-              {TOOL_LABELS[call.name] ?? call.name}
+              {toolLabel(call.name)}
               {call.ok ? "" : call.declined ? " declined" : " failed"}
             </span>
           ))}
@@ -525,7 +534,8 @@ function LiveTools({ tools }: { tools: LiveTool[] }) {
     <ul className="assistant-live-tools" aria-label="Tool activity">
       {tools.map((tool) => {
         const activity = TOOL_ACTIVITY[tool.name];
-        const label = tool.status === "running" ? (activity?.doing ?? tool.name) : (activity?.done ?? tool.name);
+        const fallback = isMcpToolName(tool.name) ? `MCP ${mcpToolLabel(tool.name)}` : tool.name;
+        const label = tool.status === "running" ? (activity?.doing ?? fallback) : (activity?.done ?? fallback);
         const seconds = Math.floor((now - tool.startedAt) / 1000);
         return (
           <li key={tool.callId} className={`assistant-live-tool assistant-live-${tool.status}`}>
@@ -566,7 +576,7 @@ function ToolLog({ calls }: { calls: AssistantToolCall[] }) {
             <li key={i} className={`assistant-tool-entry${call.ok ? "" : " assistant-tool-entry-bad"}`}>
               <div className="assistant-tool-entry-head">
                 <StatusIcon status={call.ok ? "done" : call.declined ? "declined" : "failed"} />
-                <span className="assistant-tool-entry-name">{TOOL_LABELS[call.name] ?? call.name}</span>
+                <span className="assistant-tool-entry-name">{toolLabel(call.name)}</span>
                 <code>{call.name}</code>
                 {!call.ok && <span className="assistant-tool-entry-state">{call.declined ? "declined" : "failed"}</span>}
               </div>
