@@ -265,7 +265,7 @@ export default function AssistantCommandsCard() {
           </div>
           <ToolsEditor tools={config.tools} value={draft.tools} onChange={(tools) => setDraft({ ...draft, tools })} />
           <div className="assistant-approval-actions">
-            <button type="button" onClick={() => void savePrompt()}>
+            <button type="button" className="assistant-approval-allow" onClick={() => void savePrompt()}>
               Save prompt
             </button>
             <button type="button" className="assistant-approval-deny" onClick={() => setDraft(null)}>

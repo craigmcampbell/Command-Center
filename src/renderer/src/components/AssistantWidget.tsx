@@ -3,10 +3,12 @@ import type { AssistantChatSummary, AssistantFolder, AssistantUsage } from "../.
 import { diffMemory, type MemoryDiff } from "../../../shared/memoryDiff";
 import { useAssistantChat } from "../hooks/useAssistantChat";
 import AssistantChat, { chatMarkdown, formatUsage, SaveToNotes } from "./AssistantChat";
+import Menu from "./Menu";
 import Panel from "./Panel";
 import {
   IconChevronDown,
   IconChevronRight,
+  IconDots,
   IconFolder,
   IconPencil,
   IconPin,
@@ -370,6 +372,7 @@ export default function AssistantWidget({
   }
 
   const usageText = formatUsage(chat.usage);
+  const hasContent = chat.items.some((i) => i.role !== "error" && i.role !== "summary" && i.text);
 
   return (
     <Panel
@@ -381,46 +384,42 @@ export default function AssistantWidget({
               {usageText}
             </span>
           )}
-          <button type="button" className="assistant-link" onClick={onOpenSettings}>
-            Settings
-          </button>
-          <button
-            type="button"
+          <Menu
+            label="View"
+            align="right"
             className="assistant-link"
-            onClick={() => setHistoryOpen((o) => !o)}
-            aria-expanded={historyOpen}
-          >
-            History
-          </button>
-          <button
-            type="button"
-            className="assistant-link"
-            onClick={() => setMemoryOpen((o) => !o)}
-            aria-expanded={memoryOpen}
-          >
-            Memory
-          </button>
-          {chat.items.some((i) => i.role !== "error" && i.text) && !chat.busy && (
+            items={[
+              { key: "history", label: "Chat history", checked: historyOpen, onSelect: () => setHistoryOpen((o) => !o) },
+              { key: "memory", label: "Memory", checked: memoryOpen, onSelect: () => setMemoryOpen((o) => !o) },
+            ]}
+          />
+          {hasContent && !chat.busy && (
             <SaveToNotes build={() => chatMarkdown(chat)} label="Save chat" />
           )}
-          {chat.conversationId && (
-            <button
-              type="button"
-              className="assistant-link"
-              onClick={() => void chat.compact()}
-              disabled={chat.busy}
-              title="Summarize the older part of this chat to cut what is re-sent each turn"
-            >
-              Compact
-            </button>
-          )}
+          <Menu
+            label={<IconDots size={15} />}
+            bare
+            align="right"
+            className="assistant-link assistant-icon-trigger"
+            ariaLabel="More chat options"
+            title="More"
+            items={[
+              {
+                key: "compact",
+                label: "Summarize older messages",
+                disabled: chat.busy || !chat.conversationId,
+                onSelect: () => void chat.compact(),
+              },
+              { key: "settings", label: "Assistant settings…", separatorBefore: true, onSelect: onOpenSettings },
+            ]}
+          />
           <button
             type="button"
-            className="assistant-link"
+            className="assistant-new-chat"
             onClick={newChat}
             disabled={chat.busy || (chat.items.length === 0 && !chat.conversationId)}
           >
-            New chat
+            <IconPlus size={12} /> New chat
           </button>
         </div>
       }

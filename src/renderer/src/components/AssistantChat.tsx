@@ -9,6 +9,7 @@ import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/ty
 import { matchCommands } from "../lib/commandMatch";
 import { describeSize, MAX_FILES, MAX_TOTAL_BYTES, readAttachment, type PendingAttachment } from "../lib/attachments";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
+import Menu from "./Menu";
 import { IconArrowUp, IconCheck, IconCopy, IconPlus, IconX } from "./icons";
 
 // The transcript and composer for one Assistant conversation. Used by the
@@ -602,7 +603,7 @@ function ApprovalCards({
               {approval.summary}
             </p>
             <div className="assistant-approval-actions">
-              <button type="button" onClick={() => onApprove(approval.approvalId, true)}>
+              <button type="button" className="assistant-approval-allow" onClick={() => onApprove(approval.approvalId, true)}>
                 Allow
               </button>
               <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
@@ -710,6 +711,7 @@ function BatchApprovalCard({
       <div className="assistant-approval-actions">
         <button
           type="button"
+          className="assistant-approval-allow"
           disabled={ticked.size === 0}
           onClick={() => onApprove(approval.approvalId, true, [...ticked])}
         >
@@ -763,36 +765,32 @@ function ReplyActions({
 // through the same `capture.submit` as the Quick Capture panel, which also tells
 // the owning widget to drop its stale buffer so the next autosave can't erase
 // what was just appended.
-export function SaveToNotes({ build, label }: { build: () => string; label: string }) {
-  const [open, setOpen] = useState(false);
+export function SaveToNotes({
+  build,
+  label,
+  disabled,
+}: {
+  build: () => string;
+  label: string;
+  disabled?: boolean;
+}) {
   const [status, setStatus] = useState<string | null>(null);
 
   async function save(target: CaptureTarget) {
-    setOpen(false);
     const result = await window.api.capture.submit(target, build());
     setStatus(result.ok ? "Saved" : (result.reason ?? "Couldn't save"));
     window.setTimeout(() => setStatus(null), 2500);
   }
 
   if (status) return <span className="muted assistant-save-status">{status}</span>;
-  if (!open) {
-    return (
-      <button type="button" className="assistant-link" onClick={() => setOpen(true)} aria-expanded={false}>
-        {label} to…
-      </button>
-    );
-  }
   return (
-    <span className="assistant-save-menu">
-      {SAVE_TARGETS.map((t) => (
-        <button key={t.id} type="button" className="assistant-link" onClick={() => void save(t.id)}>
-          {t.label}
-        </button>
-      ))}
-      <button type="button" className="assistant-link" onClick={() => setOpen(false)} aria-label="Cancel">
-        ×
-      </button>
-    </span>
+    <Menu
+      label={label}
+      disabled={disabled}
+      align="right"
+      className="assistant-link"
+      items={SAVE_TARGETS.map((t) => ({ key: t.id, label: t.label, onSelect: () => void save(t.id) }))}
+    />
   );
 }
 
