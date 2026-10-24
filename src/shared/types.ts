@@ -246,6 +246,66 @@ export interface AssistantReply {
   // Older messages were summarized before this reply, so the on-screen
   // transcript (which has a divider where they were) should be reloaded.
   compacted?: boolean;
+  // What the turn's requests and tool calls cost and how long they took. Also
+  // set on a failed reply, which is when it is most useful.
+  trace?: AssistantTurnTrace;
+}
+
+// ---- turn traces (services/assistantTraces.ts) ----
+// Sizes and metadata only: no prompt text, reply text, arguments or results.
+
+// One model request. `purpose` tells the reply's own steps apart from the
+// summary request compaction makes first and the title request beside it.
+export interface AssistantTraceRequest {
+  kind: "request";
+  purpose: "reply" | "compact" | "title";
+  // The reply step (0-based); compaction and title requests are -1.
+  step: number;
+  model: string;
+  messageCount: number;
+  estInputTokens: number;
+  latencyMs: number;
+  // Until the first streamed text. Absent when no text streamed (a tool-only
+  // step, an error, or a non-streamed answer).
+  firstTokenMs?: number;
+  finishReason?: string;
+  usage?: AssistantUsage;
+  toolCalls: number;
+  outputChars: number;
+  error?: string;
+  aborted?: boolean;
+}
+
+export interface AssistantTraceTool {
+  kind: "tool";
+  step: number;
+  name: string;
+  // "none": the call needed no confirmation.
+  approval: "none" | "allowed" | "declined";
+  // Time spent waiting on the confirmation card.
+  waitMs?: number;
+  durationMs: number;
+  ok: boolean;
+  resultChars: number;
+}
+
+export interface AssistantTurnTrace {
+  // Per chat, from 1; 0 until the trace has been stored.
+  turnSeq: number;
+  // Which user message of the chat (0-based, archived ones included) this turn
+  // answered — how a reopened chat pairs a trace with its reply.
+  userIndex: number;
+  startedAt: number;
+  durationMs: number;
+  model: string;
+  regenerate?: boolean;
+  command?: string;
+  outcome: "ok" | "stopped" | "error";
+  error?: string;
+  // The reply's own requests; compaction and the title are billed to the chat
+  // separately and are not included here.
+  usage: AssistantUsage;
+  steps: (AssistantTraceRequest | AssistantTraceTool)[];
 }
 
 // A file attached to a user message. Images live on disk (named by their hash);
@@ -350,6 +410,9 @@ export interface AssistantTranscriptItem {
   attachments?: AssistantAttachmentInfo[];
   toolCalls: AssistantToolCall[];
   remembered: string[];
+  // On an assistant item: the trace of the turn that produced it, when one was
+  // recorded (turns from before traces existed have none).
+  trace?: AssistantTurnTrace;
 }
 
 export interface AssistantChatResult {

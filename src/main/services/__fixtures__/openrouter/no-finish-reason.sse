@@ -1,0 +1,6 @@
+: OPENROUTER PROCESSING
+
+data: {"id": "gen-1761318030-dropped", "provider": "Chutes", "model": "deepseek/deepseek-chat-v3.1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "The three open PRs are"}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318030-dropped", "provider": "Chutes", "model": "deepseek/deepseek-chat-v3.1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"content": " #12, #14 and"}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+

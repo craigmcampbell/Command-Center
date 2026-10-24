@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": 502,
+    "message": "Provider returned error",
+    "metadata": {
+      "raw": "upstream connect error",
+      "provider_name": "Together"
+    }
+  },
+  "user_id": "user_x"
+}

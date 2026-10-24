@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import type { AssistantToolCall, CaptureTarget } from "../../../shared/types";
+import type {
+  AssistantToolCall,
+  AssistantTraceRequest,
+  AssistantTraceTool,
+  AssistantTurnTrace,
+  CaptureTarget,
+} from "../../../shared/types";
 import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
@@ -486,6 +492,7 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         </div>
       )}
       {!pending && Boolean(item.toolCalls?.length) && <ToolLog calls={item.toolCalls!} />}
+      {!pending && item.trace && <TurnDetails trace={item.trace} />}
       {item.role === "assistant" && !pending && (
         <ReplyActions
           text={item.text}
@@ -580,6 +587,94 @@ function ToolLog({ calls }: { calls: AssistantToolCall[] }) {
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+const seconds = (ms: number): string => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+const count = (n: number): string => n.toLocaleString();
+const dollars = (usd: number): string => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
+const PURPOSE_LABELS: Record<AssistantTraceRequest["purpose"], string> = {
+  reply: "Request",
+  compact: "Summary (compaction)",
+  title: "Title",
+};
+
+function RequestStep({ step }: { step: AssistantTraceRequest }) {
+  const bad = Boolean(step.error) || step.finishReason === "length";
+  return (
+    <li className={`assistant-trace-step${bad ? " assistant-tool-entry-bad" : ""}`}>
+      <div className="assistant-tool-entry-head">
+        <span className="assistant-tool-entry-name">
+          {PURPOSE_LABELS[step.purpose]}
+          {step.purpose === "reply" ? ` ${step.step + 1}` : ""}
+        </span>
+        <code>{step.model}</code>
+        <span className="muted">{seconds(step.latencyMs)}</span>
+        {step.firstTokenMs !== undefined && <span className="muted">first text {seconds(step.firstTokenMs)}</span>}
+      </div>
+      <div className="assistant-tool-entry-args">
+        {step.messageCount} messages, ~{count(step.estInputTokens)} tokens estimated
+        {step.usage && ` · ${count(step.usage.promptTokens)} in / ${count(step.usage.completionTokens)} out`}
+        {step.usage?.costUsd != null && ` · ${dollars(step.usage.costUsd)}`}
+        {step.toolCalls > 0 && ` · ${step.toolCalls} tool call${step.toolCalls === 1 ? "" : "s"}`}
+        {step.outputChars > 0 && ` · ${count(step.outputChars)} chars of text`}
+        {step.finishReason && ` · finish: ${step.finishReason}`}
+        {step.aborted && " · stopped"}
+      </div>
+      {step.error && <div className="assistant-trace-error">{step.error}</div>}
+    </li>
+  );
+}
+
+function ToolStep({ step }: { step: AssistantTraceTool }) {
+  return (
+    <li className={`assistant-trace-step assistant-trace-tool${step.ok ? "" : " assistant-tool-entry-bad"}`}>
+      <div className="assistant-tool-entry-head">
+        <StatusIcon status={step.ok ? "done" : step.approval === "declined" ? "declined" : "failed"} />
+        <span className="assistant-tool-entry-name">{TOOL_LABELS[step.name] ?? step.name}</span>
+        <code>{step.name}</code>
+        <span className="muted">{seconds(step.durationMs)}</span>
+      </div>
+      <div className="assistant-tool-entry-args">
+        {count(step.resultChars)} chars returned
+        {step.approval !== "none" &&
+          ` · ${step.approval === "allowed" ? "allowed" : "declined"} after ${seconds(step.waitMs ?? 0)}`}
+        {!step.ok && step.approval !== "declined" && " · failed"}
+      </div>
+    </li>
+  );
+}
+
+// How the turn behind a reply went: each request (timing, tokens, cost, why it
+// ended) and each tool call (duration, confirmation, result size), in order.
+// Recorded by main as metadata only — there is no text here to show.
+function TurnDetails({ trace }: { trace: AssistantTurnTrace }) {
+  const [open, setOpen] = useState(false);
+  const requests = trace.steps.filter((s): s is AssistantTraceRequest => s.kind === "request");
+  const tools = trace.steps.length - requests.length;
+  return (
+    <div className="assistant-tool-log">
+      <button type="button" className="assistant-link" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? "Hide" : "Show"} turn details ({seconds(trace.durationMs)})
+      </button>
+      {open && (
+        <>
+          <div className="assistant-trace-summary muted">
+            {requests.length} request{requests.length === 1 ? "" : "s"}, {tools} tool call{tools === 1 ? "" : "s"}
+            {` · ${count(trace.usage.promptTokens)} in / ${count(trace.usage.completionTokens)} out`}
+            {trace.usage.costUsd !== null && ` · ${dollars(trace.usage.costUsd)}`}
+            {trace.regenerate && " · regenerated"}
+            {trace.command && ` · /${trace.command}`}
+          </div>
+          {trace.error && <div className="assistant-trace-error">{trace.error}</div>}
+          <ul className="assistant-tool-log-list">
+            {trace.steps.map((step, i) =>
+              step.kind === "request" ? <RequestStep key={i} step={step} /> : <ToolStep key={i} step={step} />
+            )}
+          </ul>
+        </>
       )}
     </div>
   );

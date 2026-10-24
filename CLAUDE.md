@@ -493,7 +493,7 @@ standing instructions, memory-file path and the hotkey are Settings → Assistan
 `assistant.ts` the loop and conversation state · `assistantClient.ts` one
 streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
 the approval rules · `assistantMemory.ts` the memory file · `assistantChats.ts`
-SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTranscript.ts` pure helpers (message types, titles,
+SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTraces.ts` per-turn traces · `assistantTranscript.ts` pure helpers (message types, titles,
 `toTranscript`) · `assistantWindow.ts` the quick panel. Renderer:
 `hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
 (transcript + composer, shared) · `AssistantWidget.tsx` (the tab: history,
@@ -744,9 +744,46 @@ hotkey) — a drift there is silent.
   `describeToolCall` (assistantTranscript.ts) builds each entry from the call and
   the result the model was given, and is used both when a reply is produced and
   when a chat is reopened, so the two can't differ. Calls are recorded in the
-  order the model asked for them, not the order they finished. No durations are
-  kept (they'd need a second source of truth); a running call shows elapsed
-  seconds live only.
+  order the model asked for them, not the order they finished. The log itself
+  keeps no durations; those are in the turn trace below.
+- **Turn traces** (`assistantTraces.ts`, table `assistant_traces`). `runTurn`
+  records every turn, failed ones included: each model request (step, purpose
+  `reply`/`compact`/`title`, model, message count, estimated input tokens,
+  reported usage and cost, latency, time to first text, finish_reason, error or
+  stop) and each tool call (approval none/allowed/declined plus time on the card,
+  duration, ok, result size). **Sizes and metadata only**: no prompt, reply,
+  arguments or results, since those already live in `assistant_messages` and a
+  copy here would outlive a compaction or delete. One row per turn, keyed by
+  `(chat_id, turn_seq)` with the steps as a JSON column; `user_index` is which
+  user message the turn answered, which is how `attachTraces`
+  (assistantTranscript.ts) pairs a reopened chat's replies with their traces. It
+  skips `outcome: "error"` traces because a rolled-back attempt shares its user
+  message with the answer that replaced it. Pruned to the last 50 turns per chat,
+  deleted with the chat, and traces of chats with no row (every attempt failed)
+  are cleared at boot after a day. The title request usually finishes after the
+  reply, so it re-writes the stored trace when it lands (`saveTrace` with a known
+  `turnSeq` replaces the row). A trace must never break or slow a reply: steps are
+  built from numbers the loop already has, and writes are try/caught like
+  `persist`. The reply carries its trace (`AssistantReply.trace`, on failures too),
+  and "Show turn details" in `AssistantChat.tsx` shows the step timeline next to
+  "Show tool details". SQL is covered by `scripts/test-assistant-chats.cjs`.
+- **Replay evals** (`assistant.eval.test.ts`, part of `npm test`) play recorded
+  OpenRouter streams from `__fixtures__/openrouter/` through the real loop, with
+  only fetch and storage stubbed: no tool-call ids, duplicate ids, a 200 with an
+  `error` body, an error chunk mid-stream, a stream with no finish_reason (and
+  `[DONE]` without one, which is fine), parallel calls interleaved and split
+  mid-UTF-8 on the byte stream, and a reasoning Title model that runs out of
+  tokens. Every case checks the next request's history is valid and the trace
+  holds no fixture text. Shared fetch helpers are in `assistantTestUtils.ts`. Add
+  a new provider quirk as a fixture plus a case here.
+- **Live eval** (`scripts/assistant-eval.cjs`, opt-in, costs a few cents):
+  10 golden prompts against a real model with the real tool schemas (bundled from
+  `assistantTools.ts`), checking which tools the first step calls, that
+  arguments parse, and that no mutating tool is called unprompted. No tool runs.
+  Skipped without `OPENROUTER_API_KEY`; the model is `ASSISTANT_EVAL_MODEL`, or
+  the one in Settings when run as `ELECTRON_RUN_AS_NODE=1 npx electron
+  scripts/assistant-eval.cjs`. `--record <dir>` saves the raw streams as fixtures.
+  Run it before switching the Assistant's model.
 - **Memory "Tidy with AI"** (`assistantTidy.ts`): asks the model to merge
   duplicates and drop superseded facts and returns a **proposal — it never
   writes**. The pane shows a line diff (`shared/memoryDiff.ts`), and the user

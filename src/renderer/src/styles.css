@@ -6861,6 +6861,23 @@ body {
   margin-top: 4px;
   font-size: 12px;
 }
+
+/* ---- Turn details (timings and sizes per request and tool call) ---- */
+.assistant-trace-summary {
+  font-size: 12px;
+}
+.assistant-trace-tool {
+  margin-left: 14px;
+}
+.assistant-trace-step .assistant-tool-entry-head .muted {
+  font-size: 11.5px;
+}
+.assistant-trace-error {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--alert);
+  overflow-wrap: anywhere;
+}
 .assistant-tool-entry-result summary {
   cursor: pointer;
   color: var(--ink-dim);
