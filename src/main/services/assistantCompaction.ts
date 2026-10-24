@@ -10,7 +10,7 @@
 // Compaction always cuts on a user message, so an assistant `tool_calls`
 // message and its `tool` results are never split across the boundary.
 
-import type { ChatMessage } from "./assistantTranscript";
+import type { ChatMessage, ContentPart, WireMessage } from "./assistantTranscript";
 
 // Estimated tokens (chars / 4) at which a chat is summarized. Roughly where
 // per-turn cost starts to be dominated by re-reading history.
@@ -57,23 +57,70 @@ function recentBoundary(body: ChatMessage[]): number {
   return users.length > KEEP_RECENT_TURNS ? users[users.length - KEEP_RECENT_TURNS] : 0;
 }
 
+// Images are only re-sent for the most recent turns: they are the heaviest thing
+// in a chat, and a picture from many turns ago has long since been described in
+// the replies. Older ones become a one-line note.
+export const KEEP_IMAGE_TURNS = 2;
+// A flat estimate per image; providers bill by size, and ours are capped.
+const IMAGE_TOKEN_ESTIMATE = 1000;
+const ATTACHED_TEXT_MAX_CHARS = 60_000;
+
 // A slash command's instructions go in front of what the user typed, in every
-// request, so later turns still know what was asked of them.
-function withInjected(m: Extract<ChatMessage, { role: "system" | "user" }>): string {
-  if (!m.injected) return m.content;
-  return m.content ? `${m.injected}\n\n${m.content}` : m.injected;
+// request, so later turns still know what was asked of them. Attached text
+// files follow it, as plainly delimited data.
+function userText(m: Extract<ChatMessage, { role: "system" | "user" }>): string {
+  const blocks: string[] = [];
+  if (m.injected) blocks.push(m.injected);
+  if (m.content) blocks.push(m.content);
+  if (m.role === "user") {
+    for (const a of m.attachments ?? []) {
+      if (a.kind !== "text") continue;
+      const text = (a.text ?? "").slice(0, ATTACHED_TEXT_MAX_CHARS);
+      blocks.push(
+        `<attachment name=${JSON.stringify(a.name)} type="${a.mime}">\n${text}${a.truncated ? "\n[The rest of the file was cut off.]" : ""}\n</attachment>`
+      );
+    }
+  }
+  return blocks.join("\n\n");
 }
+
+// A user message as sent. Plain text stays a string, so a chat without images
+// is byte-for-byte what it was before attachments existed.
+function userContent(
+  m: Extract<ChatMessage, { role: "system" | "user" }>,
+  keepImages: boolean,
+  resolveImage: ImageResolver
+): string | ContentPart[] {
+  const images = m.role === "user" ? (m.attachments ?? []).filter((a) => a.kind === "image") : [];
+  if (images.length === 0) return userText(m);
+  const parts: ContentPart[] = [];
+  const notes: string[] = [];
+  for (const image of images) {
+    const url = keepImages ? resolveImage(image.id) : null;
+    if (url) parts.push({ type: "image_url", image_url: { url } });
+    else notes.push(`[Image ${JSON.stringify(image.name)} is no longer attached]`);
+  }
+  const text = [userText(m), ...notes].filter(Boolean).join("\n\n");
+  if (parts.length === 0) return text;
+  return [...(text ? [{ type: "text" as const, text }] : []), ...parts];
+}
+
+// Looks up an image's data URL by attachment id; null when it can't be read.
+export type ImageResolver = (id: string) => string | null;
+const NO_IMAGES: ImageResolver = () => null;
 
 // What the model is actually sent for a stored history. Archived messages are
 // dropped, the latest summary is appended to the system prompt, bookkeeping
 // flags are stripped, and bulky tool output from old turns is trimmed.
-export function toWire(messages: ChatMessage[]): ChatMessage[] {
+export function toWire(messages: ChatMessage[], resolveImage: ImageResolver = NO_IMAGES): WireMessage[] {
   const live = messages.filter((m) => !m.archived);
   const summary = [...live].reverse().find(isSummary);
   const body = live.filter((m) => !isSummary(m));
   const boundary = recentBoundary(body);
+  const userIndexes = body.flatMap((m, i) => (m.role === "user" ? [i] : []));
+  const imageBoundary = userIndexes.length > KEEP_IMAGE_TURNS ? userIndexes[userIndexes.length - KEEP_IMAGE_TURNS] : 0;
 
-  return body.map((m, i): ChatMessage => {
+  return body.map((m, i): WireMessage => {
     switch (m.role) {
       case "system":
         return {
@@ -83,7 +130,7 @@ export function toWire(messages: ChatMessage[]): ChatMessage[] {
             : m.content,
         };
       case "user":
-        return { role: "user", content: withInjected(m) };
+        return { role: "user", content: userContent(m, i >= imageBoundary, resolveImage) };
       case "assistant":
         return {
           role: "assistant",
@@ -102,12 +149,17 @@ export function toWire(messages: ChatMessage[]): ChatMessage[] {
 
 // A rough size, good enough to decide when to compact. Exact counts would need
 // the model's tokenizer, which differs per OpenRouter model.
-export function estimateTokens(messages: ChatMessage[]): number {
+export function estimateTokens(messages: (ChatMessage | WireMessage)[]): number {
   let chars = 0;
   for (const m of messages) {
     chars += 16;
     if (typeof m.content === "string") chars += m.content.length;
-    if (m.role === "user" && m.injected) chars += m.injected.length;
+    else if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        chars += part.type === "text" ? part.text.length : IMAGE_TOKEN_ESTIMATE * 4;
+      }
+    }
+    if ("injected" in m && m.injected) chars += m.injected.length;
     if (m.role === "assistant") {
       for (const c of m.tool_calls ?? []) chars += c.function.name.length + c.function.arguments.length;
     }
@@ -156,7 +208,8 @@ export function buildSummaryInput(messages: ChatMessage[], plan: CompactionPlan)
     if (m.role === "system" && m.summary) {
       previous = m.content;
     } else if (m.role === "user") {
-      lines.push(`User: ${m.content}`);
+      const attached = (m.attachments ?? []).map((a) => a.name);
+      lines.push(`User: ${m.content}${attached.length ? ` [attached: ${attached.join(", ")}]` : ""}`);
     } else if (m.role === "assistant") {
       if (m.content?.trim()) lines.push(`Assistant: ${m.content.trim()}`);
       for (const c of m.tool_calls ?? []) {

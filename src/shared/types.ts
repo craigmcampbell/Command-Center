@@ -237,6 +237,29 @@ export interface AssistantReply {
   compacted?: boolean;
 }
 
+// A file attached to a user message. Images live on disk (named by their hash);
+// text files are kept inline in the stored message. `text` is only ever in main.
+export interface AssistantAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  kind: "image" | "text";
+  size: number;
+  text?: string;
+  // The text was cut to fit; the model was told.
+  truncated?: boolean;
+}
+
+// What the transcript and composer need to show one: no file contents.
+export type AssistantAttachmentInfo = Pick<AssistantAttachment, "id" | "name" | "mime" | "kind" | "size">;
+
+// A file as the renderer hands it to main with the message.
+export interface AssistantAttachmentInput {
+  name: string;
+  mime: string;
+  data: Uint8Array;
+}
+
 // A slash command: an enabled skill or saved prompt.
 export interface AssistantCommandInfo {
   name: string;
@@ -304,6 +327,7 @@ export interface AssistantTranscriptItem {
   text: string;
   // On a user item: the slash command that started the turn.
   command?: string;
+  attachments?: AssistantAttachmentInfo[];
   toolCalls: AssistantToolCall[];
   remembered: string[];
 }
@@ -2005,7 +2029,8 @@ export interface CommandCenterApi {
       message: string,
       requestId: string,
       // A slash command (an enabled skill or saved prompt) to run this turn with.
-      command?: string
+      command?: string,
+      attachments?: AssistantAttachmentInput[]
     ) => Promise<AssistantReply>;
     // Re-runs the last question in a chat, replacing its answer.
     regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
@@ -2026,6 +2051,9 @@ export interface CommandCenterApi {
       // Summarizes the older part of a chat now, regardless of its size.
       compact: (id: string) => Promise<AssistantCompactResult>;
     };
+    // An image attachment as a data URL, for showing it in the transcript.
+    // null when the file is gone.
+    readAttachment: (id: string) => Promise<string | null>;
     commands: {
       // Enabled commands, for the composer's "/" picker.
       list: () => Promise<AssistantCommandInfo[]>;

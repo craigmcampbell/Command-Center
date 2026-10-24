@@ -28,6 +28,7 @@ import type {
   OpenAIPeriod,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantAttachmentInput,
   AssistantScalarConfig,
   AssistantDelta,
   AssistantApproval,
@@ -224,8 +225,14 @@ const api: CommandCenterApi = {
   },
 
   assistant: {
-    ask: (conversationId: string | null, message: string, requestId: string, command?: string) =>
-      ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command),
+    ask: (
+      conversationId: string | null,
+      message: string,
+      requestId: string,
+      command?: string,
+      attachments?: AssistantAttachmentInput[]
+    ) => ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command, attachments),
+    readAttachment: (id: string) => ipcRenderer.invoke("assistant:attachments:read", id),
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),

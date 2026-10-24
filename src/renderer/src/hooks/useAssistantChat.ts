@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PendingAttachment } from "../lib/attachments";
 import type {
   AssistantApproval,
+  AssistantAttachmentInfo,
   AssistantReply,
   AssistantToolCall,
   AssistantUsage,
@@ -33,6 +35,9 @@ export interface ChatItem {
   text: string;
   // On a user message: the slash command it ran.
   command?: string;
+  // On a user message: attached files. `previewUrl` is set for ones just sent
+  // from this window; a reopened chat loads images through readAttachment.
+  attachments?: (AssistantAttachmentInfo & { previewUrl?: string })[];
   // Set while the reply is still arriving; ties streamed deltas and
   // confirmation cards to this bubble. The final reply clears it.
   requestId?: string;
@@ -167,6 +172,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           role: item.role,
           text: item.text,
           ...(item.command ? { command: item.command } : {}),
+          ...(item.attachments ? { attachments: item.attachments } : {}),
           toolCalls: item.toolCalls,
           remembered: item.remembered,
         }))
@@ -209,19 +215,42 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   );
 
   const send = useCallback(
-    async (raw: string, command?: string): Promise<void> => {
+    async (raw: string, command?: string, files: PendingAttachment[] = []): Promise<void> => {
       const text = raw.trim();
-      // A command can run with nothing typed after it.
-      if ((!text && !command) || busyRef.current) return;
+      // A command can run with nothing typed after it, and a file with no words.
+      if ((!text && !command && files.length === 0) || busyRef.current) return;
       const requestId = crypto.randomUUID();
       const replyId = nextId.current++;
       begin(requestId);
       setItems((prev) => [
         ...prev,
-        { id: nextId.current++, role: "user", text, ...(command ? { command } : {}) },
+        {
+          id: nextId.current++,
+          role: "user",
+          text,
+          ...(command ? { command } : {}),
+          ...(files.length
+            ? {
+                attachments: files.map((f) => ({
+                  id: f.key,
+                  name: f.name,
+                  mime: f.mime,
+                  kind: f.kind,
+                  size: f.size,
+                  previewUrl: f.previewUrl,
+                })),
+              }
+            : {}),
+        },
         { id: replyId, role: "assistant", text: "", requestId },
       ]);
-      const reply = await window.api.assistant.ask(conversationIdRef.current, text, requestId, command);
+      const reply = await window.api.assistant.ask(
+        conversationIdRef.current,
+        text,
+        requestId,
+        command,
+        files.length ? files.map((f) => ({ name: f.name, mime: f.mime, data: f.data })) : undefined
+      );
       setItems((prev) => prev.map((item) => (item.id === replyId ? finalItem(replyId, reply) : item)));
       afterReply(reply);
     },

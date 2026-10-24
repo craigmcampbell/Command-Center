@@ -89,6 +89,8 @@ vi.mock("./assistantChats", () => ({
     return true;
   },
   deleteChat: (id: string) => store.chats.delete(id),
+  chatImageIds: () => [] as string[],
+  isAttachmentReferenced: () => false,
 }));
 
 vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -1965,5 +1967,113 @@ describe("web tools", () => {
     sent = scriptFetch(stop("ok"));
     await askAssistant(null, "x", hooks(), "r2", "webby");
     expect(names(sent[0])).toEqual(["web_search"]);
+  });
+});
+
+describe("attachments", () => {
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7]);
+  const PNG2 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 1, 1]);
+  const attachDir = path.join(os.tmpdir(), "assistant-attachments");
+  const png = (name = "shot.png", data = PNG) => ({ name, mime: "image/png", data });
+  const note = { name: "notes.md", mime: "text/markdown", data: new TextEncoder().encode("# Notes\nbuy milk") };
+
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    settings.firecrawl = {};
+    store.chats.clear();
+    store.failSave = false;
+    cmds.table.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fs.rmSync(attachDir, { recursive: true, force: true });
+  });
+
+  it("sends an image to the model as a content part and stores only a reference", async () => {
+    const sent = scriptFetch(stop("A screenshot."));
+    const reply = await askAssistant(null, "what is this?", hooks(), "r1", undefined, [png()]);
+    expect(reply.ok).toBe(true);
+
+    const user = sent[0].body.messages.find((m) => m.role === "user");
+    expect(user.content).toEqual([
+      { type: "text", text: "what is this?" },
+      { type: "image_url", image_url: { url: `data:image/png;base64,${Buffer.from(PNG).toString("base64")}` } },
+    ]);
+    const stored = store.chats.get(reply.conversationId)!.messages[0];
+    expect(stored.attachments).toHaveLength(1);
+    expect(stored.attachments[0]).toMatchObject({ name: "shot.png", mime: "image/png", kind: "image" });
+    expect(stored.attachments[0].data).toBeUndefined();
+    expect(fs.readdirSync(attachDir)).toEqual([stored.attachments[0].id]);
+
+    // The transcript carries names and ids, never file contents.
+    const item = openAssistantChat(reply.conversationId).items[0];
+    expect(item.attachments).toEqual([
+      { id: stored.attachments[0].id, name: "shot.png", mime: "image/png", kind: "image", size: PNG.length },
+    ]);
+  });
+
+  it("inlines a text file in the message, and a file alone is enough to send", async () => {
+    const sent = scriptFetch(stop("Milk."));
+    const reply = await askAssistant(null, "", hooks(), "r1", undefined, [note]);
+    expect(reply.ok).toBe(true);
+    const user = sent[0].body.messages.find((m) => m.role === "user");
+    expect(user.content).toBe('<attachment name="notes.md" type="text/markdown">\n# Notes\nbuy milk\n</attachment>');
+    expect(store.chats.get(reply.conversationId)!.title).toBe("notes.md");
+    expect(fs.existsSync(attachDir) ? fs.readdirSync(attachDir) : []).toEqual([]);
+  });
+
+  it("refuses a file that is neither an image nor text, without calling the model", async () => {
+    scriptFetch(stop("unused"));
+    const reply = await askAssistant(null, "hi", hooks(), "r1", undefined, [
+      { name: "a.zip", mime: "application/zip", data: Uint8Array.from([0x50, 0x4b, 0, 3, 4]) },
+    ]);
+    expect(reply).toMatchObject({ ok: false });
+    expect(reply.reason).toContain("a.zip");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("stops re-sending images after two more turns", async () => {
+    const sent = scriptFetch(stop("a"), stop("b"), stop("c"));
+    const first = await askAssistant(null, "look", hooks(), "r1", undefined, [png()]);
+    await askAssistant(first.conversationId, "and?", hooks(), "r2");
+    await askAssistant(first.conversationId, "still?", hooks(), "r3");
+    expect(Array.isArray(sent[1].body.messages.find((m) => m.role === "user").content)).toBe(true);
+    const oldest = sent[2].body.messages.find((m) => m.role === "user");
+    expect(oldest.content).toBe('look\n\n[Image "shot.png" is no longer attached]');
+    expect(JSON.stringify(sent[2].body.messages)).not.toContain("base64");
+  });
+
+  it("regenerating a reply keeps its attachments", async () => {
+    const sent = scriptFetch(stop("first"), stop("second"));
+    const first = await askAssistant(null, "what is this?", hooks(), "r1", undefined, [png(), note]);
+    await regenerateAssistant(first.conversationId, hooks(), "r2");
+    const again = sent[1].body.messages.filter((m) => m.role === "user");
+    expect(again).toHaveLength(1);
+    expect(again[0].content[0].text).toContain("what is this?");
+    expect(again[0].content[0].text).toContain("buy milk");
+    expect(again[0].content.some((p: any) => p.type === "image_url")).toBe(true);
+    expect(store.chats.get(first.conversationId)!.messages[0].attachments).toHaveLength(2);
+  });
+
+  it("counts an image toward the size that triggers compaction", async () => {
+    settings.assistant.compactAtTokens = 500;
+    const seed = scriptFetch(stop("ok"));
+    let id: string | null = null;
+    settings.assistant.compactAtTokens = 0;
+    for (let i = 1; i <= 6; i++) id = (await askAssistant(id, `q${i}`, hooks())).conversationId;
+    settings.assistant.compactAtTokens = 1200;
+    const sent = scriptFetch(stop("A summary of earlier questions, long enough."), stop("done"));
+    const reply = await askAssistant(id, "now this", hooks(), "r9", undefined, [png("x.png", PNG2)]);
+    expect(reply.compacted).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(seed.length).toBeGreaterThan(0);
   });
 });

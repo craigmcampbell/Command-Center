@@ -170,3 +170,77 @@ describe("estimateTokens", () => {
     expect(estimateTokens([])).toBe(0);
   });
 });
+
+describe("attachments on the wire", () => {
+  const img = (id: string, name = `${id}.png`) => ({ id, name, mime: "image/png", kind: "image" as const, size: 10 });
+  const resolve = (id: string) => `data:image/png;base64,${id}`;
+  const turn = (n: number, attachments?: ReturnType<typeof img>[]): ChatMessage[] => [
+    { role: "user", content: `question ${n}`, ...(attachments ? { attachments } : {}) },
+    { role: "assistant", content: `answer ${n}` },
+  ];
+  const sys: ChatMessage = { role: "system", content: "SYS" };
+
+  it("sends an image as a content part after the text", () => {
+    const wire = toWire([sys, ...turn(1, [img("a")])], resolve);
+    expect(wire[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "question 1" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,a" } },
+      ],
+    });
+  });
+
+  it("sends an image with no text as just the image", () => {
+    const wire = toWire([sys, { role: "user", content: "", attachments: [img("a")] }], resolve);
+    expect(wire[1].content).toEqual([{ type: "image_url", image_url: { url: "data:image/png;base64,a" } }]);
+  });
+
+  it("only re-sends images from the most recent turns", () => {
+    const messages = [sys, ...turn(1, [img("old")]), ...turn(2), ...turn(3, [img("mid")]), ...turn(4, [img("new")])];
+    const wire = toWire(messages, resolve);
+    const users = wire.filter((m) => m.role === "user");
+    expect(users[0].content).toBe('question 1\n\n[Image "old.png" is no longer attached]');
+    expect(Array.isArray(users[2].content)).toBe(true);
+    expect(Array.isArray(users[3].content)).toBe(true);
+    expect(JSON.stringify(wire)).not.toContain("base64,old");
+  });
+
+  it("falls back to a note when the file can't be read", () => {
+    const wire = toWire([sys, ...turn(1, [img("gone")])], () => null);
+    expect(wire[1].content).toBe('question 1\n\n[Image "gone.png" is no longer attached]');
+  });
+
+  it("puts a text file inline as delimited data, after the command and the typed text", () => {
+    const wire = toWire(
+      [
+        sys,
+        {
+          role: "user",
+          content: "summarise this",
+          injected: "<command>X</command>",
+          attachments: [{ id: "t", name: 'notes "v2".md', mime: "text/markdown", kind: "text", size: 5, text: "Hello", truncated: true }],
+        },
+      ],
+      resolve
+    );
+    expect(wire[1].content).toBe(
+      '<command>X</command>\n\nsummarise this\n\n<attachment name="notes \\"v2\\".md" type="text/markdown">\nHello\n[The rest of the file was cut off.]\n</attachment>'
+    );
+  });
+
+  it("leaves a chat without attachments exactly as it was", () => {
+    const messages = [sys, ...turn(1), ...turn(2)];
+    expect(toWire(messages, resolve)).toEqual(messages);
+  });
+
+  it("counts images in the size estimate and names files for the summarizer", () => {
+    const withImage = toWire([sys, ...turn(1, [img("a")])], resolve);
+    const without = toWire([sys, ...turn(1)], resolve);
+    expect(estimateTokens(withImage)).toBeGreaterThan(estimateTokens(without) + 900);
+
+    const messages: ChatMessage[] = [sys];
+    for (let i = 1; i <= 6; i++) messages.push(...turn(i, i === 1 ? [img("a", "chart.png")] : undefined));
+    expect(buildSummaryInput(messages, planCompaction(messages)!)).toContain("User: question 1 [attached: chart.png]");
+  });
+});

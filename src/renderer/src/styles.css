@@ -5931,6 +5931,73 @@ body {
 .assistant-input-row {
   position: relative;
 }
+.assistant-main.is-dragging {
+  outline: 2px dashed var(--accent, #6aa8ff);
+  outline-offset: -4px;
+}
+.assistant-attach-button {
+  align-self: flex-end;
+  padding: 0 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+.assistant-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+.assistant-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  font-size: 12px;
+}
+.assistant-attachment-chip img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.assistant-attachment-chip button {
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.assistant-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-file-icon {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  opacity: 0.7;
+}
+.assistant-attach-error {
+  color: var(--pending);
+  font-size: 12px;
+}
+.assistant-sent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.assistant-sent-image {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 8px;
+  object-fit: cover;
+}
 .assistant-command-picker {
   position: absolute;
   left: 0;

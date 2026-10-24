@@ -4,7 +4,7 @@
 // back into something a UI can show (a resumed chat has no other source of
 // truth for what was said, so the display is derived rather than stored twice).
 
-import type { AssistantToolCall, AssistantTranscriptItem } from "../../shared/types";
+import type { AssistantAttachment, AssistantToolCall, AssistantTranscriptItem } from "../../shared/types";
 
 export interface ToolCall {
   id: string;
@@ -17,6 +17,17 @@ export interface ToolCall {
 // sent to the model. `summary` marks the system message holding that summary.
 // Neither flag may reach the provider; assistantCompaction.ts's `toWire`
 // strips them.
+// What goes over the wire: like ChatMessage, but a user message holding images
+// carries its content as parts (the OpenAI shape OpenRouter accepts).
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+export type WireMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | ContentPart[] }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
 export type ChatMessage =
   | {
       role: "system" | "user";
@@ -29,6 +40,9 @@ export type ChatMessage =
       // transcript, titles and search show).
       command?: string;
       injected?: string;
+      // Files attached to a user message. Only images and small text files are
+      // accepted (assistantAttachments.ts); see `toWire` for how they are sent.
+      attachments?: AssistantAttachment[];
     }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean }
   | { role: "tool"; tool_call_id: string; content: string; archived?: boolean };
@@ -153,6 +167,11 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
         role: "user",
         text: m.content,
         ...(m.command ? { command: m.command } : {}),
+        ...(m.attachments?.length
+          ? {
+              attachments: m.attachments.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })),
+            }
+          : {}),
         toolCalls: [],
         remembered: [],
       });

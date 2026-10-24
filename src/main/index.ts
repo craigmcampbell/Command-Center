@@ -132,6 +132,7 @@ import {
   stopAssistant,
   type AskHooks,
 } from "./services/assistant";
+import { readImageDataUrl } from "./services/assistantAttachments";
 import { initAssistantChats } from "./services/assistantChats";
 import {
   getCommandSettings,
@@ -700,13 +701,14 @@ function assistantHooks(sender: Electron.WebContents, requestId: unknown): AskHo
 
 ipcMain.handle(
   "assistant:ask",
-  (evt, conversationId: unknown, message: unknown, requestId: unknown, command: unknown) =>
+  (evt, conversationId: unknown, message: unknown, requestId: unknown, command: unknown, attachments: unknown) =>
     askAssistant(
       typeof conversationId === "string" ? conversationId : null,
       typeof message === "string" ? message : "",
       assistantHooks(evt.sender, requestId),
       typeof requestId === "string" ? requestId : undefined,
-      typeof command === "string" && command ? command : undefined
+      typeof command === "string" && command ? command : undefined,
+      attachments
     )
 );
 ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId: unknown) =>
@@ -737,6 +739,9 @@ ipcMain.handle("assistant:chats:remove", (_evt, id: unknown) =>
 );
 ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
   renameAssistantChat(typeof id === "string" ? id : "", typeof title === "string" ? title : "")
+);
+ipcMain.handle("assistant:attachments:read", (_evt, id: unknown) =>
+  typeof id === "string" ? readImageDataUrl(id) : null
 );
 // Slash commands. Plain handlers: the config reads the skills folder fresh each time.
 ipcMain.handle("assistant:commands:list", () => listEnabledCommands());

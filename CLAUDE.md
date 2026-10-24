@@ -624,6 +624,30 @@ hotkey) — a drift there is silent.
   only, bounded. It is offered to skill turns and to any chat that has used a
   command, never to a plain chat. Skill folders are often symlinks, which the
   scan follows. The skills path is fixed at `~/.agents/skills`.
+- **Attachments** (`assistantAttachments.ts`; composer: paste, drop, or the `+`
+  button, up to 5 files / 12 MB): PNG, JPEG, GIF and WebP images for vision
+  models, and small UTF-8 text files. **Main trusts nothing the renderer says**:
+  the type comes from sniffing the bytes (a `.txt` that is really a PNG is an
+  image, a "PNG" that isn't is text or refused), names are scrubbed, binary and
+  oversized files are refused, and the whole batch is all-or-nothing. A file's id
+  is the SHA-256 of its content and is also its filename under
+  `userData/assistant-attachments/`, so identical pictures share one copy and no
+  user input ever forms a path (ids are re-validated against `^[a-f0-9]{64}$`
+  wherever they are read or deleted). The renderer shrinks big pictures to a
+  1568px long edge first (JPEG, transparency flattened to white). Images are
+  stored on disk; text files are stored **inline** in the message row (cut at
+  60,000 characters, and the model is told), so `toWire` stays pure — it takes a
+  resolver for image data URLs. A user message's stored `content` stays what was
+  typed; `attachments` is a JSON column on `assistant_messages`. On the wire
+  `content` is a plain string unless the message has images (then OpenAI-style
+  parts), so a chat without images is unchanged byte for byte. **Images are only
+  re-sent for the last 2 user turns**; older ones become a one-line note, because
+  they are the heaviest thing in a chat. Each counts ~1000 tokens toward the
+  compaction estimate. Regenerate keeps a turn's files. Deleting a chat removes
+  its image files unless another chat still references the same hash. The
+  transcript gets names and ids only; thumbnails load through
+  `assistant:attachments:read`. A model without vision fails with OpenRouter's own
+  error. PDFs are not supported.
 - **Web tools** (`firecrawlWeb.ts`; `web_search`, `web_scrape`) reuse the Firecrawl
   key from Settings → Integrations, so there is nothing new to configure, and are
   **only offered when that key is set**. Shapes were checked against Firecrawl's

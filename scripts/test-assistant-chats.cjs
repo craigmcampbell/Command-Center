@@ -63,6 +63,26 @@ const path = require('node:path');
     assert.deepEqual(api.listChats('DO THE DEMO'), [], 'Injected instructions are not searchable');
     api.deleteChat('cmd');
 
+    // Attachments: stored as JSON on the message, round-trip exactly, and a
+    // shared image is only unreferenced once every chat using it is gone.
+    const A = 'a'.repeat(64), B = 'b'.repeat(64);
+    const image = (id, name) => ({ id, name, mime: 'image/png', kind: 'image', size: 12 });
+    const textFile = { id: 'c'.repeat(64), name: 'n.md', mime: 'text/markdown', kind: 'text', size: 5, text: 'Hello', truncated: true };
+    api.saveChat('att1', 'One', [{ role: 'user', content: 'look', attachments: [image(A, 'x.png'), textFile] }, { role: 'assistant', content: 'ok' }]);
+    api.saveChat('att2', 'Two', [{ role: 'user', content: '', attachments: [image(A, 'same.png'), image(B, 'y.png')] }]);
+    assert.deepEqual(api.loadChat('att1').messages[0].attachments, [image(A, 'x.png'), textFile], 'Attachments round-trip, including inline text');
+    assert.equal(api.loadChat('att1').messages[1].attachments, undefined, 'Other messages gain no attachments field');
+    assert.deepEqual(api.chatImageIds('att1'), [A], 'Only images are listed, not text files');
+    assert.deepEqual(api.chatImageIds('att2').sort(), [A, B]);
+    assert.equal(api.isAttachmentReferenced(A), true);
+    api.deleteChat('att2');
+    assert.equal(api.isAttachmentReferenced(A), true, 'An image another chat still uses is kept');
+    assert.equal(api.isAttachmentReferenced(B), false);
+    api.deleteChat('att1');
+    assert.equal(api.isAttachmentReferenced(A), false);
+    assert.equal(api.isAttachmentReferenced('not hex'), false, 'A malformed id matches nothing');
+    assert.deepEqual(api.listChats('Hello'), [], 'Attached text is not searchable');
+
     // Slash commands: skills from disk and saved prompts, each off until enabled.
     api.initAssistantCommands();
     api.initAssistantCommands();
@@ -220,6 +240,6 @@ const path = require('node:path');
     assert.equal(api.deleteChat('b'), false, 'Deleting twice reports nothing deleted');
     assert.equal(api.listChats().length, 3);
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

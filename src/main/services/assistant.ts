@@ -34,6 +34,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AssistantApproval,
+  AssistantAttachment,
   AssistantChatResult,
   AssistantCompactResult,
   AssistantChatSummary,
@@ -42,6 +43,7 @@ import type {
   AssistantToolEvent,
   AssistantUsage,
 } from "../../shared/types";
+import { deleteAttachmentFiles, prepareAttachments, readImageDataUrl } from "./assistantAttachments";
 import { complete } from "./assistantClient";
 import {
   applyCompaction,
@@ -56,7 +58,9 @@ import {
 } from "./assistantCompaction";
 import {
   addChatUsage,
+  chatImageIds,
   deleteChat,
+  isAttachmentReferenced,
   listChats,
   loadChat,
   renameChat,
@@ -318,7 +322,11 @@ export function pinAssistantChat(id: string, pinned: boolean): { ok: boolean } {
 export function deleteAssistantChat(id: string): { ok: boolean } {
   conversations.delete(id);
   try {
-    return { ok: deleteChat(id) };
+    const images = chatImageIds(id);
+    const deleted = deleteChat(id);
+    // An image another chat also uses (same bytes, same file) is kept.
+    if (deleted) deleteAttachmentFiles(images.filter((image) => !isAttachmentReferenced(image)));
+    return { ok: deleted };
   } catch {
     return { ok: false };
   }
@@ -479,6 +487,8 @@ interface TurnRequest {
   message: string | null;
   // A slash command (enabled skill or saved prompt) to run this turn with.
   command?: string;
+  // Raw files from the renderer; validated and stored by prepareAttachments.
+  attachments?: unknown;
   hooks: AskHooks;
   requestId: string;
 }
@@ -498,7 +508,14 @@ function calledToolNames(messages: ChatMessage[]): string[] {
   return names;
 }
 
-async function runTurn({ conversationId, message, command: commandName, hooks, requestId }: TurnRequest): Promise<AssistantReply> {
+async function runTurn({
+  conversationId,
+  message,
+  command: commandName,
+  attachments: attachmentInputs,
+  hooks,
+  requestId,
+}: TurnRequest): Promise<AssistantReply> {
   const regenerate = message === null;
   const fail = (reason: string, id: string, needsSetup = false): AssistantReply => ({
     ok: false,
@@ -518,7 +535,11 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
 
   let text = message?.trim() ?? "";
   let command: ResolvedCommand | null = null;
+  let attached: AssistantAttachment[] = [];
   if (!regenerate) {
+    const prepared = prepareAttachments(attachmentInputs);
+    if (!prepared.ok) return fail(prepared.reason, conversationId ?? "");
+    attached = prepared.attachments;
     if (commandName) {
       command = await resolveCommand(commandName);
       if (!command) {
@@ -526,7 +547,7 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
       }
     }
     // A command can be run with nothing typed after it.
-    if (!text && !command) return fail("Empty message", conversationId ?? "");
+    if (!text && !command && attached.length === 0) return fail("Empty message", conversationId ?? "");
     if (text.length > MAX_MESSAGE_CHARS) return fail("Message is too long", conversationId ?? "");
   }
 
@@ -544,7 +565,10 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
     ? (settings.compactAtTokens as number)
     : DEFAULT_COMPACT_AT_TOKENS;
   if (!regenerate && compactAt > 0) {
-    const size = estimateTokens(toWire(convo.messages)) + Math.ceil(text.length / 4);
+    const incoming =
+      Math.ceil(text.length / 4) +
+      attached.reduce((n, a) => n + (a.kind === "image" ? 1000 : Math.ceil((a.text?.length ?? 0) / 4)), 0);
+    const size = estimateTokens(toWire(convo.messages, readImageDataUrl)) + incoming;
     if (size > compactAt) compacted = (await compactConversation(id, convo, apiKey, model)).ok;
   }
 
@@ -555,7 +579,7 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
     return fail(reason, id, needsSetup);
   };
 
-  let regenerated: { command: string; injected?: string } | null = null;
+  let regenerated: { command?: string; injected?: string; attachments?: AssistantAttachment[] } | null = null;
   let restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null = command;
   if (regenerate) {
     const lastUser = convo.messages.map((m) => m.role).lastIndexOf("user");
@@ -565,12 +589,19 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
     if (calledToolNames(tail).some((name) => MUTATING_TOOLS.has(name))) {
       return rollback("Can't regenerate: that reply changed something");
     }
-    const prior = convo.messages[lastUser] as { content: string; command?: string; injected?: string };
+    const prior = convo.messages[lastUser] as {
+      content: string;
+      command?: string;
+      injected?: string;
+      attachments?: AssistantAttachment[];
+    };
     text = prior.content;
+    // The re-asked question keeps its files too.
+    if (prior.attachments?.length) regenerated = { attachments: prior.attachments };
     // The re-asked question keeps its command, and the command's allowlist: if
     // it has since been switched off, the safe default (read-only) applies.
     if (prior.command) {
-      regenerated = { command: prior.command, injected: prior.injected };
+      regenerated = { ...regenerated, command: prior.command, injected: prior.injected };
       command = await resolveCommand(prior.command);
       restricted = command ?? { tools: null, kind: "prompt" };
     }
@@ -641,15 +672,21 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
   };
 
   // What a chat list shows for a turn with nothing typed after its command.
-  const asked = text || (command ? `/${command.name}` : regenerated ? `/${regenerated.command}` : "");
+  const files = regenerated?.attachments ?? attached;
+  const asked =
+    text ||
+    (command ? `/${command.name}` : regenerated?.command ? `/${regenerated.command}` : "") ||
+    files[0]?.name ||
+    "";
   convo.messages.push({
     role: "user",
     content: text,
     ...(command && !regenerated
       ? { command: command.name, injected: command.injected }
-      : regenerated
+      : regenerated?.command
         ? { command: regenerated.command, ...(regenerated.injected ? { injected: regenerated.injected } : {}) }
         : {}),
+    ...(files.length ? { attachments: files } : {}),
   });
 
   const offered = offeredToolNames(
@@ -667,7 +704,7 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
       const result = await complete({
         apiKey,
         model,
-        messages: toWire(convo.messages),
+        messages: toWire(convo.messages, readImageDataUrl),
         tools,
         onText: emit,
         signal,
@@ -805,9 +842,10 @@ export function askAssistant(
   message: string,
   hooks: AskHooks = NOOP_HOOKS,
   requestId: string = randomUUID(),
-  command?: string
+  command?: string,
+  attachments?: unknown
 ): Promise<AssistantReply> {
-  return runTurn({ conversationId, message, command, hooks, requestId });
+  return runTurn({ conversationId, message, command, attachments, hooks, requestId });
 }
 
 // Re-runs the last question in a chat. The old answer is replaced only if the

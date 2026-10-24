@@ -6,6 +6,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
 import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/types";
+import { describeSize, MAX_FILES, MAX_TOTAL_BYTES, readAttachment, type PendingAttachment } from "../lib/attachments";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
 import { IconCheck, IconCopy, IconX } from "./icons";
 
@@ -150,6 +151,54 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
     setDismissed(false);
   }, [typedName]);
 
+  // Attachments: pasted, dropped or picked, shown as chips until sent.
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function addFiles(files: File[]) {
+    if (busy || files.length === 0) return;
+    setAttachError(null);
+    const added: PendingAttachment[] = [];
+    for (const file of files) {
+      const current = [...pendingRef.current, ...added];
+      if (current.length >= MAX_FILES) {
+        setAttachError(`Attach at most ${MAX_FILES} files at a time`);
+        break;
+      }
+      const result = await readAttachment(file);
+      if (typeof result === "string") {
+        setAttachError(result);
+        continue;
+      }
+      if (current.reduce((n, a) => n + a.size, result.size) > MAX_TOTAL_BYTES) {
+        setAttachError("Those files are too large together");
+        if (result.previewUrl) URL.revokeObjectURL(result.previewUrl);
+        break;
+      }
+      added.push(result);
+    }
+    if (added.length) setPending((prev) => [...prev, ...added]);
+  }
+
+  function removePending(key: string) {
+    setPending((prev) => {
+      const gone = prev.find((a) => a.key === key);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return prev.filter((a) => a.key !== key);
+    });
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...e.clipboardData.files];
+    if (files.length === 0) return; // ordinary text paste
+    e.preventDefault();
+    void addFiles(files);
+  }
+
   function complete(command: AssistantCommandInfo) {
     setDraft(`/${command.name} `);
     inputRef.current?.focus();
@@ -157,14 +206,17 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
 
   function submit() {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && pending.length === 0) || busy) return;
+    const files = pending;
+    setPending([]);
+    setAttachError(null);
     // "/name rest" runs that command if it's enabled; anything else (a path,
     // an unknown word) is just text.
     const parsed = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec(text);
     const command = parsed && commands.find((c) => c.name.toLowerCase() === parsed[1].toLowerCase());
     setDraft("");
-    if (command) void chat.send(parsed?.[2] ?? "", command.name);
-    else void chat.send(text);
+    if (command) void chat.send(parsed?.[2] ?? "", command.name, files);
+    else void chat.send(text, undefined, files);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -208,7 +260,23 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
   }, [items]);
 
   return (
-    <div className="assistant-main">
+    <div
+      className={`assistant-main${dragging ? " is-dragging" : ""}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDragging(false);
+        void addFiles([...e.dataTransfer.files]);
+      }}
+    >
       <div className="assistant-log" role="log" aria-live="polite" aria-busy={busy}>
         {items.length === 0 && (emptyState ?? <p className="muted">Ask me anything.</p>)}
         {rows.map(({ item, question, isLastAssistant }) => (
@@ -229,6 +297,20 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
         ))}
         <div ref={bottomRef} />
       </div>
+      {(pending.length > 0 || attachError) && (
+        <div className="assistant-attachments" aria-label="Attachments">
+          {pending.map((a) => (
+            <span key={a.key} className="assistant-attachment-chip" title={`${a.name} · ${describeSize(a.size)}`}>
+              {a.previewUrl ? <img src={a.previewUrl} alt="" /> : <span className="assistant-file-icon">TXT</span>}
+              <span className="assistant-attachment-name">{a.name}</span>
+              <button type="button" onClick={() => removePending(a.key)} aria-label={`Remove ${a.name}`}>
+                ×
+              </button>
+            </span>
+          ))}
+          {attachError && <span className="assistant-attach-error">{attachError}</span>}
+        </div>
+      )}
       <div className="assistant-input-row">
         {pickerOpen && (
           <ul className="assistant-command-picker" role="listbox" aria-label="Commands">
@@ -255,17 +337,38 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything…  (Enter to send, / for commands)"
+          onPaste={handlePaste}
+          placeholder="Ask anything…  (Enter to send, / for commands, paste or drop files)"
           rows={2}
           disabled={busy}
           autoFocus
         />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void addFiles([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="assistant-attach-button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
+          aria-label="Attach files"
+          title="Attach images or text files (or paste or drop them)"
+        >
+          +
+        </button>
         {busy ? (
           <button type="button" className="assistant-stop" onClick={chat.stop}>
             Stop
           </button>
         ) : (
-          <button type="button" onClick={submit} disabled={!draft.trim()}>
+          <button type="button" onClick={submit} disabled={!draft.trim() && pending.length === 0}>
             Send
           </button>
         )}
@@ -333,6 +436,13 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         />
       ) : (
         <div className="assistant-bubble">
+          {item.attachments?.length ? (
+            <div className="assistant-sent-attachments">
+              {item.attachments.map((a) => (
+                <SentAttachment key={a.id} attachment={a} />
+              ))}
+            </div>
+          ) : null}
           {item.command && <span className="assistant-command-chip">/{item.command}</span>}
           {item.command && item.text ? " " : ""}
           {item.text}
@@ -490,6 +600,44 @@ function ApprovalCards({
         )
       )}
     </>
+  );
+}
+
+// Images already shown once are kept: a transcript re-renders on every streamed
+// token, and each reopened chat would otherwise re-read the same files.
+const imageCache = new Map<string, string | null>();
+
+function SentAttachment({ attachment }: { attachment: NonNullable<ChatItem["attachments"]>[number] }) {
+  const [url, setUrl] = useState<string | null | undefined>(
+    attachment.previewUrl ?? imageCache.get(attachment.id)
+  );
+  useEffect(() => {
+    if (attachment.kind !== "image" || url !== undefined) return;
+    let live = true;
+    void window.api.assistant.readAttachment(attachment.id).then((loaded) => {
+      imageCache.set(attachment.id, loaded);
+      if (live) setUrl(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, [attachment.id, attachment.kind, url]);
+
+  if (attachment.kind === "text") {
+    return (
+      <span className="assistant-attachment-chip" title={attachment.name}>
+        <span className="assistant-file-icon">TXT</span>
+        <span className="assistant-attachment-name">{attachment.name}</span>
+      </span>
+    );
+  }
+  return url ? (
+    <img className="assistant-sent-image" src={url} alt={attachment.name} title={attachment.name} />
+  ) : (
+    <span className="assistant-attachment-chip" title={attachment.name}>
+      <span className="assistant-file-icon">IMG</span>
+      <span className="assistant-attachment-name">{url === null ? `${attachment.name} (removed)` : attachment.name}</span>
+    </span>
   );
 }
 

@@ -8,7 +8,7 @@
 // OpenRouter's 400 for that passes through verbatim.
 
 import type { AssistantUsage } from "../../shared/types";
-import type { ChatMessage, ToolCall } from "./assistantTranscript";
+import type { ChatMessage, ToolCall, WireMessage } from "./assistantTranscript";
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Not fetchWithTimeout: its 20s deadline suits dashboard reads, and a fixed
@@ -36,7 +36,7 @@ export interface CompletionResult {
 export interface CompleteParams {
   apiKey: string;
   model: string;
-  messages: ChatMessage[];
+  messages: WireMessage[];
   // Omitted (not sent as an empty array — OpenAI-style APIs reject `tools: []`)
   // for requests that shouldn't call anything, like title generation.
   tools?: unknown[];

@@ -20,7 +20,7 @@
 
 import { getDatabase } from "./db";
 import type { ChatMessage, ToolCall } from "./assistantTranscript";
-import type { AssistantChatSummary, AssistantUsage } from "../../shared/types";
+import type { AssistantAttachment, AssistantChatSummary, AssistantUsage } from "../../shared/types";
 
 interface ChatRow {
   id: string;
@@ -49,6 +49,7 @@ interface MessageRow {
   summary: number;
   command: string | null;
   injected: string | null;
+  attachments: string | null;
 }
 
 const MAX_SEARCH_TEXT_CHARS = 100_000;
@@ -63,7 +64,14 @@ function toRow(m: ChatMessage): MessageRow {
     summary: m.role === "system" && m.summary ? 1 : 0,
     command: m.role === "user" && m.command ? m.command : null,
     injected: m.role === "user" && m.injected ? m.injected : null,
+    attachments: m.role === "user" && m.attachments?.length ? JSON.stringify(m.attachments) : null,
   };
+}
+
+function parseAttachments(json: string): AssistantAttachment[] {
+  const parsed = JSON.parse(json);
+  if (!Array.isArray(parsed)) throw new Error("attachments is not a list");
+  return parsed;
 }
 
 // Throws on a malformed `tool_calls` payload; loadChat turns that into "no such
@@ -86,6 +94,7 @@ function fromRow(row: MessageRow): ChatMessage {
         content: row.content ?? "",
         ...(row.command ? { command: row.command } : {}),
         ...(row.injected ? { injected: row.injected } : {}),
+        ...(row.attachments ? { attachments: parseAttachments(row.attachments) } : {}),
         ...archived,
       };
   }
@@ -97,8 +106,8 @@ function writeMessages(chatId: string, messages: ChatMessage[]): void {
   db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(chatId);
   const insert = db.prepare(
     `INSERT INTO assistant_messages
-       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected)
-     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected)`
+       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments)
+     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected, @attachments)`
   );
   messages.forEach((m, seq) => insert.run({ chatId, seq, ...toRow(m) }));
 }
@@ -158,6 +167,7 @@ export function initAssistantChats(): void {
   // Added with slash commands; a table made by the first version lacks them.
   addColumnIfMissing("assistant_messages", "command", "TEXT");
   addColumnIfMissing("assistant_messages", "injected", "TEXT");
+  addColumnIfMissing("assistant_messages", "attachments", "TEXT");
 
   // One-time, idempotent: a chat with no message rows yet is copied over from
   // its JSON column. A chat that has rows is never touched again, so this is
@@ -247,7 +257,7 @@ export function loadChat(id: string): StoredChat | null {
   try {
     const rows = getDatabase()
       .prepare(
-        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected
+        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments
            FROM assistant_messages WHERE chat_id = ? ORDER BY seq`
       )
       .all(id) as MessageRow[];
@@ -345,6 +355,31 @@ export function setChatPinned(id: string, pinned: boolean): boolean {
     getDatabase()
       .prepare(`UPDATE assistant_chats SET pinned = ? WHERE id = ?`)
       .run(pinned ? 1 : 0, id).changes > 0
+  );
+}
+
+// Image attachment ids referenced by a chat's messages.
+export function chatImageIds(chatId: string): string[] {
+  const rows = getDatabase()
+    .prepare(`SELECT attachments FROM assistant_messages WHERE chat_id = ? AND attachments IS NOT NULL`)
+    .all(chatId) as { attachments: string }[];
+  const ids = new Set<string>();
+  for (const row of rows) {
+    try {
+      for (const a of parseAttachments(row.attachments)) if (a.kind === "image") ids.add(a.id);
+    } catch {
+      // A corrupt row references nothing we can name.
+    }
+  }
+  return [...ids];
+}
+
+// True if any stored message still refers to this attachment.
+export function isAttachmentReferenced(id: string): boolean {
+  return Boolean(
+    getDatabase()
+      .prepare(`SELECT 1 FROM assistant_messages WHERE attachments LIKE ? LIMIT 1`)
+      .get(`%"${id.replace(/[^a-f0-9]/g, "")}"%`)
   );
 }
 
