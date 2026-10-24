@@ -5,6 +5,7 @@ import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
+import type { AssistantApproval } from "../../../shared/types";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
 import { IconCheck, IconCopy, IconX } from "./icons";
 
@@ -191,7 +192,7 @@ interface MessageRowProps {
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
-  onApprove: (approvalId: string, allow: boolean) => void;
+  onApprove: (approvalId: string, allow: boolean, allowedItems?: string[]) => void;
   onOpenSettings: () => void;
 }
 
@@ -377,23 +378,76 @@ function ApprovalCards({
 }) {
   return (
     <>
-      {approvals.map((approval) => (
-        <div key={approval.approvalId} className="assistant-approval" role="group" aria-label="Confirm action">
-          <p>
-            <span className="assistant-approval-label">The assistant wants to</span>
-            {approval.summary}
-          </p>
-          <div className="assistant-approval-actions">
-            <button type="button" onClick={() => onApprove(approval.approvalId, true)}>
-              Allow
-            </button>
-            <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
-              Deny
-            </button>
+      {approvals.map((approval) =>
+        approval.items ? (
+          <BatchApprovalCard key={approval.approvalId} approval={approval} onApprove={onApprove} />
+        ) : (
+          <div key={approval.approvalId} className="assistant-approval" role="group" aria-label="Confirm action">
+            <p>
+              <span className="assistant-approval-label">The assistant wants to</span>
+              {approval.summary}
+            </p>
+            <div className="assistant-approval-actions">
+              <button type="button" onClick={() => onApprove(approval.approvalId, true)}>
+                Allow
+              </button>
+              <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
+                Deny
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      )}
     </>
+  );
+}
+
+// Several changes from one step in a single card. Everything starts ticked, so
+// the common answer is one click; unticking drops just that item (it reports
+// back to the model as declined).
+function BatchApprovalCard({
+  approval,
+  onApprove,
+}: {
+  approval: AssistantApproval;
+  onApprove: (approvalId: string, allow: boolean, allowedItems?: string[]) => void;
+}) {
+  const items = approval.items ?? [];
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set(items.map((i) => i.itemId)));
+  const toggle = (id: string) =>
+    setTicked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  return (
+    <div className="assistant-approval" role="group" aria-label={`Confirm ${items.length} actions`}>
+      <p>
+        <span className="assistant-approval-label">The assistant wants to make {items.length} changes</span>
+      </p>
+      <ul className="assistant-approval-items">
+        {items.map((item) => (
+          <li key={item.itemId}>
+            <label>
+              <input type="checkbox" checked={ticked.has(item.itemId)} onChange={() => toggle(item.itemId)} />
+              <span>{item.summary}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="assistant-approval-actions">
+        <button
+          type="button"
+          disabled={ticked.size === 0}
+          onClick={() => onApprove(approval.approvalId, true, [...ticked])}
+        >
+          {ticked.size === items.length ? "Allow all" : `Allow ${ticked.size} of ${items.length}`}
+        </button>
+        <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
+          Deny all
+        </button>
+      </div>
+    </div>
   );
 }
 

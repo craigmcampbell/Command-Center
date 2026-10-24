@@ -6132,6 +6132,25 @@ body {
 .assistant-approval-deny {
   background: transparent;
 }
+.assistant-approval-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.assistant-approval-items label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.assistant-approval-items input {
+  margin-top: 3px;
+}
 
 .settings-field-row-top {
   align-items: flex-start;

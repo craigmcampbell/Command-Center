@@ -256,7 +256,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     if (activeRequest.current) void window.api.assistant.stop(activeRequest.current);
   }, []);
 
-  const answerApproval = useCallback((approvalId: string, allow: boolean): void => {
+  const answerApproval = useCallback((approvalId: string, allow: boolean, allowedItems?: string[]): void => {
     setItems((prev) =>
       prev.map((item) =>
         item.approvals?.some((a) => a.approvalId === approvalId)
@@ -264,7 +264,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           : item
       )
     );
-    void window.api.assistant.approve(approvalId, allow);
+    void window.api.assistant.approve(approvalId, allow, allowedItems);
   }, []);
 
   // Summarizes the older part of the open chat now. Failures show as an error

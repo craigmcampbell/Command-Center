@@ -707,8 +707,12 @@ ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId:
 ipcMain.handle("assistant:stop", (_evt, requestId: unknown) => {
   if (typeof requestId === "string") stopAssistant(requestId);
 });
-ipcMain.handle("assistant:approve", (_evt, approvalId: unknown, allow: unknown) => {
-  if (typeof approvalId === "string") answerApproval(approvalId, allow === true);
+ipcMain.handle("assistant:approve", (_evt, approvalId: unknown, allow: unknown, allowedItems: unknown) => {
+  if (typeof approvalId !== "string") return;
+  const items = Array.isArray(allowedItems)
+    ? allowedItems.filter((i): i is string => typeof i === "string")
+    : undefined;
+  answerApproval(approvalId, allow === true, items);
 });
 ipcMain.handle("assistant:chats:list", (_evt, query: unknown) =>
   listAssistantChats(typeof query === "string" ? query : undefined)

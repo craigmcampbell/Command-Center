@@ -229,8 +229,8 @@ const api: CommandCenterApi = {
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),
-    approve: (approvalId: string, allow: boolean) =>
-      ipcRenderer.invoke("assistant:approve", approvalId, allow),
+    approve: (approvalId: string, allow: boolean, allowedItems?: string[]) =>
+      ipcRenderer.invoke("assistant:approve", approvalId, allow, allowedItems),
     // Same shape as onCommand: the raw IpcRendererEvent (which carries
     // `sender`) never crosses the bridge, and the unsubscribe is returned.
     onDelta: (cb: (delta: AssistantDelta) => void) => {

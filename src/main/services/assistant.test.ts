@@ -139,7 +139,7 @@ vi.mock("./readerFeed", () => ({
   findCachedFeedItem: vi.fn(),
 }));
 
-import { completeTask } from "./todoist";
+import { completeTask, createTask } from "./todoist";
 import {
   answerApproval,
   askAssistant,
@@ -684,6 +684,7 @@ describe("turn control", () => {
     store.chats.clear();
     store.failSave = false;
     vi.mocked(completeTask).mockClear();
+    vi.mocked(createTask).mockClear();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -778,6 +779,100 @@ describe("turn control", () => {
         { name: "complete_task", ok: false, declined: true, args: "task_id: t1", result: "The user declined this action" },
       ]);
       expect(JSON.parse(sent[1].body.messages.at(-1).content).error).toBe("The user declined this action");
+    });
+
+    describe("batches", () => {
+      const both = callTools(
+        { id: "c1", name: "complete_task", args: { task_id: "t1" } },
+        { id: "c2", name: "create_task", args: { content: "Buy milk" } },
+        { id: "c3", name: "get_due_tasks" }
+      );
+
+      it("puts every change from one step on a single card, and reads run meanwhile", async () => {
+        scriptFetch(both, stop("Done."));
+        const approvals: any[] = [];
+        const events: any[] = [];
+        const pending = askAssistant(
+          null,
+          "do both",
+          hooks({ onApproval: (a) => approvals.push(a), onTool: (e) => events.push(e) }),
+          "req-b"
+        );
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        expect(approvals[0]).toMatchObject({
+          requestId: "req-b",
+          tool: "batch",
+          summary: "2 actions",
+          items: [
+            { itemId: "0", tool: "complete_task", summary: "Complete task “Ship the POC” (Work)" },
+            { itemId: "1", tool: "create_task", summary: "Create task “Buy milk”, due today" },
+          ],
+        });
+        // The read-only call didn't wait for the card.
+        await vi.waitFor(() => expect(events.some((e) => e.callId === "c3" && e.phase === "end")).toBe(true));
+        expect(completeTask).not.toHaveBeenCalled();
+        expect(createTask).not.toHaveBeenCalled();
+
+        answerApproval(approvals[0].approvalId, true);
+        const reply = await pending;
+        expect(completeTask).toHaveBeenCalledTimes(1);
+        expect(createTask).toHaveBeenCalledTimes(1);
+        expect(reply.toolCalls.map((c) => [c.name, c.ok])).toEqual([
+          ["complete_task", true],
+          ["create_task", true],
+          ["get_due_tasks", true],
+        ]);
+      });
+
+      it("runs only the ticked items; the rest are declined", async () => {
+        const sent = scriptFetch(both, stop("Half done."));
+        const approvals: any[] = [];
+        const pending = askAssistant(null, "do both", hooks({ onApproval: (a) => approvals.push(a) }));
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        answerApproval(approvals[0].approvalId, true, ["1", "99"]); // 99 isn't on the card
+        const reply = await pending;
+
+        expect(completeTask).not.toHaveBeenCalled();
+        expect(createTask).toHaveBeenCalledTimes(1);
+        expect(reply.toolCalls[0]).toMatchObject({ name: "complete_task", ok: false, declined: true });
+        expect(reply.toolCalls[1]).toMatchObject({ name: "create_task", ok: true });
+        // History stays valid: every call has its result.
+        const tail = sent[1].body.messages.slice(-4);
+        expect(tail.map((m: any) => m.tool_call_id)).toEqual([undefined, "c1", "c2", "c3"]);
+      });
+
+      it("Deny all, silence and Stop each decline every item", async () => {
+        scriptFetch(both, stop("Nothing changed."));
+        const approvals: any[] = [];
+        const pending = askAssistant(null, "do both", hooks({ onApproval: (a) => approvals.push(a) }));
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        answerApproval(approvals[0].approvalId, false, ["0", "1"]);
+        const reply = await pending;
+        expect(completeTask).not.toHaveBeenCalled();
+        expect(createTask).not.toHaveBeenCalled();
+        expect(reply.toolCalls.filter((c) => c.declined)).toHaveLength(2);
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        scriptFetch(both, stop("Skipped."));
+        const silent: any[] = [];
+        const waiting = askAssistant(null, "again", hooks({ onApproval: (a) => silent.push(a) }));
+        await vi.waitFor(() => expect(silent).toHaveLength(1));
+        await vi.advanceTimersByTimeAsync(120_001);
+        await waiting;
+        vi.useRealTimers();
+        expect(createTask).not.toHaveBeenCalled();
+      });
+
+      it("a single change still gets the classic card", async () => {
+        scriptFetch(completeCall, stop("Done."));
+        const approvals: any[] = [];
+        const pending = askAssistant(null, "one", hooks({ onApproval: (a) => approvals.push(a) }));
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        expect(approvals[0].items).toBeUndefined();
+        expect(approvals[0].tool).toBe("complete_task");
+        answerApproval(approvals[0].approvalId, true);
+        await pending;
+      });
     });
 
     it("treats silence as no", async () => {
@@ -1275,6 +1370,7 @@ describe("tool activity", () => {
     store.chats.clear();
     store.failSave = false;
     vi.mocked(completeTask).mockClear();
+    vi.mocked(createTask).mockClear();
   });
   afterEach(() => vi.unstubAllGlobals());
 

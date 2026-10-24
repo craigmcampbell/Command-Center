@@ -288,6 +288,9 @@ export interface AssistantApproval {
   approvalId: string;
   tool: string;
   summary: string;
+  // Present when several changes in one step share a card: each can be
+  // ticked or not. `tool` is "batch" and `summary` just counts them.
+  items?: { itemId: string; tool: string; summary: string }[];
 }
 
 // A chunk of streamed reply text, pushed from main while `assistant:ask` is
@@ -1966,8 +1969,9 @@ export interface CommandCenterApi {
     // Re-runs the last question in a chat, replacing its answer.
     regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
     stop: (requestId: string) => Promise<void>;
-    // Answers an approval card; unanswered cards time out as denied.
-    approve: (approvalId: string, allow: boolean) => Promise<void>;
+    // Answers an approval card; unanswered cards time out as denied. For a
+    // batch card, `allowedItems` lists the ticked item ids (omitted = all).
+    approve: (approvalId: string, allow: boolean, allowedItems?: string[]) => Promise<void>;
     onDelta: (cb: (delta: AssistantDelta) => void) => () => void;
     onApproval: (cb: (approval: AssistantApproval) => void) => () => void;
     // Live tool activity for a running request (start/end of each call).

@@ -71,6 +71,7 @@ import {
   MUTATING_TOOLS,
   prepareTool,
   TOOLS,
+  type PreparedTool,
   type ToolOutcome,
 } from "./assistantTools";
 import {
@@ -115,41 +116,70 @@ export interface AskHooks {
 const NOOP_HOOKS: AskHooks = { onText: () => {}, onApproval: () => {} };
 
 const inFlight = new Map<string, AbortController>();
-const pendingApprovals = new Map<string, { requestId: string; settle: (allow: boolean) => void }>();
+// `settle` takes one verdict per item (a classic card has exactly one).
+const pendingApprovals = new Map<
+  string,
+  { requestId: string; count: number; settle: (allowed: boolean[]) => void }
+>();
 
 export function stopAssistant(requestId: string): void {
   inFlight.get(requestId)?.abort();
 }
 
-export function answerApproval(approvalId: string, allow: boolean): void {
-  pendingApprovals.get(approvalId)?.settle(allow);
+// `allowedItems` is only meaningful for a batch card: the ids the user left
+// ticked. An id that isn't on the card is ignored, and a plain `allow` on a
+// batch (no list) means every item.
+export function answerApproval(approvalId: string, allow: boolean, allowedItems?: string[]): void {
+  const pending = pendingApprovals.get(approvalId);
+  if (!pending) return;
+  if (!allow) return pending.settle(new Array(pending.count).fill(false));
+  const ticked = allowedItems ? new Set(allowedItems) : null;
+  pending.settle(Array.from({ length: pending.count }, (_, i) => (ticked ? ticked.has(String(i)) : true)));
 }
 
-// Resolves true only on an explicit yes. A timeout, a Stop, or an already-
-// aborted request all resolve false: the safe default for an action nobody
-// approved is that it doesn't happen.
-function askForApproval(
+interface ApprovalRequest {
+  tool: string;
+  summary: string;
+}
+
+// Resolves, per item, true only on an explicit yes. A timeout, a Stop, or an
+// already-aborted request all resolve false: the safe default for an action
+// nobody approved is that it doesn't happen. One item shows the classic
+// Allow/Deny card; several share ONE card whose items can be ticked
+// individually, so "categorize these 12" is one decision instead of twelve.
+function askForApprovals(
   requestId: string,
-  tool: string,
-  summary: string,
+  items: ApprovalRequest[],
   hooks: AskHooks,
   signal: AbortSignal
-): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
+): Promise<boolean[]> {
+  const none = (): boolean[] => items.map(() => false);
+  if (items.length === 0) return Promise.resolve([]);
+  if (signal.aborted) return Promise.resolve(none());
   const approvalId = randomUUID();
-  return new Promise<boolean>((resolve) => {
+  return new Promise<boolean[]>((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const settle = (allow: boolean): void => {
+    const settle = (allowed: boolean[]): void => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       pendingApprovals.delete(approvalId);
-      resolve(allow);
+      resolve(allowed);
     };
-    const onAbort = (): void => settle(false);
-    timer = setTimeout(() => settle(false), APPROVAL_TIMEOUT_MS);
+    const onAbort = (): void => settle(none());
+    timer = setTimeout(() => settle(none()), APPROVAL_TIMEOUT_MS);
     signal.addEventListener("abort", onAbort, { once: true });
-    pendingApprovals.set(approvalId, { requestId, settle });
-    hooks.onApproval({ requestId, approvalId, tool, summary });
+    pendingApprovals.set(approvalId, { requestId, count: items.length, settle });
+    hooks.onApproval(
+      items.length === 1
+        ? { requestId, approvalId, tool: items[0].tool, summary: items[0].summary }
+        : {
+            requestId,
+            approvalId,
+            tool: "batch",
+            summary: `${items.length} actions`,
+            items: items.map((item, i) => ({ itemId: String(i), ...item })),
+          }
+    );
   });
 }
 
@@ -582,23 +612,46 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
           hasUntrustedContext(calls.map((c) => c.function.name));
         const askBeforeRemember = settings.askBeforeRemember !== false;
 
-        const outcomes = await Promise.all(
+        // Two phases so that every change the model wants is shown in ONE card:
+        // prepare all calls (read-only lookups; this is where each approval
+        // summary is built from authoritative data), ask once, then run. Calls
+        // that need no approval run straight away, while the card is open.
+        const prepared = await Promise.all(
           calls.map(async (call) => {
             const name = call.function.name;
             const args = summarizeArguments(call.function.arguments ?? "");
             const event = { requestId, callId: call.id, name, ...(args ? { args } : {}) };
             hooks.onTool?.({ ...event, phase: "start" });
-            let outcome: ToolOutcome;
+            let tool: PreparedTool | null = null;
             try {
-              const prepared = await prepareTool(name, call.function.arguments ?? "", {
+              tool = await prepareTool(name, call.function.arguments ?? "", {
                 untrustedSeen,
                 askBeforeRemember,
               });
-              const allowed = prepared.approval
-                ? await askForApproval(requestId, name, prepared.approval.summary, hooks, signal)
+            } catch {
+              // Reported below as an unexpected failure.
+            }
+            return { call, name, event, tool };
+          })
+        );
+        const needing = prepared.filter((p) => p.tool?.approval);
+        const verdicts = askForApprovals(
+          requestId,
+          needing.map((p) => ({ tool: p.name, summary: p.tool!.approval!.summary })),
+          hooks,
+          signal
+        );
+
+        const outcomes = await Promise.all(
+          prepared.map(async ({ call, event, tool }) => {
+            let outcome: ToolOutcome;
+            try {
+              if (!tool) throw new Error("not prepared");
+              const allowed = tool.approval
+                ? (await verdicts)[needing.findIndex((p) => p.call.id === call.id)] === true
                 : true;
               outcome = allowed
-                ? await prepared.run()
+                ? await tool.run()
                 : { content: JSON.stringify({ error: DECLINED_MESSAGE }), isError: true };
             } catch {
               outcome = {

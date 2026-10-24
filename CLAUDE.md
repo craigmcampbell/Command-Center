@@ -577,7 +577,14 @@ hotkey) — a drift there is silent.
 - **Actions that change data wait for the user.** `complete_task`,
   `reschedule_task`, `create_task` and `forget` return an approval from
   `prepareTool`; the loop sends `assistant:approval` and awaits
-  `assistant:approve`. **The card is built from authoritative data, never from
+  `assistant:approve`. **Changes from one model step share one card**: the loop
+  prepares every call first (read-only lookups that build each summary), then
+  asks once. One change gets the classic Allow/Deny card; several get a batch
+  card (`approval.items`, `tool: "batch"`) with every item ticked, answered with
+  the ticked ids (`approve(id, allow, allowedItems)`). An unticked item, an id
+  not on the card, Deny all, silence and Stop all report to the model as
+  declined; read-only calls in the same step run while the card is open.
+  **The card is built from authoritative data, never from
   the model's description**: tasks are looked up in Todoist by id and quoted by
   their real title, `forget` quotes the exact lines it will delete (and removes
   only those, by exact match). Silence (120s), Stop, or a closed window all mean
