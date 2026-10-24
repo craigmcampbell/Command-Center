@@ -68,13 +68,16 @@ import { localDate, readMemoryFile } from "./assistantMemory";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
 import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
 import {
+  collectKnownUrls,
   customSystemPrompt,
   hasUntrustedContext,
+  MAX_WEB_CALLS_PER_TURN,
   MUTATING_TOOLS,
   prepareTool,
   SKILL_FILE_TOOL,
   TOOL_DEFS,
   TOOLS,
+  WEB_TOOLS,
   type PreparedTool,
   type ToolOutcome,
 } from "./assistantTools";
@@ -87,7 +90,7 @@ import {
   toTranscript,
   type ChatMessage,
 } from "./assistantTranscript";
-import { getAssistantSettings } from "./settings";
+import { getAssistantSettings, getFirecrawlSettings } from "./settings";
 
 // Re-exported so callers (IPC, tests) have one place to import the memory API.
 export { getAssistantMemory, saveAssistantMemory } from "./assistantMemory";
@@ -439,10 +442,12 @@ async function retitle(params: {
 // ---- the loop --------------------------------------------------------------
 
 // The tools a command may use when its allowlist is unset: everything that only
-// reads. `remember` writes to memory, so it is not among them.
+// reads. `remember` writes to memory, so it is not among them, and the web tools
+// reach the internet and spend credits, so a command has to be given them.
 export function defaultCommandTools(): string[] {
   return TOOL_DEFS.map((t) => t.name).filter(
-    (name) => !MUTATING_TOOLS.has(name) && name !== "remember" && name !== SKILL_FILE_TOOL
+    (name) =>
+      !MUTATING_TOOLS.has(name) && name !== "remember" && name !== SKILL_FILE_TOOL && !WEB_TOOLS.has(name)
   );
 }
 
@@ -452,9 +457,12 @@ export function defaultCommandTools(): string[] {
 // gets the file reader, since its instructions point at its own files.
 function offeredToolNames(
   restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null,
-  chatUsesCommands: boolean
+  chatUsesCommands: boolean,
+  webEnabled: boolean
 ): Set<string> {
   const known = new Set(TOOL_DEFS.map((t) => t.name));
+  // The web tools can't work without a Firecrawl key, so they aren't offered.
+  if (!webEnabled) for (const name of WEB_TOOLS) known.delete(name);
   if (!restricted) {
     if (!chatUsesCommands) known.delete(SKILL_FILE_TOOL);
     return known;
@@ -646,8 +654,10 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
 
   const offered = offeredToolNames(
     restricted,
-    convo.messages.some((m) => m.role === "user" && m.command)
+    convo.messages.some((m) => m.role === "user" && m.command),
+    Boolean(getFirecrawlSettings().apiKey?.trim())
   );
+  let webCalls = 0;
   const tools = TOOLS.filter((t) => offered.has(t.function.name));
 
   try {
@@ -681,6 +691,7 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
         // prepare all calls (read-only lookups; this is where each approval
         // summary is built from authoritative data), ask once, then run. Calls
         // that need no approval run straight away, while the card is open.
+        const knownUrls = collectKnownUrls(convo.messages);
         const prepared = await Promise.all(
           calls.map(async (call) => {
             const name = call.function.name;
@@ -689,8 +700,20 @@ async function runTurn({ conversationId, message, command: commandName, hooks, r
             hooks.onTool?.({ ...event, phase: "start" });
             let tool: PreparedTool | null = null;
             try {
-              tool = offered.has(name)
-                ? await prepareTool(name, call.function.arguments ?? "", { untrustedSeen, askBeforeRemember })
+              // Counted as each call starts (before any await), so calls made
+              // together in one step share the budget in order.
+              const overWebBudget = WEB_TOOLS.has(name) && ++webCalls > MAX_WEB_CALLS_PER_TURN;
+              tool = overWebBudget
+                ? {
+                    run: async () => ({
+                      content: JSON.stringify({
+                        error: `Web lookups are limited to ${MAX_WEB_CALLS_PER_TURN} per reply. Answer with what you have, or ask the user to continue.`,
+                      }),
+                      isError: true,
+                    }),
+                  }
+                : offered.has(name)
+                ? await prepareTool(name, call.function.arguments ?? "", { untrustedSeen, askBeforeRemember, knownUrls })
                 : {
                     // Defence in depth: the model was only shown the allowed
                     // tools, but a call to any other is refused here too.

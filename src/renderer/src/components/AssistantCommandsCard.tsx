@@ -54,6 +54,7 @@ function ToolsEditor({ tools, value, onChange }: ToolsEditorProps) {
               />
               <code>{tool.name}</code>
               {tool.mutating && <span className="assistant-tool-warn"> changes data</span>}
+              {tool.external && <span className="assistant-tool-warn"> uses the internet</span>}
             </label>
           ))}
         </div>
@@ -123,7 +124,8 @@ export default function AssistantCommandsCard() {
         <code>{config.skillsDir}</code> and stay off until you switch them on here. The Assistant
         has no shell or editor, so skills that depend on running code won't work well; ones that
         shape writing or research do. A command can only use the tools you allow it, and by
-        default that is read-only tools, so a skill can never change your data unless you say so.
+        default that is read-only tools (no web access, no memory writes), so a skill can never
+        change your data or spend credits unless you say so.
       </p>
       {error && <p className="settings-error">{error}</p>}
 

@@ -258,6 +258,8 @@ export interface AssistantToolInfo {
   name: string;
   // Changes data, or writes to memory.
   mutating: boolean;
+  // Reaches the internet (and spends credits).
+  external?: boolean;
 }
 
 export interface AssistantCommandConfig {

@@ -141,7 +141,7 @@ import {
   savePromptCommand,
   setSkillSetting,
 } from "./services/assistantCommands";
-import { MUTATING_TOOLS, SKILL_FILE_TOOL, TOOL_DEFS } from "./services/assistantTools";
+import { MUTATING_TOOLS, SKILL_FILE_TOOL, TOOL_DEFS, WEB_TOOLS } from "./services/assistantTools";
 import { proposeMemoryTidy } from "./services/assistantTidy";
 import {
   assistantHotkeyStatus,
@@ -749,6 +749,7 @@ ipcMain.handle("assistant:commands:config", async (): Promise<AssistantCommandCo
     tools: TOOL_DEFS.filter((t) => t.name !== SKILL_FILE_TOOL).map((t) => ({
       name: t.name,
       mutating: MUTATING_TOOLS.has(t.name) || t.name === "remember",
+      ...(WEB_TOOLS.has(t.name) ? { external: true } : {}),
     })),
   };
 });

@@ -149,6 +149,8 @@ Three walled-off parts — this separation is the security model, keep it intact
     `~/.claude/projects`. See "Claude Code usage" below — the three correctness
     constraints there are easy to break and produce plausible-looking numbers
     when broken.
+  - `services/firecrawlWeb.ts` — web search and page reading for the Assistant (see
+    "Assistant tab"); same key as below, kept apart from the usage widget.
   - `services/firecrawl.ts` — team credit usage from Firecrawl's v2 API,
     given the current `firecrawl` settings section. `GET /v2/team/credit-usage`
     is remaining / plan / billing period; remaining can exceed planCredits
@@ -622,6 +624,21 @@ hotkey) — a drift there is silent.
   only, bounded. It is offered to skill turns and to any chat that has used a
   command, never to a plain chat. Skill folders are often symlinks, which the
   scan follows. The skills path is fixed at `~/.agents/skills`.
+- **Web tools** (`firecrawlWeb.ts`; `web_search`, `web_scrape`) reuse the Firecrawl
+  key from Settings → Integrations, so there is nothing new to configure, and are
+  **only offered when that key is set**. Shapes were checked against Firecrawl's
+  v2 docs (`data.web[{url,title,description}]`; `data.markdown` + `metadata`).
+  Three guards, each there for a reason: (1) **a scrape of an unfamiliar URL asks
+  first** — a URL the user typed or one `web_search` returned (`collectKnownUrls`)
+  is read straight away, anything else gets a card quoting the exact URL, because
+  a prompt-injected page could otherwise have the model "read" an attacker's URL
+  with your data in its query string; (2) **private/local hosts are refused**
+  (`isPrivateHost`) with no card, and only `http(s)` without credentials is
+  accepted; (3) **6 web calls per reply** (`MAX_WEB_CALLS_PER_TURN`, counted as each
+  call starts so a parallel step shares it) since every call spends credits. Both
+  tools are untrusted (not in `TRUSTED_TOOLS`), so `remember` asks afterwards, and
+  results carry a `note_untrusted`. Pages are cut at 12,000 characters. They are
+  **not** in a command's default allowlist — a command has to be granted them.
 - **Memory is retrieved, not always sent in full** (`assistantMemoryIndex.ts`,
   pure). The markdown file stays the source of truth — hand-edited, possibly in
   Obsidian — so there is **no separate index to keep in sync**: `searchMemory`
