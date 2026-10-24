@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { AssistantToolCall, CaptureTarget } from "../../../shared/types";
 import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
-import type { AssistantApproval } from "../../../shared/types";
+import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/types";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
 import { IconCheck, IconCopy, IconX } from "./icons";
 
@@ -114,14 +114,76 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
     if (!busy) inputRef.current?.focus();
   }, [busy]);
 
+  // Slash commands: enabled skills and saved prompts, offered while the draft
+  // is just "/" plus the start of a name.
+  const [commands, setCommands] = useState<AssistantCommandInfo[]>([]);
+  const [pick, setPick] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const loadCommands = useCallback(() => {
+    void window.api.assistant.commands
+      .list()
+      .then(setCommands)
+      .catch(() => setCommands([]));
+  }, []);
+  useEffect(loadCommands, [loadCommands, focusToken]);
+  useEffect(() => {
+    // Picks up a skill switched on in Settings without a reload.
+    window.addEventListener("focus", loadCommands);
+    return () => window.removeEventListener("focus", loadCommands);
+  }, [loadCommands]);
+
+  const typedName = /^\/([\w-]*)$/.exec(draft)?.[1] ?? null;
+  const matches = useMemo(
+    () =>
+      typedName === null
+        ? []
+        : commands.filter((c) => c.name.toLowerCase().startsWith(typedName.toLowerCase())),
+    [commands, typedName]
+  );
+  const pickerOpen = matches.length > 0 && !busy && !dismissed;
+  useEffect(() => {
+    setPick(0);
+    setDismissed(false);
+  }, [typedName]);
+
+  function complete(command: AssistantCommandInfo) {
+    setDraft(`/${command.name} `);
+    inputRef.current?.focus();
+  }
+
   function submit() {
     const text = draft.trim();
     if (!text || busy) return;
+    // "/name rest" runs that command if it's enabled; anything else (a path,
+    // an unknown word) is just text.
+    const parsed = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec(text);
+    const command = parsed && commands.find((c) => c.name.toLowerCase() === parsed[1].toLowerCase());
     setDraft("");
-    void chat.send(text);
+    if (command) void chat.send(parsed?.[2] ?? "", command.name);
+    else void chat.send(text);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (pickerOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setPick((p) => (p + step + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissed(true);
+        return;
+      }
+      const chosen = matches[Math.min(pick, matches.length - 1)];
+      // Enter on a name that is already complete runs it; otherwise it completes it.
+      if ((e.key === "Tab" || e.key === "Enter") && chosen && chosen.name !== typedName && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        complete(chosen);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
@@ -164,13 +226,32 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
         <div ref={bottomRef} />
       </div>
       <div className="assistant-input-row">
+        {pickerOpen && (
+          <ul className="assistant-command-picker" role="listbox" aria-label="Commands">
+            {matches.map((c, i) => (
+              <li
+                key={c.name}
+                role="option"
+                aria-selected={i === pick}
+                className={i === pick ? "is-active" : undefined}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  complete(c);
+                }}
+              >
+                <strong>/{c.name}</strong>
+                {c.description && <span className="muted"> {c.description}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={inputRef}
           className="assistant-input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything…  (Enter to send, Shift+Enter for a new line)"
+          placeholder="Ask anything…  (Enter to send, / for commands)"
           rows={2}
           disabled={busy}
           autoFocus
@@ -247,7 +328,11 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <div className="assistant-bubble">{item.text}</div>
+        <div className="assistant-bubble">
+          {item.command && <span className="assistant-command-chip">/{item.command}</span>}
+          {item.command && item.text ? " " : ""}
+          {item.text}
+        </div>
       )}
       {pending && <LiveTools tools={liveTools} />}
       <ApprovalCards approvals={approvals} onApprove={onApprove} />

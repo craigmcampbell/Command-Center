@@ -224,8 +224,8 @@ const api: CommandCenterApi = {
   },
 
   assistant: {
-    ask: (conversationId: string | null, message: string, requestId: string) =>
-      ipcRenderer.invoke("assistant:ask", conversationId, message, requestId),
+    ask: (conversationId: string | null, message: string, requestId: string, command?: string) =>
+      ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command),
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),
@@ -262,6 +262,14 @@ const api: CommandCenterApi = {
         ipcRenderer.invoke("assistant:chats:rename", id, title),
       pin: (id: string, pinned: boolean) => ipcRenderer.invoke("assistant:chats:pin", id, pinned),
       compact: (id: string) => ipcRenderer.invoke("assistant:chats:compact", id),
+    },
+    commands: {
+      list: () => ipcRenderer.invoke("assistant:commands:list"),
+      config: () => ipcRenderer.invoke("assistant:commands:config"),
+      setSkill: (name: string, values: { enabled: boolean; tools: string[] | null }) =>
+        ipcRenderer.invoke("assistant:commands:setSkill", name, values),
+      savePrompt: (input: unknown) => ipcRenderer.invoke("assistant:commands:savePrompt", input),
+      removePrompt: (name: string) => ipcRenderer.invoke("assistant:commands:removePrompt", name),
     },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
     hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),

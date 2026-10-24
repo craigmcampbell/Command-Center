@@ -237,6 +237,41 @@ export interface AssistantReply {
   compacted?: boolean;
 }
 
+// A slash command: an enabled skill or saved prompt.
+export interface AssistantCommandInfo {
+  name: string;
+  description: string;
+  kind: "skill" | "prompt";
+}
+
+export interface AssistantCommandSetting {
+  name: string;
+  description: string;
+  enabled: boolean;
+  // null = the default allowlist (every tool that only reads).
+  tools: string[] | null;
+  // Saved prompts only.
+  prompt?: string;
+}
+
+export interface AssistantToolInfo {
+  name: string;
+  // Changes data, or writes to memory.
+  mutating: boolean;
+}
+
+export interface AssistantCommandConfig {
+  skillsDir: string;
+  skills: AssistantCommandSetting[];
+  prompts: AssistantCommandSetting[];
+  tools: AssistantToolInfo[];
+}
+
+export interface AssistantCommandResult {
+  ok: boolean;
+  reason?: string;
+}
+
 export interface AssistantCompactResult {
   ok: boolean;
   reason?: string;
@@ -265,6 +300,8 @@ export interface AssistantTranscriptItem {
   // folded away; `text` is the summary the model now sees in their place.
   role: "user" | "assistant" | "summary";
   text: string;
+  // On a user item: the slash command that started the turn.
+  command?: string;
   toolCalls: AssistantToolCall[];
   remembered: string[];
 }
@@ -1964,7 +2001,9 @@ export interface CommandCenterApi {
     ask: (
       conversationId: string | null,
       message: string,
-      requestId: string
+      requestId: string,
+      // A slash command (an enabled skill or saved prompt) to run this turn with.
+      command?: string
     ) => Promise<AssistantReply>;
     // Re-runs the last question in a chat, replacing its answer.
     regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
@@ -1984,6 +2023,24 @@ export interface CommandCenterApi {
       pin: (id: string, pinned: boolean) => Promise<{ ok: boolean }>;
       // Summarizes the older part of a chat now, regardless of its size.
       compact: (id: string) => Promise<AssistantCompactResult>;
+    };
+    commands: {
+      // Enabled commands, for the composer's "/" picker.
+      list: () => Promise<AssistantCommandInfo[]>;
+      // Everything Settings needs: every skill found, every saved prompt, the tools.
+      config: () => Promise<AssistantCommandConfig>;
+      setSkill: (
+        name: string,
+        values: { enabled: boolean; tools: string[] | null }
+      ) => Promise<AssistantCommandResult>;
+      savePrompt: (input: {
+        name: string;
+        description: string;
+        prompt: string;
+        enabled: boolean;
+        tools: string[] | null;
+      }) => Promise<AssistantCommandResult>;
+      removePrompt: (name: string) => Promise<AssistantCommandResult>;
     };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
     hidePanel: () => Promise<void>;

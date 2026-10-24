@@ -47,6 +47,8 @@ interface MessageRow {
   tool_call_id: string | null;
   archived: number;
   summary: number;
+  command: string | null;
+  injected: string | null;
 }
 
 const MAX_SEARCH_TEXT_CHARS = 100_000;
@@ -59,6 +61,8 @@ function toRow(m: ChatMessage): MessageRow {
     tool_call_id: m.role === "tool" ? m.tool_call_id : null,
     archived: m.archived ? 1 : 0,
     summary: m.role === "system" && m.summary ? 1 : 0,
+    command: m.role === "user" && m.command ? m.command : null,
+    injected: m.role === "user" && m.injected ? m.injected : null,
   };
 }
 
@@ -77,7 +81,13 @@ function fromRow(row: MessageRow): ChatMessage {
     case "system":
       return { role: "system", content: row.content ?? "", ...(row.summary === 1 ? { summary: true } : {}), ...archived };
     default:
-      return { role: "user", content: row.content ?? "", ...archived };
+      return {
+        role: "user",
+        content: row.content ?? "",
+        ...(row.command ? { command: row.command } : {}),
+        ...(row.injected ? { injected: row.injected } : {}),
+        ...archived,
+      };
   }
 }
 
@@ -86,8 +96,9 @@ function writeMessages(chatId: string, messages: ChatMessage[]): void {
   const db = getDatabase();
   db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(chatId);
   const insert = db.prepare(
-    `INSERT INTO assistant_messages (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary)
-     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary)`
+    `INSERT INTO assistant_messages
+       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected)
+     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected)`
   );
   messages.forEach((m, seq) => insert.run({ chatId, seq, ...toRow(m) }));
 }
@@ -144,6 +155,9 @@ export function initAssistantChats(): void {
     summary INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (chat_id, seq)
   ) WITHOUT ROWID`);
+  // Added with slash commands; a table made by the first version lacks them.
+  addColumnIfMissing("assistant_messages", "command", "TEXT");
+  addColumnIfMissing("assistant_messages", "injected", "TEXT");
 
   // One-time, idempotent: a chat with no message rows yet is copied over from
   // its JSON column. A chat that has rows is never touched again, so this is
@@ -233,7 +247,7 @@ export function loadChat(id: string): StoredChat | null {
   try {
     const rows = getDatabase()
       .prepare(
-        `SELECT role, content, tool_calls, tool_call_id, archived, summary
+        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected
            FROM assistant_messages WHERE chat_id = ? ORDER BY seq`
       )
       .all(id) as MessageRow[];

@@ -121,6 +121,24 @@ vi.mock("./todoist", () => ({
     ],
   })),
 }));
+// Slash commands live in SQLite (covered by scripts/test-assistant-chats.cjs);
+// here a map stands in for the table.
+const cmds = vi.hoisted(() => ({
+  table: new Map<string, { kind: "skill" | "prompt"; enabled: boolean; tools: string[] | null; injected: string }>(),
+}));
+vi.mock("./assistantCommands", () => ({
+  resolveCommand: async (name: string) => {
+    const c = cmds.table.get(name);
+    return c && c.enabled ? { name, kind: c.kind, tools: c.tools, injected: c.injected } : null;
+  },
+  getCommandRow: (name: string) => {
+    const c = cmds.table.get(name);
+    return c ? { name, kind: c.kind, enabled: c.enabled, tools: c.tools, description: "", prompt: "" } : null;
+  },
+}));
+vi.mock("./assistantSkills", () => ({
+  readSkillFile: vi.fn(async () => ({ ok: true, content: "REFERENCE TEXT", truncated: false })),
+}));
 vi.mock("./docker", () => ({ getDockerContainers: vi.fn() }));
 vi.mock("./googleCalendar", () => ({ getEventsForDay: vi.fn() }));
 vi.mock("./notes", () => ({ searchNotes: vi.fn(), readNoteFile: vi.fn() }));
@@ -1653,5 +1671,153 @@ describe("compaction", () => {
     expect(await compactAssistantChat(id)).toEqual({ ok: true });
     expect(store.chats.get(id)!.messages.filter((m: any) => m.summary)).toHaveLength(1);
     expect(await compactAssistantChat("missing")).toMatchObject({ ok: false });
+  });
+});
+
+describe("slash commands", () => {
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    store.chats.clear();
+    store.failSave = false;
+    cmds.table.clear();
+    vi.mocked(completeTask).mockClear();
+    cmds.table.set("polish", {
+      kind: "skill",
+      enabled: true,
+      tools: null,
+      injected: '<skill name="polish">POLISH INSTRUCTIONS</skill>',
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const toolNames = (sent: Sent) => sent.body.tools.map((t) => t.function.name);
+
+  it("puts the command's instructions before what was typed, but stores only what was typed", async () => {
+    const sent = scriptFetch(stop("Polished."));
+    const reply = await askAssistant(null, "make this nicer", hooks(), "r1", "polish");
+    expect(reply.ok).toBe(true);
+
+    const user = sent[0].body.messages.find((m) => m.role === "user");
+    expect(user.content).toBe('<skill name="polish">POLISH INSTRUCTIONS</skill>\n\nmake this nicer');
+    const stored = store.chats.get(reply.conversationId)!.messages[0];
+    expect(stored).toMatchObject({ role: "user", content: "make this nicer", command: "polish" });
+    // The transcript shows what the user typed, with the command.
+    expect(openAssistantChat(reply.conversationId).items[0]).toMatchObject({
+      role: "user",
+      text: "make this nicer",
+      command: "polish",
+    });
+    expect(JSON.stringify(sent[0].body.messages)).not.toContain('"command"');
+  });
+
+  it("can run with nothing typed, and names the chat after the command", async () => {
+    const sent = scriptFetch(stop("Done."));
+    const reply = await askAssistant(null, "", hooks(), "r1", "polish");
+    expect(reply.ok).toBe(true);
+    expect(sent[0].body.messages.at(-1).content).toBe('<skill name="polish">POLISH INSTRUCTIONS</skill>');
+    expect(store.chats.get(reply.conversationId)!.title).toBe("/polish");
+  });
+
+  it("refuses a command that is unknown or switched off, without calling the model", async () => {
+    scriptFetch(stop("unused"));
+    expect(await askAssistant(null, "hi", hooks(), "r1", "nope")).toMatchObject({ ok: false });
+    cmds.table.get("polish")!.enabled = false;
+    const off = await askAssistant(null, "hi", hooks(), "r2", "polish");
+    expect(off).toMatchObject({ ok: false });
+    expect(off.reason).toContain("/polish");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await askAssistant(null, "", hooks(), "r3")).toMatchObject({ ok: false, reason: "Empty message" });
+  });
+
+  it("shows a skill only read-only tools plus its file reader by default", async () => {
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r1", "polish");
+    const names = toolNames(sent[0]);
+    expect(names).toContain("get_due_tasks");
+    expect(names).toContain("recall_memory");
+    expect(names).toContain("read_skill_file");
+    for (const hidden of ["complete_task", "create_task", "reschedule_task", "remember", "forget", "approve_transaction"]) {
+      expect(names).not.toContain(hidden);
+    }
+  });
+
+  it("a custom allowlist replaces the default, and a prompt gets no file reader", async () => {
+    cmds.table.set("plan", { kind: "prompt", enabled: true, tools: ["get_due_tasks", "create_task"], injected: "<command>PLAN</command>" });
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r1", "plan");
+    expect(toolNames(sent[0])).toEqual(["get_due_tasks", "create_task"]);
+  });
+
+  it("refuses a call to a tool outside the allowlist, even if the model makes one", async () => {
+    scriptFetch(callTools({ id: "c1", name: "complete_task", args: { task_id: "t1" } }), stop("Couldn't."));
+    const approvals: any[] = [];
+    const reply = await askAssistant(null, "x", hooks({ onApproval: (a) => approvals.push(a) }), "r1", "polish");
+    expect(approvals).toEqual([]);
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(reply.toolCalls).toMatchObject([
+      { name: "complete_task", ok: false, result: "complete_task isn't available in /polish" },
+    ]);
+  });
+
+  it("only applies the allowlist to the turn that used the command", async () => {
+    const sent = scriptFetch(stop("one"), stop("two"));
+    const first = await askAssistant(null, "x", hooks(), "r1", "polish");
+    await askAssistant(first.conversationId, "now something else", hooks(), "r2");
+    expect(toolNames(sent[1])).toContain("complete_task");
+    // The file reader stays available in a chat that has used a command…
+    expect(toolNames(sent[1])).toContain("read_skill_file");
+    // …and the earlier instructions are still part of the history.
+    expect(JSON.stringify(sent[1].body.messages)).toContain("POLISH INSTRUCTIONS");
+  });
+
+  it("does not offer the file reader in a chat that never used a command", async () => {
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "plain", hooks(), "r1");
+    expect(toolNames(sent[0])).not.toContain("read_skill_file");
+    scriptFetch(callTools({ id: "c1", name: "read_skill_file", args: { skill: "polish" } }), stop("no"));
+    const reply = await askAssistant(null, "plain", hooks(), "r2");
+    expect(reply.toolCalls[0]).toMatchObject({ ok: false, result: "read_skill_file isn't available here" });
+  });
+
+  it("read_skill_file works for an enabled skill and refuses one that is off", async () => {
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "read_skill_file", args: { skill: "polish", path: "refs/a.md" } }),
+      stop("Read it.")
+    );
+    const reply = await askAssistant(null, "x", hooks(), "r1", "polish");
+    expect(reply.toolCalls[0]).toMatchObject({ name: "read_skill_file", ok: true });
+    expect(JSON.parse(sent[1].body.messages.at(-1).content).content).toBe("REFERENCE TEXT");
+
+    cmds.table.set("other", { kind: "skill", enabled: false, tools: null, injected: "x" });
+    scriptFetch(callTools({ id: "c2", name: "read_skill_file", args: { skill: "other" } }), stop("No."));
+    const second = await askAssistant(reply.conversationId, "again", hooks(), "r2");
+    expect(second.toolCalls[0]).toMatchObject({ ok: false, result: "That skill isn't enabled" });
+  });
+
+  it("regenerating a command's turn keeps the command and its allowlist", async () => {
+    const sent = scriptFetch(stop("first"), stop("second"));
+    const first = await askAssistant(null, "make this nicer", hooks(), "r1", "polish");
+    const again = await regenerateAssistant(first.conversationId, hooks(), "r2");
+    expect(again).toMatchObject({ ok: true, text: "second" });
+    expect(sent[1].body.messages.at(-1).content).toContain("POLISH INSTRUCTIONS");
+    expect(toolNames(sent[1])).not.toContain("complete_task");
+    expect(store.chats.get(first.conversationId)!.messages[0]).toMatchObject({ command: "polish" });
+  });
+
+  it("regenerating after the command was switched off falls back to read-only", async () => {
+    const sent = scriptFetch(stop("first"), stop("second"));
+    const first = await askAssistant(null, "x", hooks(), "r1", "polish");
+    cmds.table.get("polish")!.enabled = false;
+    await regenerateAssistant(first.conversationId, hooks(), "r2");
+    expect(toolNames(sent[1])).not.toContain("complete_task");
+    expect(toolNames(sent[1])).toContain("get_due_tasks");
   });
 });

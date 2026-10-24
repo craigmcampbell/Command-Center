@@ -9,13 +9,17 @@ const path = require('node:path');
   const output = path.join(__dirname, '../out/main/assistant-chats-test.cjs');
   try {
     await require('esbuild').build({
-      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
+      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/assistantCommands'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
       outfile: output, bundle: true, platform: 'node', format: 'cjs', external: ['better-sqlite3'],
       plugins: [{ name: 'test-userdata', setup(build) {
         build.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test' }));
         build.onLoad({ filter: /.*/, namespace: 'test' }, () => ({ contents: `export const app = { getPath: () => ${JSON.stringify(root)} };` }));
       } }],
     });
+    // Skills are looked up under the home folder.
+    process.env.HOME = root;
+    fs.mkdirSync(path.join(root, '.agents', 'skills', 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.agents', 'skills', 'demo', 'SKILL.md'), '---\nname: demo\ndescription: A demo skill\n---\nDO THE DEMO');
     const api = require(output);
     api.initDatabase();
     const db = api.getDatabase();
@@ -48,6 +52,51 @@ const path = require('node:path');
     assert.equal(api.loadChat('legacy').messages[0].content, 'EDITED', 'Booting again never re-migrates a chat that already has rows');
     db.exec(`DELETE FROM assistant_chats`);
     db.exec(`DELETE FROM assistant_messages`);
+
+    // A message table from before slash commands lacks the command columns.
+    db.exec(`DROP TABLE assistant_messages`);
+    db.exec(`CREATE TABLE assistant_messages (chat_id TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT, tool_calls TEXT, tool_call_id TEXT, archived INTEGER NOT NULL DEFAULT 0, summary INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (chat_id, seq)) WITHOUT ROWID`);
+    api.initAssistantChats();
+    const cmdMessages = [{ role: 'user', content: 'tidy this', command: 'demo', injected: '<skill>DO THE DEMO</skill>' }, { role: 'assistant', content: 'Done.' }, { role: 'user', content: 'thanks' }];
+    api.saveChat('cmd', 'Command chat', cmdMessages);
+    assert.deepEqual(api.loadChat('cmd').messages, cmdMessages, 'A command and its injected instructions round-trip; plain messages gain no fields');
+    assert.deepEqual(api.listChats('DO THE DEMO'), [], 'Injected instructions are not searchable');
+    api.deleteChat('cmd');
+
+    // Slash commands: skills from disk and saved prompts, each off until enabled.
+    api.initAssistantCommands();
+    api.initAssistantCommands();
+    let settings = await api.getCommandSettings();
+    assert.deepEqual(settings.skills, [{ name: 'demo', description: 'A demo skill', enabled: false, tools: null }], 'A found skill starts switched off');
+    assert.equal(await api.resolveCommand('demo'), null, 'An off skill cannot be run');
+    assert.deepEqual(await api.listEnabledCommands(), []);
+    assert.deepEqual(await api.setSkillSetting('demo', { enabled: true, tools: null }), { ok: true });
+    const resolved = await api.resolveCommand('demo');
+    assert.equal(resolved.kind, 'skill');
+    assert.equal(resolved.tools, null, 'No allowlist means the read-only default');
+    assert.match(resolved.injected, /DO THE DEMO/);
+    assert.deepEqual(await api.listEnabledCommands(), [{ name: 'demo', description: 'A demo skill', kind: 'skill' }]);
+    await api.setSkillSetting('demo', { enabled: true, tools: ['get_due_tasks', 'create_task', 'not a tool!'] });
+    assert.deepEqual((await api.resolveCommand('demo')).tools, ['get_due_tasks', 'create_task'], 'An allowlist persists, malformed names dropped');
+    assert.equal((await api.setSkillSetting('missing', { enabled: true, tools: null })).ok, false, 'Only skills that exist can be enabled');
+    fs.rmSync(path.join(root, '.agents', 'skills', 'demo'), { recursive: true });
+    assert.equal(await api.resolveCommand('demo'), null, 'A skill deleted from disk stops working');
+    assert.deepEqual(await api.listEnabledCommands(), []);
+
+    assert.equal((await api.savePromptCommand({ name: 'Plan Day', description: '', prompt: 'x', enabled: true, tools: null })).ok, false, 'Names cannot contain spaces');
+    assert.equal((await api.savePromptCommand({ name: 'plan', description: '', prompt: '   ', enabled: true, tools: null })).ok, false, 'A prompt is required');
+    assert.deepEqual(await api.savePromptCommand({ name: 'Plan', description: 'Plan my day', prompt: 'Plan my day from my tasks.', enabled: true, tools: null }), { ok: true });
+    assert.equal((await api.resolveCommand('plan')).kind, 'prompt');
+    assert.match((await api.resolveCommand('plan')).injected, /Plan my day from my tasks/);
+    await api.savePromptCommand({ name: 'plan', description: 'Plan my day', prompt: 'Updated.', enabled: false, tools: null });
+    assert.equal(await api.resolveCommand('plan'), null, 'A prompt can be switched off');
+    assert.equal(api.listCommandRows().length, 2, 'Saving the same name updates it');
+    fs.mkdirSync(path.join(root, '.agents', 'skills', 'clash'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.agents', 'skills', 'clash', 'SKILL.md'), '---\ndescription: c\n---\nBody');
+    assert.equal((await api.savePromptCommand({ name: 'clash', description: '', prompt: 'x', enabled: true, tools: null })).ok, false, 'A prompt cannot shadow a skill');
+    assert.equal(api.removePromptCommand('demo').ok, false, 'Only prompts can be deleted here');
+    assert.equal(api.removePromptCommand('plan').ok, true);
+    assert.equal(api.getCommandRow('plan'), null);
 
     assert.deepEqual(api.listChats(), []);
     assert.equal(api.loadChat('missing'), null);
@@ -171,6 +220,6 @@ const path = require('node:path');
     assert.equal(api.deleteChat('b'), false, 'Deleting twice reports nothing deleted');
     assert.equal(api.listChats().length, 3);
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

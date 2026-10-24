@@ -44,7 +44,9 @@ import {
   setTransactionCategory,
 } from "./ynab";
 import { appendFact, findMemoryLines, readMemoryFile, removeMemoryLines } from "./assistantMemory";
+import { getCommandRow } from "./assistantCommands";
 import { memoryLines, searchMemory } from "./assistantMemoryIndex";
+import { readSkillFile } from "./assistantSkills";
 
 export interface ToolOutcome {
   content: string;
@@ -246,6 +248,19 @@ export const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "read_skill_file",
+    description:
+      "Read a file that belongs to a skill the user invoked with a slash command (a reference document its instructions mention), or list the skill's files. Paths are relative to the skill's own folder. Only works for skills the user has enabled.",
+    parameters: {
+      type: "object",
+      properties: {
+        skill: { type: "string", description: "The skill's name, as in the command." },
+        path: { type: "string", description: "Relative path inside the skill's folder. Omit to list its files." },
+      },
+      required: ["skill"],
+    },
+  },
+  {
     name: "recall_memory",
     description:
       "Search the user's persistent memory for facts about them. Your system prompt shows only part of a large memory (the pinned and newest facts), so call this before saying you don't know something about the user, and when they refer to something from the past. Searches by words, not meaning, so try a couple of phrasings if the first finds nothing.",
@@ -284,6 +299,9 @@ export const TOOL_DEFS: ToolDef[] = [
 
 export const TOOLS = TOOL_DEFS.map((t) => ({ type: "function" as const, function: t }));
 
+// Offered only in a chat where a slash command has been used.
+export const SKILL_FILE_TOOL = "read_skill_file";
+
 // Tools that change something. Regenerating a reply that used one would repeat
 // the change, so that is refused (see services/assistant.ts).
 export const MUTATING_TOOLS = ASSISTANT_MUTATING_TOOLS;
@@ -295,7 +313,7 @@ export const MUTATING_TOOLS = ASSISTANT_MUTATING_TOOLS;
 // ask before it writes to memory.
 // `recall_memory` reads what the system prompt already shows, so it is as
 // trusted as the prompt itself.
-const TRUSTED_TOOLS = new Set(["docker_status", "recall_memory", "remember", "forget"]);
+const TRUSTED_TOOLS = new Set(["docker_status", "recall_memory", "read_skill_file", "remember", "forget"]);
 
 export function hasUntrustedContext(calledTools: Iterable<string>): boolean {
   for (const name of calledTools) if (!TRUSTED_TOOLS.has(name)) return true;
@@ -773,6 +791,20 @@ export async function prepareTool(
           run: async () => {
             const result = await createTask(getTodoistSettings(), title, projectId);
             return result.ok ? okJson({ created: true }) : err(result.reason ?? "Todoist failed");
+          },
+        };
+      }
+
+      case "read_skill_file": {
+        const skill = str(args.skill);
+        if (!skill) return fail("skill must be a string");
+        const row = getCommandRow(skill);
+        if (!row || row.kind !== "skill" || !row.enabled) return fail("That skill isn't enabled");
+        const relative = str(args.path) ?? "";
+        return {
+          run: async () => {
+            const result = await readSkillFile(skill, relative);
+            return result.ok ? okJson(result) : err(result.reason);
           },
         };
       }

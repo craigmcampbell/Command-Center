@@ -5928,6 +5928,78 @@ body {
   white-space: pre-wrap;
 }
 
+.assistant-input-row {
+  position: relative;
+}
+.assistant-command-picker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin: 0 0 4px;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface, #1c1c1e);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  font-size: 12.5px;
+  z-index: 5;
+}
+.assistant-command-picker li {
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.assistant-command-picker li.is-active {
+  background: var(--accent-glow, rgba(127, 127, 127, 0.2));
+}
+.assistant-command-chip {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  opacity: 0.85;
+}
+.assistant-command-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-command-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.assistant-command-desc {
+  margin: 2px 0 0 24px;
+  font-size: 12px;
+}
+.assistant-tools-editor {
+  margin: 6px 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.assistant-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 2px 12px;
+}
+.assistant-tool-warn {
+  color: var(--pending);
+  font-size: 11px;
+}
+.assistant-prompt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
 .assistant-bubble-md {
   white-space: normal;
   overflow-x: auto;

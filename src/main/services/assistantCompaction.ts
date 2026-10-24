@@ -57,6 +57,13 @@ function recentBoundary(body: ChatMessage[]): number {
   return users.length > KEEP_RECENT_TURNS ? users[users.length - KEEP_RECENT_TURNS] : 0;
 }
 
+// A slash command's instructions go in front of what the user typed, in every
+// request, so later turns still know what was asked of them.
+function withInjected(m: Extract<ChatMessage, { role: "system" | "user" }>): string {
+  if (!m.injected) return m.content;
+  return m.content ? `${m.injected}\n\n${m.content}` : m.injected;
+}
+
 // What the model is actually sent for a stored history. Archived messages are
 // dropped, the latest summary is appended to the system prompt, bookkeeping
 // flags are stripped, and bulky tool output from old turns is trimmed.
@@ -76,7 +83,7 @@ export function toWire(messages: ChatMessage[]): ChatMessage[] {
             : m.content,
         };
       case "user":
-        return { role: "user", content: m.content };
+        return { role: "user", content: withInjected(m) };
       case "assistant":
         return {
           role: "assistant",
@@ -100,6 +107,7 @@ export function estimateTokens(messages: ChatMessage[]): number {
   for (const m of messages) {
     chars += 16;
     if (typeof m.content === "string") chars += m.content.length;
+    if (m.role === "user" && m.injected) chars += m.injected.length;
     if (m.role === "assistant") {
       for (const c of m.tool_calls ?? []) chars += c.function.name.length + c.function.arguments.length;
     }

@@ -18,7 +18,18 @@ export interface ToolCall {
 // Neither flag may reach the provider; assistantCompaction.ts's `toWire`
 // strips them.
 export type ChatMessage =
-  | { role: "system" | "user"; content: string; archived?: boolean; summary?: boolean }
+  | {
+      role: "system" | "user";
+      content: string;
+      archived?: boolean;
+      summary?: boolean;
+      // A user message that started a slash command: the command's name, and the
+      // instructions put in front of `content` when it is sent to the model.
+      // `content` stays exactly what the user typed (that is what the
+      // transcript, titles and search show).
+      command?: string;
+      injected?: string;
+    }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean }
   | { role: "tool"; tool_call_id: string; content: string; archived?: boolean };
 
@@ -138,7 +149,13 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
 
   for (const m of messages) {
     if (m.role === "user") {
-      items.push({ role: "user", text: m.content, toolCalls: [], remembered: [] });
+      items.push({
+        role: "user",
+        text: m.content,
+        ...(m.command ? { command: m.command } : {}),
+        toolCalls: [],
+        remembered: [],
+      });
       current = null;
       continue;
     }

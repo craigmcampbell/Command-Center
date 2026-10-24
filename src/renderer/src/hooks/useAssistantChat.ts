@@ -31,6 +31,8 @@ export interface ChatItem {
   id: number;
   role: "user" | "assistant" | "error" | "summary";
   text: string;
+  // On a user message: the slash command it ran.
+  command?: string;
   // Set while the reply is still arriving; ties streamed deltas and
   // confirmation cards to this bubble. The final reply clears it.
   requestId?: string;
@@ -164,6 +166,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           id: nextId.current++,
           role: item.role,
           text: item.text,
+          ...(item.command ? { command: item.command } : {}),
           toolCalls: item.toolCalls,
           remembered: item.remembered,
         }))
@@ -206,18 +209,19 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   );
 
   const send = useCallback(
-    async (raw: string): Promise<void> => {
+    async (raw: string, command?: string): Promise<void> => {
       const text = raw.trim();
-      if (!text || busyRef.current) return;
+      // A command can run with nothing typed after it.
+      if ((!text && !command) || busyRef.current) return;
       const requestId = crypto.randomUUID();
       const replyId = nextId.current++;
       begin(requestId);
       setItems((prev) => [
         ...prev,
-        { id: nextId.current++, role: "user", text },
+        { id: nextId.current++, role: "user", text, ...(command ? { command } : {}) },
         { id: replyId, role: "assistant", text: "", requestId },
       ]);
-      const reply = await window.api.assistant.ask(conversationIdRef.current, text, requestId);
+      const reply = await window.api.assistant.ask(conversationIdRef.current, text, requestId, command);
       setItems((prev) => prev.map((item) => (item.id === replyId ? finalItem(replyId, reply) : item)));
       afterReply(reply);
     },

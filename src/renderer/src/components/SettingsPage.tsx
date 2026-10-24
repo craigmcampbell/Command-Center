@@ -48,6 +48,7 @@ import type {
   YouTubeChannelConfig,
 } from "../../../shared/types";
 import { DEFAULT_ASSISTANT_ACCELERATOR } from "../../../shared/assistant";
+import AssistantCommandsCard from "./AssistantCommandsCard";
 import { validateAccelerator } from "../../../shared/accelerator";
 import { normalizeSubreddit } from "../../../shared/subreddit";
 import { parseChannelInput } from "../../../shared/youtubeChannel";
@@ -2965,10 +2966,13 @@ export default function SettingsPage({
               )}
 
               {section === "assistant" && (
-                <AssistantCard
-                  value={data.assistant ?? {}}
-                  onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
-                />
+                <>
+                  <AssistantCard
+                    value={data.assistant ?? {}}
+                    onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
+                  />
+                  <AssistantCommandsCard />
+                </>
               )}
 
               {section === "vaults" && (

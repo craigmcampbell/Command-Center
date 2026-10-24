@@ -133,6 +133,15 @@ import {
   type AskHooks,
 } from "./services/assistant";
 import { initAssistantChats } from "./services/assistantChats";
+import {
+  getCommandSettings,
+  initAssistantCommands,
+  listEnabledCommands,
+  removePromptCommand,
+  savePromptCommand,
+  setSkillSetting,
+} from "./services/assistantCommands";
+import { MUTATING_TOOLS, SKILL_FILE_TOOL, TOOL_DEFS } from "./services/assistantTools";
 import { proposeMemoryTidy } from "./services/assistantTidy";
 import {
   assistantHotkeyStatus,
@@ -318,6 +327,7 @@ import type {
   OpenAIScalarConfig,
   OpenAIPeriod,
   FirecrawlScalarConfig,
+  AssistantCommandConfig,
   AssistantScalarConfig,
   RailwayScalarConfig,
   StatsSettings,
@@ -330,6 +340,7 @@ initLinks();
 initProjects();
 initScratchpad();
 initAssistantChats();
+initAssistantCommands();
 initHabits();
 initNotes();
 initSettings();
@@ -689,12 +700,13 @@ function assistantHooks(sender: Electron.WebContents, requestId: unknown): AskHo
 
 ipcMain.handle(
   "assistant:ask",
-  (evt, conversationId: unknown, message: unknown, requestId: unknown) =>
+  (evt, conversationId: unknown, message: unknown, requestId: unknown, command: unknown) =>
     askAssistant(
       typeof conversationId === "string" ? conversationId : null,
       typeof message === "string" ? message : "",
       assistantHooks(evt.sender, requestId),
-      typeof requestId === "string" ? requestId : undefined
+      typeof requestId === "string" ? requestId : undefined,
+      typeof command === "string" && command ? command : undefined
     )
 );
 ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId: unknown) =>
@@ -725,6 +737,37 @@ ipcMain.handle("assistant:chats:remove", (_evt, id: unknown) =>
 );
 ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
   renameAssistantChat(typeof id === "string" ? id : "", typeof title === "string" ? title : "")
+);
+// Slash commands. Plain handlers: the config reads the skills folder fresh each time.
+ipcMain.handle("assistant:commands:list", () => listEnabledCommands());
+ipcMain.handle("assistant:commands:config", async (): Promise<AssistantCommandConfig> => {
+  const { skillsDir, skills, prompts } = await getCommandSettings();
+  return {
+    skillsDir,
+    skills,
+    prompts,
+    tools: TOOL_DEFS.filter((t) => t.name !== SKILL_FILE_TOOL).map((t) => ({
+      name: t.name,
+      mutating: MUTATING_TOOLS.has(t.name) || t.name === "remember",
+    })),
+  };
+});
+ipcMain.handle("assistant:commands:setSkill", (_evt, name: unknown, values: any) =>
+  typeof name === "string"
+    ? setSkillSetting(name, { enabled: values?.enabled === true, tools: Array.isArray(values?.tools) ? values.tools : null })
+    : { ok: false, reason: "Missing name" }
+);
+ipcMain.handle("assistant:commands:savePrompt", (_evt, input: any) =>
+  savePromptCommand({
+    name: typeof input?.name === "string" ? input.name : "",
+    description: typeof input?.description === "string" ? input.description : "",
+    prompt: typeof input?.prompt === "string" ? input.prompt : "",
+    enabled: input?.enabled === true,
+    tools: Array.isArray(input?.tools) ? input.tools : null,
+  })
+);
+ipcMain.handle("assistant:commands:removePrompt", (_evt, name: unknown) =>
+  removePromptCommand(typeof name === "string" ? name : "")
 );
 // A summarize request costs money and isn't idempotent: plain handle, not readHandler.
 ipcMain.handle("assistant:chats:compact", (_evt, id: unknown) =>

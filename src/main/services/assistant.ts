@@ -66,11 +66,14 @@ import {
 } from "./assistantChats";
 import { localDate, readMemoryFile } from "./assistantMemory";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
+import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
 import {
   customSystemPrompt,
   hasUntrustedContext,
   MUTATING_TOOLS,
   prepareTool,
+  SKILL_FILE_TOOL,
+  TOOL_DEFS,
   TOOLS,
   type PreparedTool,
   type ToolOutcome,
@@ -435,10 +438,39 @@ async function retitle(params: {
 
 // ---- the loop --------------------------------------------------------------
 
+// The tools a command may use when its allowlist is unset: everything that only
+// reads. `remember` writes to memory, so it is not among them.
+export function defaultCommandTools(): string[] {
+  return TOOL_DEFS.map((t) => t.name).filter(
+    (name) => !MUTATING_TOOLS.has(name) && name !== "remember" && name !== SKILL_FILE_TOOL
+  );
+}
+
+// The tool names the model is shown (and may call) for one turn. A plain turn
+// gets everything, except the skill-file reader unless a slash command has been
+// used in this chat. A command's turn gets exactly its allowlist; a skill also
+// gets the file reader, since its instructions point at its own files.
+function offeredToolNames(
+  restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null,
+  chatUsesCommands: boolean
+): Set<string> {
+  const known = new Set(TOOL_DEFS.map((t) => t.name));
+  if (!restricted) {
+    if (!chatUsesCommands) known.delete(SKILL_FILE_TOOL);
+    return known;
+  }
+  const names = new Set((restricted.tools ?? defaultCommandTools()).filter((n) => known.has(n)));
+  if (restricted.kind === "skill") names.add(SKILL_FILE_TOOL);
+  else names.delete(SKILL_FILE_TOOL);
+  return names;
+}
+
 interface TurnRequest {
   conversationId: string | null;
   // The new user message, or null to regenerate the last one.
   message: string | null;
+  // A slash command (enabled skill or saved prompt) to run this turn with.
+  command?: string;
   hooks: AskHooks;
   requestId: string;
 }
@@ -458,7 +490,7 @@ function calledToolNames(messages: ChatMessage[]): string[] {
   return names;
 }
 
-async function runTurn({ conversationId, message, hooks, requestId }: TurnRequest): Promise<AssistantReply> {
+async function runTurn({ conversationId, message, command: commandName, hooks, requestId }: TurnRequest): Promise<AssistantReply> {
   const regenerate = message === null;
   const fail = (reason: string, id: string, needsSetup = false): AssistantReply => ({
     ok: false,
@@ -477,8 +509,16 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
   if (!model) return fail("No model configured", conversationId ?? "", true);
 
   let text = message?.trim() ?? "";
+  let command: ResolvedCommand | null = null;
   if (!regenerate) {
-    if (!text) return fail("Empty message", conversationId ?? "");
+    if (commandName) {
+      command = await resolveCommand(commandName);
+      if (!command) {
+        return fail(`/${commandName} isn't available. Turn it on in Settings → Assistant`, conversationId ?? "");
+      }
+    }
+    // A command can be run with nothing typed after it.
+    if (!text && !command) return fail("Empty message", conversationId ?? "");
     if (text.length > MAX_MESSAGE_CHARS) return fail("Message is too long", conversationId ?? "");
   }
 
@@ -507,6 +547,8 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
     return fail(reason, id, needsSetup);
   };
 
+  let regenerated: { command: string; injected?: string } | null = null;
+  let restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null = command;
   if (regenerate) {
     const lastUser = convo.messages.map((m) => m.role).lastIndexOf("user");
     if (lastUser < 0) return rollback("There's nothing to regenerate");
@@ -515,7 +557,15 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
     if (calledToolNames(tail).some((name) => MUTATING_TOOLS.has(name))) {
       return rollback("Can't regenerate: that reply changed something");
     }
-    text = (convo.messages[lastUser] as { content: string }).content;
+    const prior = convo.messages[lastUser] as { content: string; command?: string; injected?: string };
+    text = prior.content;
+    // The re-asked question keeps its command, and the command's allowlist: if
+    // it has since been switched off, the safe default (read-only) applies.
+    if (prior.command) {
+      regenerated = { command: prior.command, injected: prior.injected };
+      command = await resolveCommand(prior.command);
+      restricted = command ?? { tools: null, kind: "prompt" };
+    }
     convo.messages.length = lastUser;
   }
 
@@ -547,13 +597,13 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
     // Only a chat's first successful turn gets titled — a resumed chat already
     // has one (its own, or one the user chose).
     const firstTurn = convo.title === null;
-    convo.title ??= deriveTitle(text);
+    convo.title ??= deriveTitle(asked);
     persist(id, convo, usage);
     if (firstTurn && !stopped && full.trim() && settings.autoTitle !== false) {
       void retitle({
         chatId: id,
         placeholder: convo.title,
-        question: text,
+        question: asked,
         answer: full.trim(),
         apiKey,
         model: settings.titleModel?.trim() || model,
@@ -582,7 +632,23 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
     return succeed(true);
   };
 
-  convo.messages.push({ role: "user", content: text });
+  // What a chat list shows for a turn with nothing typed after its command.
+  const asked = text || (command ? `/${command.name}` : regenerated ? `/${regenerated.command}` : "");
+  convo.messages.push({
+    role: "user",
+    content: text,
+    ...(command && !regenerated
+      ? { command: command.name, injected: command.injected }
+      : regenerated
+        ? { command: regenerated.command, ...(regenerated.injected ? { injected: regenerated.injected } : {}) }
+        : {}),
+  });
+
+  const offered = offeredToolNames(
+    restricted,
+    convo.messages.some((m) => m.role === "user" && m.command)
+  );
+  const tools = TOOLS.filter((t) => offered.has(t.function.name));
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -592,7 +658,7 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
         apiKey,
         model,
         messages: toWire(convo.messages),
-        tools: TOOLS,
+        tools,
         onText: emit,
         signal,
       });
@@ -623,10 +689,18 @@ async function runTurn({ conversationId, message, hooks, requestId }: TurnReques
             hooks.onTool?.({ ...event, phase: "start" });
             let tool: PreparedTool | null = null;
             try {
-              tool = await prepareTool(name, call.function.arguments ?? "", {
-                untrustedSeen,
-                askBeforeRemember,
-              });
+              tool = offered.has(name)
+                ? await prepareTool(name, call.function.arguments ?? "", { untrustedSeen, askBeforeRemember })
+                : {
+                    // Defence in depth: the model was only shown the allowed
+                    // tools, but a call to any other is refused here too.
+                    run: async () => ({
+                      content: JSON.stringify({
+                        error: `${name} isn't available${command ? ` in /${command.name}` : " here"}`,
+                      }),
+                      isError: true,
+                    }),
+                  };
             } catch {
               // Reported below as an unexpected failure.
             }
@@ -707,9 +781,10 @@ export function askAssistant(
   conversationId: string | null,
   message: string,
   hooks: AskHooks = NOOP_HOOKS,
-  requestId: string = randomUUID()
+  requestId: string = randomUUID(),
+  command?: string
 ): Promise<AssistantReply> {
-  return runTurn({ conversationId, message, hooks, requestId });
+  return runTurn({ conversationId, message, command, hooks, requestId });
 }
 
 // Re-runs the last question in a chat. The old answer is replaced only if the

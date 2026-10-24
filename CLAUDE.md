@@ -599,6 +599,29 @@ hotkey) — a drift there is silent.
   `reader_feed_unread` already loaded (`findCachedFeedItem`), so the card can
   quote a real title. `github_list_prs` is the read-only full list behind the
   five-per-repo widget. All four mutating ones are in `ASSISTANT_MUTATING_TOOLS`.
+- **Slash commands** (`assistantCommands.ts` + `assistantSkills.ts`): typing `/` in
+  the composer (tab or quick panel) offers **enabled** commands — skills from
+  `~/.agents/skills/*/SKILL.md` and the user's own saved prompts, both managed
+  in Settings → Assistant → commands (`AssistantCommandsCard.tsx`). **Nothing is
+  on by default**: the folder is mostly coding-workflow skills that need a shell
+  the Assistant lacks, so each skill is opted into. One `assistant_commands`
+  table holds both kinds, keyed by name. A command turn stores the user's text in
+  `content` (what the transcript, title and search show) and the command's
+  instructions in `injected`; `toWire` puts `injected` in front of `content` in
+  **every** later request too, so follow-ups still know what was asked. Skill
+  text is read from disk at use, so a SKILL.md edit applies next time. Each
+  command has a **tool allowlist**: unset = every tool that only reads
+  (`defaultCommandTools()`: not `MUTATING_TOOLS`, not `remember`); a custom list
+  is the only way to give a command a mutating tool. It applies to the turn that
+  used the command only, and is enforced twice: the model is shown just those
+  tools, and `runTurn` refuses a call to any other (`offeredToolNames`).
+  Regenerate keeps the command; if it has since been switched off it falls back
+  to read-only. `read_skill_file(skill, path?)` reads or lists files inside one
+  **enabled** skill's folder — both folder and target are `realpath`ed and the
+  target must stay under the folder, so `..` and an escaping symlink fail; text
+  only, bounded. It is offered to skill turns and to any chat that has used a
+  command, never to a plain chat. Skill folders are often symlinks, which the
+  scan follows. The skills path is fixed at `~/.agents/skills`.
 - **Memory is retrieved, not always sent in full** (`assistantMemoryIndex.ts`,
   pure). The markdown file stays the source of truth — hand-edited, possibly in
   Obsidian — so there is **no separate index to keep in sync**: `searchMemory`
