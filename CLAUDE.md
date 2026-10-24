@@ -637,7 +637,13 @@ hotkey) — a drift there is silent.
   the expensive one. The PNG is stored like any attachment (hashed file, same
   validation) and rides on the **tool message's** `attachments`, so the transcript
   shows it under the reply and a reopened chat still does; the model is only told
-  that it exists, never given the bytes. `PreparedTool.run` now receives the abort
+  that it exists, never given the bytes. **Defaults live in Settings**
+  (`openai.imageShape`, `imageQuality`; unset = square 1024x1024, medium): the
+  model is told to omit shape/quality unless the image needs another shape or the
+  user asks, and the card always shows the resolved size and quality. An invalid
+  stored value falls back rather than failing. Images in the transcript open in
+  a larger viewer (`ImageViewer.tsx`: Esc, backdrop click or the close button
+  closes it; Save only for stored attachments, whose id is the content hash). `PreparedTool.run` now receives the abort
   signal, so Stop cancels a generation in flight. The transcript's "Save image…"
   uses a save dialog (`assistant:attachments:save`) that copies by validated id.
   Doesn't count as third-party text, so it doesn't force `remember` to ask.

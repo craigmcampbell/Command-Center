@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const settings = vi.hoisted(() => ({
   firecrawl: {} as { apiKey?: string },
-  openai: {} as { apiKey?: string; adminApiKey?: string; imageModel?: string },
+  openai: {} as {
+    apiKey?: string;
+    adminApiKey?: string;
+    imageModel?: string;
+    imageShape?: string;
+    imageQuality?: string;
+  },
   assistant: {} as {
     apiKey?: string;
     model?: string;
@@ -2132,7 +2138,7 @@ describe("image generation", () => {
     await vi.waitFor(() => expect(approvals).toHaveLength(1));
     expect(approvals[0]).toMatchObject({
       tool: "generate_image",
-      summary: "Generate an image (landscape, high quality, costs money): “a red fox in snow”",
+      summary: "Generate an image (landscape 1536x1024, high quality, costs money): “a red fox in snow”",
     });
     expect(generateImage).not.toHaveBeenCalled();
     answerApproval(approvals[0].approvalId, true);
@@ -2142,6 +2148,42 @@ describe("image generation", () => {
       { prompt: "a red fox in snow", shape: "landscape", quality: "high" },
       expect.any(AbortSignal)
     );
+  });
+
+  it("uses the configured default size and quality when the model doesn't pick, and lets it override", async () => {
+    settings.openai = { apiKey: "sk-openai", imageShape: "portrait", imageQuality: "low" };
+    scriptFetch(draw("c1", "a poster"), stop("Done."));
+    let cards: any[] = [];
+    let pending = askAssistant(null, "poster", hooks({ onApproval: (a) => cards.push(a) }));
+    await vi.waitFor(() => expect(cards).toHaveLength(1));
+    expect(cards[0].summary).toContain("portrait 1024x1536, low quality");
+    answerApproval(cards[0].approvalId, true);
+    await pending;
+    expect(generateImage).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { prompt: "a poster", shape: "portrait", quality: "low" },
+      expect.anything()
+    );
+
+    // An explicit choice from the model wins over the default.
+    scriptFetch(draw("c2", "a banner", { shape: "landscape", quality: "high" }), stop("Done."));
+    cards = [];
+    pending = askAssistant(null, "banner", hooks({ onApproval: (a) => cards.push(a) }));
+    await vi.waitFor(() => expect(cards).toHaveLength(1));
+    expect(cards[0].summary).toContain("landscape 1536x1024, high quality");
+    answerApproval(cards[0].approvalId, true);
+    await pending;
+  });
+
+  it("falls back to square and medium when no default is set or the setting is invalid", async () => {
+    settings.openai = { apiKey: "sk-openai", imageShape: "huge", imageQuality: "ultra" };
+    scriptFetch(draw("c1", "a logo"), stop("Done."));
+    const cards: any[] = [];
+    const pending = askAssistant(null, "logo", hooks({ onApproval: (a) => cards.push(a) }));
+    await vi.waitFor(() => expect(cards).toHaveLength(1));
+    expect(cards[0].summary).toContain("square 1024x1024, medium quality");
+    answerApproval(cards[0].approvalId, false);
+    await pending;
   });
 
   it("saves the image, shows it with the reply, and tells the model only that it exists", async () => {

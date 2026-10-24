@@ -9,6 +9,7 @@ import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/ty
 import { matchCommands } from "../lib/commandMatch";
 import { describeSize, MAX_FILES, MAX_TOTAL_BYTES, readAttachment, type PendingAttachment } from "../lib/attachments";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
+import ImageViewer from "./ImageViewer";
 import Menu from "./Menu";
 import { IconArrowUp, IconCheck, IconCopy, IconPlus, IconX } from "./icons";
 
@@ -625,6 +626,7 @@ function SentAttachment({ attachment }: { attachment: NonNullable<ChatItem["atta
   const [url, setUrl] = useState<string | null | undefined>(
     attachment.previewUrl ?? imageCache.get(attachment.id)
   );
+  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     if (attachment.kind !== "image" || url !== undefined) return;
     let live = true;
@@ -646,7 +648,18 @@ function SentAttachment({ attachment }: { attachment: NonNullable<ChatItem["atta
     );
   }
   return url ? (
-    <img className="assistant-sent-image" src={url} alt={attachment.name} title={attachment.name} />
+    <>
+      <button
+        type="button"
+        className="assistant-image-button"
+        onClick={() => setZoomed(true)}
+        aria-label={`View larger: ${attachment.name}`}
+        title="Click to enlarge"
+      >
+        <img className="assistant-sent-image" src={url} alt={attachment.name} />
+      </button>
+      {zoomed && <ImageViewer src={url} name={attachment.name} id={attachment.id} onClose={() => setZoomed(false)} />}
+    </>
   ) : (
     <span className="assistant-attachment-chip" title={attachment.name}>
       <span className="assistant-file-icon">IMG</span>

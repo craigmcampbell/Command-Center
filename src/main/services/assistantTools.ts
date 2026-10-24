@@ -274,8 +274,16 @@ export const TOOL_DEFS: ToolDef[] = [
       type: "object",
       properties: {
         prompt: { type: "string", description: "A full description of the image to create." },
-        shape: { type: "string", enum: ["square", "landscape", "portrait"], description: "Defaults to square." },
-        quality: { type: "string", enum: ["low", "medium", "high"], description: "Defaults to medium. Use high only when asked." },
+        shape: {
+          type: "string",
+          enum: ["square", "landscape", "portrait"],
+          description: "Omit to use the user's default. Set it only when the image clearly needs a different shape (a banner is landscape, a phone wallpaper is portrait) or the user asks.",
+        },
+        quality: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "Omit to use the user's default. Use high only when asked.",
+        },
       },
       required: ["prompt"],
     },
@@ -907,16 +915,24 @@ export async function prepareTool(
         const prompt = str(args.prompt)?.trim();
         if (!prompt) return fail("prompt is required");
         if (prompt.length > PROMPT_MAX_CHARS) return fail(`prompt must be under ${PROMPT_MAX_CHARS} characters`);
-        const shape = args.shape === undefined ? "square" : str(args.shape);
+        // What the model leaves out comes from Settings, then the built-in default.
+        const configured = getOpenAISettings();
+        const shape =
+          args.shape === undefined ? (configured.imageShape && configured.imageShape in IMAGE_SIZES ? configured.imageShape : "square") : str(args.shape);
         if (!shape || !(shape in IMAGE_SIZES)) return fail("shape must be square, landscape or portrait");
-        const quality = args.quality === undefined ? DEFAULT_QUALITY : str(args.quality);
+        const quality =
+          args.quality === undefined
+            ? configured.imageQuality && (IMAGE_QUALITIES as readonly string[]).includes(configured.imageQuality)
+              ? configured.imageQuality
+              : DEFAULT_QUALITY
+            : str(args.quality);
         if (!quality || !(IMAGE_QUALITIES as readonly string[]).includes(quality)) {
           return fail("quality must be low, medium or high");
         }
         return {
           // The card quotes the exact prompt that will be sent, not a paraphrase.
           approval: {
-            summary: `Generate an image (${shape}, ${quality} quality, costs money): “${oneLine(prompt, 700)}”`,
+            summary: `Generate an image (${shape} ${IMAGE_SIZES[shape as ImageShape]}, ${quality} quality, costs money): “${oneLine(prompt, 700)}”`,
           },
           run: async (signal) => {
             const result = await generateImage(

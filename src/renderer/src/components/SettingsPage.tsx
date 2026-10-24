@@ -1186,18 +1186,24 @@ function OpenAICard({
   const [adminApiKey, setAdminApiKey] = useState(value.adminApiKey ?? "");
   const [apiKey, setApiKey] = useState(value.apiKey ?? "");
   const [imageModel, setImageModel] = useState(value.imageModel ?? "");
+  const [imageShape, setImageShape] = useState(value.imageShape ?? "square");
+  const [imageQuality, setImageQuality] = useState(value.imageQuality ?? "medium");
   const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setAdminApiKey(value.adminApiKey ?? "");
     setApiKey(value.apiKey ?? "");
     setImageModel(value.imageModel ?? "");
+    setImageShape(value.imageShape ?? "square");
+    setImageQuality(value.imageQuality ?? "medium");
     setRefreshSeconds(String(value.refreshSeconds ?? 900));
-  }, [value.adminApiKey, value.apiKey, value.imageModel, value.refreshSeconds]);
+  }, [value.adminApiKey, value.apiKey, value.imageModel, value.imageShape, value.imageQuality, value.refreshSeconds]);
   const dirty =
     adminApiKey !== (value.adminApiKey ?? "") ||
     apiKey !== (value.apiKey ?? "") ||
     imageModel !== (value.imageModel ?? "") ||
+    imageShape !== (value.imageShape ?? "square") ||
+    imageQuality !== (value.imageQuality ?? "medium") ||
     refreshSeconds !== String(value.refreshSeconds ?? 900);
 
   async function handleSave(e: FormEvent) {
@@ -1207,6 +1213,8 @@ function OpenAICard({
       adminApiKey: adminApiKey || undefined,
       apiKey: apiKey || undefined,
       imageModel: imageModel.trim() || undefined,
+      imageShape: imageShape === "square" ? undefined : imageShape,
+      imageQuality: imageQuality === "medium" ? undefined : imageQuality,
       refreshSeconds: Number(refreshSeconds) || 900,
     });
     setSaving(false);
@@ -1260,6 +1268,35 @@ function OpenAICard({
           spellCheck={false}
         />
       </div>
+      <div className="settings-field-row">
+        <label>Default size</label>
+        <select
+          className="settings-input"
+          value={imageShape}
+          onChange={(e) => setImageShape(e.target.value as typeof imageShape)}
+        >
+          <option value="square">Square (1024×1024)</option>
+          <option value="landscape">Landscape (1536×1024)</option>
+          <option value="portrait">Portrait (1024×1536)</option>
+        </select>
+      </div>
+      <div className="settings-field-row">
+        <label>Default quality</label>
+        <select
+          className="settings-input"
+          value={imageQuality}
+          onChange={(e) => setImageQuality(e.target.value as typeof imageQuality)}
+        >
+          <option value="low">Low (cheapest)</option>
+          <option value="medium">Medium</option>
+          <option value="high">High (most expensive)</option>
+        </select>
+      </div>
+      <p className="settings-card-hint">
+        These apply when the Assistant doesn't pick a size itself. It will still choose landscape
+        for a banner or portrait for a wallpaper, or follow you if you ask for a size, and the
+        confirmation card always shows what it will use.
+      </p>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}

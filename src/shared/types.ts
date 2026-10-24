@@ -93,6 +93,10 @@ export interface OpenAIScalarConfig {
   apiKey?: string;
   // Defaults to gpt-image-1.
   imageModel?: string;
+  // What the Assistant uses when neither you nor it asks for something else.
+  // Unset means square (1024x1024) and medium quality.
+  imageShape?: "square" | "landscape" | "portrait";
+  imageQuality?: "low" | "medium" | "high";
 }
 
 // A Firecrawl API key from their dashboard. Powers the AI tab's Firecrawl

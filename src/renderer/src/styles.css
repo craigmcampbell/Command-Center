@@ -6141,7 +6141,86 @@ body {
 .assistant-generated-image {
   margin: 0;
 }
-.assistant-generated-image .assistant-sent-image {
+.assistant-generated-image .assistant-image-button {
+  display: inline-block;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 8px;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.assistant-image-button:hover .assistant-sent-image {
+  filter: brightness(1.08);
+}
+.assistant-image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The enlarged image (components/ImageViewer.tsx). */
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: rgba(4, 6, 10, 0.86);
+  cursor: zoom-out;
+}
+.image-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 900px);
+  width: 100%;
+  cursor: default;
+  font-size: 12.5px;
+}
+.image-viewer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.image-viewer-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.image-viewer-button:hover {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.image-viewer-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.image-viewer-image {
+  max-width: 92vw;
+  max-height: calc(100vh - 110px);
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+.assistant-sent-image {
   max-width: 320px;
   max-height: 320px;
 }
