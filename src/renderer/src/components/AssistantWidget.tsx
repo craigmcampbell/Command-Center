@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AssistantChatSummary, AssistantFolder, AssistantUsage } from "../../../shared/types";
 import { diffMemory, type MemoryDiff } from "../../../shared/memoryDiff";
 import { useAssistantChat } from "../hooks/useAssistantChat";
+import { nestBranches } from "../lib/chatBranches";
 import AssistantChat, { chatMarkdown, formatUsage, SaveToNotes } from "./AssistantChat";
 import Menu from "./Menu";
 import Panel from "./Panel";
@@ -241,11 +242,17 @@ export default function AssistantWidget({
   const searching = query.trim() !== "";
   const topLevel = searching ? chats : chats.filter((c) => !c.folderId);
 
-  function renderChat(item: AssistantChatSummary) {
+  function renderChats(list: AssistantChatSummary[]) {
+    return nestBranches(list).map(({ chat: item, depth }) => renderChat(item, depth));
+  }
+
+  // `depth` > 0: a branch shown under the chat it was branched from.
+  function renderChat(item: AssistantChatSummary, depth = 0) {
     return (
       <li
         key={item.id}
-        className={`assistant-chat${item.id === chat.conversationId ? " active" : ""}${draggingId === item.id ? " dragging" : ""}`}
+        className={`assistant-chat${item.id === chat.conversationId ? " active" : ""}${draggingId === item.id ? " dragging" : ""}${depth > 0 ? " assistant-chat-branch" : ""}`}
+        style={depth > 0 ? { paddingLeft: `${Math.min(depth, 3) * 12}px` } : undefined}
         draggable={renamingId !== item.id && confirmingId !== item.id}
         onDragStart={(e) => {
           e.dataTransfer.setData(DRAG_TYPE, item.id);
@@ -292,6 +299,11 @@ export default function AssistantWidget({
             >
               <span className="assistant-chat-title">
                 {item.pinned && <IconPin size={11} className="assistant-chat-pin" />}
+                {item.parentId && (
+                  <span className="assistant-chat-branch-mark" title="Branch of another chat" aria-label="Branch">
+                    ↳
+                  </span>
+                )}
                 {item.title}
               </span>
               <span className="assistant-chat-when">{formatWhen(item.updatedAt)}</span>
@@ -379,6 +391,17 @@ export default function AssistantWidget({
       title="Assistant"
       headerRight={
         <div className="assistant-header-actions">
+          {chat.parent && (
+            <button
+              type="button"
+              className="assistant-link assistant-branch-link"
+              onClick={() => void openChat(chat.parent!.id)}
+              disabled={chat.busy}
+              title={`Open the chat this was branched from: ${chat.parent.title}`}
+            >
+              ↳ Branched from {chat.parent.title}
+            </button>
+          )}
           {usageText && (
             <span className="muted assistant-usage" title="Tokens and cost for this chat">
               {usageText}
@@ -543,7 +566,7 @@ export default function AssistantWidget({
                             {inside.length === 0 ? (
                               <li className="muted assistant-folder-empty">Drag chats here</li>
                             ) : (
-                              inside.map(renderChat)
+                              renderChats(inside)
                             )}
                           </ul>
                         )}
@@ -555,7 +578,7 @@ export default function AssistantWidget({
                   {...(searching ? {} : dropZone(null))}
                 >
                   {!searching && folders.length > 0 && <div className="assistant-root-label">Chats</div>}
-                  <ul className="assistant-chat-list">{topLevel.map(renderChat)}</ul>
+                  <ul className="assistant-chat-list">{renderChats(topLevel)}</ul>
                 </div>
               </>
             )}

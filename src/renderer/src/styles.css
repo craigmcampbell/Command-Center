@@ -6618,6 +6618,37 @@ body {
   font-size: 12px;
 }
 
+/* A branch in the history list, and the header link back to its parent. */
+.assistant-chat-branch-mark {
+  margin-right: 4px;
+  opacity: 0.7;
+}
+.assistant-branch-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Editing an earlier question in place (sends it as a new branch). */
+.assistant-edit {
+  width: min(560px, 100%);
+  align-items: stretch;
+}
+.assistant-edit .assistant-attachments {
+  padding: 0;
+}
+.assistant-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  font-size: 12px;
+}
+.assistant-edit-actions .muted {
+  margin-right: auto;
+}
+
 /* A write the assistant wants to make, waiting on the user. */
 .assistant-approval {
   border: 1px solid var(--pending);

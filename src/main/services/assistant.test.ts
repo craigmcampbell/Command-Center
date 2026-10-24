@@ -36,6 +36,7 @@ const store = vi.hoisted(() => ({
       pinned: boolean;
       messages: any[];
       usage: { promptTokens: number; completionTokens: number; costUsd: number | null };
+      origin?: { parentId: string; seq: number };
     }
   >(),
   failSave: false,
@@ -43,7 +44,7 @@ const store = vi.hoisted(() => ({
 vi.mock("./assistantChats", () => ({
   // Like the real upsert: a rewrite replaces messages and ADDS usage, but never
   // touches the title or pin (those belong to rename/pin).
-  saveChat: (id: string, title: string, messages: any[], usage?: any) => {
+  saveChat: (id: string, title: string, messages: any[], usage?: any, origin?: any) => {
     if (store.failSave) throw new Error("disk full");
     const existing = store.chats.get(id);
     const turn = usage ?? { promptTokens: 0, completionTokens: 0, costUsd: null };
@@ -58,11 +59,15 @@ vi.mock("./assistantChats", () => ({
         costUsd:
           turn.costUsd === null ? (existing?.usage.costUsd ?? null) : (existing?.usage.costUsd ?? 0) + turn.costUsd,
       },
+      // Like the real insert: the branch link is written once, never updated.
+      ...(existing ? (existing.origin ? { origin: existing.origin } : {}) : origin ? { origin } : {}),
     });
   },
   loadChat: (id: string) => {
     const chat = store.chats.get(id);
-    return chat ? JSON.parse(JSON.stringify(chat)) : null;
+    if (!chat) return null;
+    const parent = chat.origin ? store.chats.get(chat.origin.parentId) : undefined;
+    return { ...JSON.parse(JSON.stringify(chat)), parent: parent ? { id: parent.id, title: parent.title } : null };
   },
   listChats: () =>
     [...store.chats.values()].map((c) => ({ id: c.id, title: c.title, pinned: c.pinned, updatedAt: 1 })),
@@ -96,7 +101,13 @@ vi.mock("./assistantChats", () => ({
     return true;
   },
   deleteChat: (id: string) => store.chats.delete(id),
-  chatImageIds: () => [] as string[],
+  chatImageIds: (id: string) => [
+    ...new Set(
+      (store.chats.get(id)?.messages ?? []).flatMap((m: any) =>
+        (m.attachments ?? []).filter((a: any) => a.kind === "image").map((a: any) => a.id)
+      )
+    ),
+  ],
   // Like the real LIKE query: any stored message mentioning the id.
   isAttachmentReferenced: (id: string) =>
     [...store.chats.values()].some((c) => JSON.stringify(c.messages).includes(id)),
@@ -187,6 +198,7 @@ import { estimateTokens } from "./assistantCompaction";
 import {
   answerApproval,
   askAssistant,
+  branchAssistantChat,
   compactAssistantChat,
   deleteAssistantChat,
   listAssistantChats,
@@ -614,7 +626,7 @@ describe("askAssistant chat history", () => {
     expect(opened.ok).toBe(true);
     expect(opened.title).toBe("what's due?");
     expect(opened.items).toEqual([
-      { role: "user", text: "what's due?", toolCalls: [], remembered: [] },
+      { role: "user", text: "what's due?", turn: 0, toolCalls: [], remembered: [] },
       {
         role: "assistant",
         text: "One task: ship the POC.",
@@ -2500,5 +2512,199 @@ describe("image generation", () => {
     const reply = await pending;
     expect(approvals).toHaveLength(1);
     expect(reply.remembered).toEqual(["Likes foxes"]);
+  });
+});
+
+describe("editing an earlier question (branches)", () => {
+  const attachDir = path.join(os.tmpdir(), "assistant-attachments");
+
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    settings.firecrawl = {};
+    settings.openai = {};
+    store.chats.clear();
+    store.failSave = false;
+    cmds.table.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fs.rmSync(attachDir, { recursive: true, force: true });
+  });
+
+  async function twoTurnChat(): Promise<string> {
+    scriptFetch(stop("Answer one."));
+    const first = await askAssistant(null, "first question");
+    scriptFetch(stop("Answer two."));
+    await askAssistant(first.conversationId, "second question");
+    store.chats.get(first.conversationId)!.title = "Planning";
+    return first.conversationId;
+  }
+
+  it("copies the history before the edited question into a new linked chat", async () => {
+    const original = await twoTurnChat();
+    const before = JSON.parse(JSON.stringify(store.chats.get(original)!.messages));
+    const sent = scriptFetch(stop("Edited answer."));
+    const reply = await branchAssistantChat(original, 1, "second question, reworded");
+
+    expect(reply).toMatchObject({ ok: true, text: "Edited answer." });
+    expect(reply.conversationId).not.toBe(original);
+    // The model saw the copied history and the edited question, nothing after.
+    expect(sent[0].body.messages.map((m) => m.content).slice(1)).toEqual([
+      "first question",
+      "Answer one.",
+      "second question, reworded",
+    ]);
+    const branch = store.chats.get(reply.conversationId)!;
+    expect(branch.title).toBe("Planning (branch)");
+    expect(branch.origin).toEqual({ parentId: original, seq: 2 });
+    expect(branch.messages.map((m) => m.content)).toEqual([
+      "first question",
+      "Answer one.",
+      "second question, reworded",
+      "Edited answer.",
+    ]);
+    // The original is untouched.
+    expect(store.chats.get(original)!.messages).toEqual(before);
+
+    // Both transcripts read correctly, and the branch links back.
+    const opened = openAssistantChat(reply.conversationId);
+    expect(opened.parent).toEqual({ id: original, title: "Planning" });
+    expect(opened.items.map((i) => `${i.role}:${i.text}`)).toEqual([
+      "user:first question",
+      "assistant:Answer one.",
+      "user:second question, reworded",
+      "assistant:Edited answer.",
+    ]);
+    expect(opened.items.filter((i) => i.role === "user").map((i) => i.turn)).toEqual([0, 1]);
+    expect(openAssistantChat(original).items.map((i) => i.text)).toEqual([
+      "first question",
+      "Answer one.",
+      "second question",
+      "Answer two.",
+    ]);
+    expect(openAssistantChat(original).parent).toBeNull();
+
+    // The branch continues like any chat.
+    scriptFetch(stop("More."));
+    expect(await askAssistant(reply.conversationId, "and?")).toMatchObject({ ok: true, conversationId: reply.conversationId });
+    expect(store.chats.get(reply.conversationId)!.origin).toEqual({ parentId: original, seq: 2 });
+  });
+
+  it("branching from the first question starts from an empty history", async () => {
+    const original = await twoTurnChat();
+    const sent = scriptFetch(stop("Fresh."));
+    const reply = await branchAssistantChat(original, 0, "a different start");
+    expect(sent[0].body.messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(store.chats.get(reply.conversationId)!.origin).toEqual({ parentId: original, seq: 0 });
+  });
+
+  it("refuses an unknown question or chat without calling the model", async () => {
+    const original = await twoTurnChat();
+    scriptFetch(stop("unused"));
+    expect(await branchAssistantChat(original, 5, "x")).toMatchObject({ ok: false, conversationId: original });
+    expect(await branchAssistantChat("gone", 0, "x")).toMatchObject({ ok: false, reason: "That chat no longer exists" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(store.chats.size).toBe(1);
+  });
+
+  it("a failed edited turn leaves no branch and reports against the original", async () => {
+    const original = await twoTurnChat();
+    scriptFetch({ status: 500, json: { error: { message: "boom" } } });
+    const reply = await branchAssistantChat(original, 1, "reworded");
+    expect(reply).toMatchObject({ ok: false, conversationId: original });
+    expect([...store.chats.keys()]).toEqual([original]);
+  });
+
+  it("never re-runs a copied change; the edited turn asks for approval as usual", async () => {
+    scriptFetch(callTools({ id: "c1", name: "complete_task", args: { task_id: "t1" } }), stop("Done."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "finish it", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, true);
+    const first = await pending;
+    scriptFetch(stop("Ok."));
+    await askAssistant(first.conversationId, "thanks");
+    vi.mocked(completeTask).mockClear();
+
+    // Branch after the change: it is history only.
+    scriptFetch(stop("You're welcome."));
+    const after = await branchAssistantChat(first.conversationId, 1, "thank you!");
+    expect(after.ok).toBe(true);
+    expect(completeTask).not.toHaveBeenCalled();
+
+    // Branch before it: the edited turn's own change still needs a yes.
+    scriptFetch(callTools({ id: "c2", name: "complete_task", args: { task_id: "t1" } }), stop("Declined, ok."));
+    const cards: any[] = [];
+    const branching = branchAssistantChat(first.conversationId, 0, "finish it now", {}, hooks({ onApproval: (a) => cards.push(a) }));
+    await vi.waitFor(() => expect(cards).toHaveLength(1));
+    answerApproval(cards[0].approvalId, false);
+    expect((await branching).ok).toBe(true);
+    expect(completeTask).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds the branch uncompacted when the edited question was summarized", async () => {
+    store.chats.set("compacted", {
+      id: "compacted",
+      title: "Long",
+      pinned: false,
+      usage: { promptTokens: 0, completionTokens: 0, costUsd: null },
+      messages: [
+        { role: "user", content: "q0", archived: true },
+        { role: "assistant", content: "a0", archived: true },
+        { role: "user", content: "q1", archived: true },
+        { role: "assistant", content: "a1", archived: true },
+        { role: "system", content: "Summary of q0 and q1.", summary: true },
+        { role: "user", content: "q2" },
+        { role: "assistant", content: "a2" },
+      ],
+    });
+    const sent = scriptFetch(stop("Edited."));
+    const reply = await branchAssistantChat("compacted", 1, "q1 edited");
+    expect(reply.ok).toBe(true);
+    expect(sent[0].body.messages[0].content).not.toContain("Summary of q0 and q1.");
+    expect(sent[0].body.messages.map((m) => m.content).slice(1)).toEqual(["q0", "a0", "q1 edited"]);
+    const stored = store.chats.get(reply.conversationId)!.messages;
+    expect(stored.some((m) => m.archived || m.summary)).toBe(false);
+
+    // A cut after the summary keeps it, and what it covers stays archived.
+    const sentLive = scriptFetch(stop("Edited again."));
+    const live = await branchAssistantChat("compacted", 2, "q2 edited");
+    expect(sentLive[0].body.messages[0].content).toContain("Summary of q0 and q1.");
+    expect(sentLive[0].body.messages.map((m) => m.content).slice(1)).toEqual(["q2 edited"]);
+    expect(store.chats.get(live.conversationId)!.messages.filter((m) => m.archived)).toHaveLength(4);
+  });
+
+  it("keeps chosen original files, and a shared image survives deleting either chat", async () => {
+    const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 77, 77, 77]);
+    scriptFetch(stop("A picture."));
+    const first = await askAssistant(null, "look", hooks(), "r1", undefined, [
+      { name: "pic.png", mime: "image/png", data: PNG },
+      { name: "n.md", mime: "text/markdown", data: new TextEncoder().encode("note") },
+    ]);
+    const [image, text] = store.chats.get(first.conversationId)!.messages[0].attachments;
+
+    const sent = scriptFetch(stop("Same picture."));
+    const branch = await branchAssistantChat(first.conversationId, 0, "look again", {
+      keepAttachments: [image.id, "f".repeat(64)],
+    });
+    expect(branch.ok).toBe(true);
+    const asked = sent[0].body.messages.find((m) => m.role === "user");
+    expect(asked.content.map((p: any) => p.type)).toEqual(["text", "image_url"]);
+    expect(JSON.stringify(asked)).not.toContain("note");
+    expect(store.chats.get(branch.conversationId)!.messages[0].attachments.map((a: any) => a.id)).toEqual([image.id]);
+    expect(text.kind).toBe("text");
+
+    expect(deleteAssistantChat(first.conversationId).ok).toBe(true);
+    expect(fs.readdirSync(attachDir)).toContain(image.id);
+    expect(deleteAssistantChat(branch.conversationId).ok).toBe(true);
+    expect(fs.existsSync(path.join(attachDir, image.id))).toBe(false);
   });
 });

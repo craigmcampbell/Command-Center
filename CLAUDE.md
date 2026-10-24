@@ -760,6 +760,33 @@ hotkey) — a drift there is silent.
 - **Regenerate** re-runs the last question and replaces the answer only on
   success; it is refused (server-side, and hidden in the UI) when that reply
   used a mutating tool, since repeating it would repeat the change.
+- **Edit an earlier question = a branch** (`assistantBranch.ts`, pure; the loop is
+  `branchAssistantChat`). **Edit** on a saved user message puts its text, command
+  and files back in an inline editor (they can be dropped, not added); sending
+  creates a **new chat** holding a copy of the history before that message, linked
+  by `parent_chat_id` + `branched_at_seq` (the edited message's `seq`), and runs
+  the edited question there as an ordinary turn. The original is never touched.
+  A new chat rather than a message tree on purpose: `toWire`, compaction, search
+  and `saveChat`'s whole-chat rewrite all stay unchanged. The rules: the message
+  is named by `turn` (its index among the chat's user messages, archived ones
+  included — `toTranscript` sets it, the renderer sets it on a reply that
+  succeeded) and the cut is always at a user message, so a `tool_calls` message
+  never loses its results. If the edited message is still **live**, copied
+  `archived`/`summary` flags are kept (the summary only covers what precedes it);
+  if it was **archived**, the branch is **rebuilt uncompacted** (summaries dropped,
+  flags cleared) because the covering summary lies after the cut — a later turn
+  re-compacts it if needed. Copied tool calls are history and never re-run; the
+  edited turn gets normal approvals. Kept files are the original's stored ones,
+  taken by id from that message only (`keptAttachments`); images are shared by
+  hash, so deleting either chat keeps a file the other uses. The branch is read
+  from the **saved** chat, titled "<original> (branch)" (no AI title), and saved
+  only when its first turn succeeds — a failure removes it (an auto-compaction
+  may have written a row) and reports against the original. Its usage starts at
+  that turn: the copied history's cost stays with the parent. The link is set on
+  insert only; a deleted parent reads as no link (LEFT JOIN). The history list
+  nests a branch under its parent when both are in the same group
+  (`lib/chatBranches.ts`), and the header links back. Editing is disabled while a
+  reply is in flight, like the other history controls.
 - **Cost** is tracked per chat (`usage: { include: true }`; tokens summed, cost
   null — not 0 — when the provider reports none). It is an API-equivalent figure
   from OpenRouter, shown in the tab header.

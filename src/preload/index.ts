@@ -242,6 +242,16 @@ const api: CommandCenterApi = {
     saveAttachment: (id: string, name: string) => ipcRenderer.invoke("assistant:attachments:save", id, name),
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
+    branch: (
+      sourceId: string,
+      turn: number,
+      message: string,
+      requestId: string,
+      command?: string,
+      keepAttachments?: string[],
+      attachments?: unknown
+    ) =>
+      ipcRenderer.invoke("assistant:branch", sourceId, turn, message, requestId, command, keepAttachments, attachments),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),
     approve: (approvalId: string, allow: boolean, allowedItems?: string[]) =>
       ipcRenderer.invoke("assistant:approve", approvalId, allow, allowedItems),

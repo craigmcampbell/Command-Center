@@ -39,6 +39,16 @@ export interface StoredChat {
   pinned: boolean;
   messages: ChatMessage[];
   usage: AssistantUsage;
+  // Set on a branch (an earlier question edited): the chat it was copied from,
+  // or null once that chat is deleted.
+  parent: { id: string; title: string } | null;
+}
+
+// Where a branch came from: the parent chat and the `seq` of the user message
+// that was edited. Written once, when the branch is first saved.
+export interface ChatOrigin {
+  parentId: string;
+  seq: number;
 }
 
 interface MessageRow {
@@ -163,6 +173,10 @@ export function initAssistantChats(): void {
   // Folders for the history list. A chat in a folder that no longer exists reads
   // as top level (the join below), so a deleted folder can never hide a chat.
   addColumnIfMissing("assistant_chats", "folder_id", "TEXT");
+  // Branches: a chat made by editing an earlier question of another one. The
+  // parent may be deleted later; the joins below then read the link as absent.
+  addColumnIfMissing("assistant_chats", "parent_chat_id", "TEXT");
+  addColumnIfMissing("assistant_chats", "branched_at_seq", "INTEGER");
   db.exec(`CREATE TABLE IF NOT EXISTS assistant_folders (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -223,12 +237,14 @@ export function initAssistantChats(): void {
 // Insert-or-replace. Deliberately leaves `title` and `pinned` alone on update:
 // those are the user's to change (rename/pin), and a later reply in the chat
 // must not undo them. `usage` is the cost of THIS turn and is added to the
-// running totals.
+// running totals. `origin` only applies to the first save (the insert): a
+// branch's link back to its parent never changes afterwards.
 export function saveChat(
   id: string,
   title: string,
   messages: ChatMessage[],
-  usage?: AssistantUsage
+  usage?: AssistantUsage,
+  origin?: ChatOrigin
 ): void {
   const now = Date.now();
   const turn = usage ?? { promptTokens: 0, completionTokens: 0, costUsd: null };
@@ -236,9 +252,11 @@ export function saveChat(
   const upsert = db
     .prepare(
       `INSERT INTO assistant_chats
-         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd, created_at, updated_at)
+         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd, created_at, updated_at,
+          parent_chat_id, branched_at_seq)
        VALUES
-         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now)
+         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now,
+          @parentId, @seq)
        ON CONFLICT(id) DO UPDATE SET
          search_text = excluded.search_text,
          prompt_tokens = prompt_tokens + excluded.prompt_tokens,
@@ -258,6 +276,8 @@ export function saveChat(
       completionTokens: turn.completionTokens,
       costUsd: turn.costUsd,
       now,
+      parentId: origin?.parentId ?? null,
+      seq: origin?.seq ?? null,
     });
     writeMessages(id, messages);
   })();
@@ -266,10 +286,13 @@ export function saveChat(
 export function loadChat(id: string): StoredChat | null {
   const row = getDatabase()
     .prepare(
-      `SELECT id, title, pinned, prompt_tokens, completion_tokens, cost_usd, updated_at
-         FROM assistant_chats WHERE id = ?`
+      `SELECT c.id, c.title, c.pinned, c.prompt_tokens, c.completion_tokens, c.cost_usd, c.updated_at,
+              p.id AS parent_id, p.title AS parent_title
+         FROM assistant_chats c
+         LEFT JOIN assistant_chats p ON p.id = c.parent_chat_id
+        WHERE c.id = ?`
     )
-    .get(id) as ChatRow | undefined;
+    .get(id) as (ChatRow & { parent_id: string | null; parent_title: string | null }) | undefined;
   if (!row) return null;
   try {
     const rows = getDatabase()
@@ -291,6 +314,7 @@ export function loadChat(id: string): StoredChat | null {
         completionTokens: row.completion_tokens,
         costUsd: row.cost_usd,
       },
+      parent: row.parent_id ? { id: row.parent_id, title: row.parent_title ?? "" } : null,
     };
   } catch {
     // A corrupt row reads as "no such chat" instead of breaking the history list.
@@ -312,19 +336,24 @@ export function listChats(query?: string): AssistantChatSummary[] {
   });
   const rows = getDatabase()
     .prepare(
-      `SELECT c.id, c.title, c.pinned, c.updated_at, f.id AS folder_id
+      `SELECT c.id, c.title, c.pinned, c.updated_at, f.id AS folder_id, p.id AS parent_id
          FROM assistant_chats c
          LEFT JOIN assistant_folders f ON f.id = c.folder_id
+         LEFT JOIN assistant_chats p ON p.id = c.parent_chat_id
         ${where ? `WHERE ${where}` : ""}
         ORDER BY c.pinned DESC, c.updated_at DESC LIMIT 200`
     )
-    .all(...params) as (Pick<ChatRow, "id" | "title" | "pinned" | "updated_at"> & { folder_id: string | null })[];
+    .all(...params) as (Pick<ChatRow, "id" | "title" | "pinned" | "updated_at"> & {
+      folder_id: string | null;
+      parent_id: string | null;
+    })[];
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
     pinned: r.pinned === 1,
     updatedAt: r.updated_at,
     folderId: r.folder_id,
+    parentId: r.parent_id,
   }));
 }
 
