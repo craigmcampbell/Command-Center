@@ -517,20 +517,28 @@ hotkey) — a drift there is silent.
   database, which is also how a chat resumes after a restart. A chat is written
   only after a turn **succeeds**, so a failed first question leaves no row. A
   failed save never fails the reply. **Titles are two-stage**: a new chat is saved
-  with its first question as a placeholder, then — in the background, after the
-  reply has already returned — upgraded to a 3–6 word model-written title (on by
-  default; Settings has an on/off toggle and a separate **Title model**, blank =
-  the main model, since a cheap one is plenty). The upgrade is one atomic
+  with its first question as a placeholder, then upgraded to a 3–6 word
+  model-written title (on by default; Settings has an on/off toggle and a separate
+  **Title model**, blank = the main model, since a cheap one is plenty). The title
+  request is **sent on the first message, right behind the reply's own request**
+  and runs beside it (`startTitle`, from the question alone), so it is normally
+  already in hand when the reply lands. It is *applied* only after the chat has
+  been saved (`applyTitle` — the row doesn't exist until the first reply
+  succeeds), and never delays the reply. A failed or stopped first turn aborts
+  the request (it is not left running). The upgrade is one atomic
   `UPDATE … WHERE title = <placeholder>` (`renameChatIfUnchanged`), so a rename
   made while the request is in flight always wins; any failure, an empty or
   unusable result (`cleanTitle` strips quotes/markdown/reasoning preambles), a
-  stopped first turn, or a resumed chat leaves things as they are. It sends only
-  the opening exchange (question ≤500 chars, answer ≤800), no tools — and the
-  client omits `tools` entirely rather than sending `[]`, which OpenAI-style APIs
-  reject. Its tokens and cost are added to the chat (`addChatUsage`, which does
-  not reorder the list) even when the title is thrown away; the tab header shows
-  that after the chat is next opened. The dashboard learns a title landed via
-  `app:command` → `assistantChatTitled` (no third push channel). A **rename or pin
+  stopped first turn, or a resumed chat leaves things as they are. **The budget is
+  256 output tokens, not 40**: a reasoning model spends its budget thinking, and
+  at 40 it had nothing left to say, so the placeholder silently stayed. Failures
+  are `console.warn`ed (including "ran out of tokens — pick a plain Title model")
+  rather than surfaced in the UI. No tools — and the client omits `tools`
+  entirely rather than sending `[]`, which OpenAI-style APIs reject. Its tokens
+  and cost are added to the chat (`addChatUsage`, which does not reorder the list)
+  even when the title is thrown away; the tab header shows that after the chat is
+  next opened. The dashboard learns a title landed via `app:command` →
+  `assistantChatTitled` (no third push channel). A **rename or pin
   is never overwritten by a later reply** (the upsert leaves `title`/`pinned`
   alone). Columns were added by additive migration — keep it
   that way.

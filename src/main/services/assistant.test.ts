@@ -1210,8 +1210,8 @@ describe("turn control", () => {
 // ---- AI-written titles -------------------------------------------------------
 
 describe("AI chat titles", () => {
-  // Titles are written by a background request after the reply has returned, so
-  // "nothing happened" assertions need to give it a moment to (not) happen.
+  // The title is requested alongside the first reply and applied once the chat
+  // is saved, so "nothing happened" assertions need to give it a moment.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 40));
   const titleOf = (id: string) => store.chats.get(id)?.title;
 
@@ -1230,34 +1230,105 @@ describe("AI chat titles", () => {
   it("upgrades the placeholder to a cleaned model-written title", async () => {
     const sent = scriptFetch(stop("Two tasks are due today."), stop('"Today\'s due tasks."'));
     const reply = await askAssistant(null, "  what's   on my plate today, anything urgent?  ");
-    // The reply is not held up: until the title lands the chat carries the placeholder.
-    expect(titleOf(reply.conversationId)).toBe("what's on my plate today, anything urgent?");
-
     await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("Today's due tasks"));
     expect(sent).toHaveLength(2);
   });
 
-  it("sends only the opening exchange, with no tools and a tiny budget", async () => {
+  it("asks for the title on the first message, right behind the reply's own request", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const order: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(init.body as string);
+        const isTitle = body.messages[0].content.startsWith("You name chats");
+        order.push(isTitle ? "title" : "reply");
+        // The reply can't finish until the title request has been sent.
+        if (!isTitle) await held;
+        return new Response(
+          JSON.stringify({
+            choices: [{ finish_reason: "stop", message: { role: "assistant", content: isTitle ? "Ship planning" : "Answer." } }],
+          })
+        );
+      })
+    );
+    const pending = askAssistant(null, "help me plan the ship date");
+    await vi.waitFor(() => expect(order).toEqual(["reply", "title"]));
+    release();
+    const reply = await pending;
+    await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("Ship planning"));
+  });
+
+  it("does not hold the reply up for a slow title", async () => {
+    let releaseTitle!: () => void;
+    const slowTitle = new Promise<Response>((resolve) => {
+      releaseTitle = () =>
+        resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Late title" } }] })
+          )
+        );
+    });
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        return calls === 1
+          ? new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Answer." } }] }))
+          : slowTitle;
+      })
+    );
+    const reply = await askAssistant(null, "slow title question");
+    expect(reply).toMatchObject({ ok: true, text: "Answer." });
+    expect(titleOf(reply.conversationId)).toBe("slow title question");
+    releaseTitle();
+    await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("Late title"));
+  });
+
+  it("sends only the first message, with no tools and room for a reasoning model", async () => {
     const sent = scriptFetch(stop("Answer text."), stop("A title"));
     await askAssistant(null, "the question");
     await vi.waitFor(() => expect(sent).toHaveLength(2));
 
     const request = sent[1].body as any;
     expect(request.tools).toBeUndefined(); // an empty tools array would be rejected by OpenAI-style APIs
-    expect(request.max_tokens).toBe(40);
+    expect(request.max_tokens).toBe(256);
     expect(request.messages.map((m: any) => m.role)).toEqual(["system", "user"]);
-    expect(request.messages[1].content).toBe("Question: the question\n\nAnswer: Answer text.");
+    expect(request.messages[1].content).toBe("First message: the question");
+    // The answer is not part of it: the request leaves before there is one.
+    expect(JSON.stringify(request)).not.toContain("Answer text.");
   });
 
-  it("bounds how much of the exchange it sends", async () => {
-    const sent = scriptFetch(stop("a".repeat(5000)), stop("Title"));
+  it("bounds how much of the message it sends", async () => {
+    const sent = scriptFetch(stop("Answer."), stop("Title"));
     await askAssistant(null, "q".repeat(3000));
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     const content = (sent[1].body as any).messages[1].content as string;
     expect(content).toContain("q".repeat(500));
     expect(content).not.toContain("q".repeat(501));
-    expect(content).toContain("a".repeat(800));
-    expect(content).not.toContain("a".repeat(801));
+  });
+
+  it("names a chat started with a slash command or a file by what it was given", async () => {
+    const sent = scriptFetch(stop("Done."), stop("Notes review"));
+    const reply = await askAssistant(null, "", hooks(), "r1", undefined, [
+      { name: "notes.md", mime: "text/markdown", data: new TextEncoder().encode("# Notes") },
+    ]);
+    await vi.waitFor(() => expect(titleOf(reply.conversationId)).toBe("Notes review"));
+    expect((sent[1].body as any).messages[1].content).toBe("First message: notes.md");
+  });
+
+  it("explains in the log when a reasoning model runs out of tokens", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    scriptFetch(stop("Answer."), {
+      json: { choices: [{ finish_reason: "length", message: { role: "assistant", content: "" } }] },
+    });
+    const reply = await askAssistant(null, "a question");
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(String(warn.mock.calls[0][0])).toMatch(/ran out of tokens/);
+    expect(titleOf(reply.conversationId)).toBe("a question");
+    warn.mockRestore();
   });
 
   it("uses the title model when one is set, otherwise the main model", async () => {
@@ -1341,16 +1412,41 @@ describe("AI chat titles", () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
   });
 
-  it("does not title a turn the user stopped", async () => {
-    const sent = scriptFetch({ sse: `data: ${JSON.stringify(delta({ content: "Half an ans" }))}\n\n`, hang: true });
+  it("does not title a turn the user stopped, and cancels the request", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        if (init.signal) signals.push(init.signal);
+        const body = JSON.parse(init.body as string);
+        if (body.messages[0].content.startsWith("You name chats")) {
+          // A title request that would never finish on its own.
+          return new Promise<Response>((_resolve, reject) =>
+            init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))
+          );
+        }
+        const encoder = new TextEncoder();
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({
+          start(c) {
+            controller = c;
+            c.enqueue(encoder.encode(`data: ${JSON.stringify(delta({ content: "Half an ans" }))}\n\n`));
+          },
+        });
+        init.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+      })
+    );
     const deltas: string[] = [];
     const pending = askAssistant(null, "long one", hooks({ onText: (d) => deltas.push(d) }), "title-stop");
     await vi.waitFor(() => expect(deltas.join("")).toContain("Half"));
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
     stopAssistant("title-stop");
     const reply = await pending;
     await settle();
     expect(reply.stopped).toBe(true);
-    expect(sent).toHaveLength(1);
+    expect(titleOf(reply.conversationId)).toBe("long one");
+    expect(signals[1].aborted).toBe(true); // the title request was cancelled, not left running
   });
 
   it("titles a chat only once, not on every reply", async () => {
@@ -1380,7 +1476,8 @@ describe("AI chat titles", () => {
     scriptFetch({ status: 402, json: { error: { message: "no credits" } } });
     const failed = await askAssistant(null, "will fail");
     expect(failed.ok).toBe(false);
-    expect(store.chats.size).toBe(0); // and no title request for a failed turn
+    await settle();
+    expect(store.chats.size).toBe(0); // no chat, so nothing for a title to be applied to
 
     const sent = scriptFetch(stop("Worked."), stop("Recovered chat"));
     const ok = await askAssistant(failed.conversationId, "will work");
@@ -1400,7 +1497,7 @@ describe("AI chat titles", () => {
       completionTokens: 24,
       costUsd: 0.0021,
     });
-    // The reply's own figure is untouched: the title came after it.
+    // The reply's own figure is untouched: the title's spend is kept apart.
     expect(reply.usage).toEqual({ promptTokens: 100, completionTokens: 20, costUsd: 0.002 });
   });
 

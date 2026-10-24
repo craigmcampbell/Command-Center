@@ -1476,7 +1476,7 @@ function AssistantCard({
           checked={autoTitle}
           onChange={(e) => setAutoTitle(e.target.checked)}
         />
-        Write a short title for each new chat after its first reply
+        Write a short title for each new chat from its first message
       </label>
       <div className="settings-field-row">
         <label>Title model</label>
@@ -1490,9 +1490,10 @@ function AssistantCard({
         />
       </div>
       <p className="settings-card-hint">
-        Titles are a second, tiny request per new chat, billed to the model above. A cheap, fast
-        model is plenty. Until the title arrives (and if it fails), a chat is named after your
-        first question.
+        The title is one tiny extra request, sent with your first message so it is usually ready
+        when the reply lands, and billed to the title model (or the main model if this is blank). Use
+        a small, plain model: a reasoning model can spend its whole budget thinking and return no
+        title. Until it arrives, and if it fails, a chat is named after your first question.
       </p>
       <label className="settings-checkbox-label">
         <input

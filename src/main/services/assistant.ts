@@ -440,15 +440,20 @@ export async function compactAssistantChat(id: string): Promise<AssistantCompact
 // ---- AI-written titles -----------------------------------------------------
 //
 // A new chat is first titled with its opening question (instant, free, saved
-// with the chat), then — in the background, after the reply has already been
-// returned — upgraded to a short model-written title. Nothing here may ever
-// delay or break a reply: every failure just leaves the placeholder in place.
+// with the chat). The model-written title is requested on the FIRST MESSAGE,
+// alongside the reply rather than after it, from the question alone — so by the
+// time the reply lands the better name is usually already in hand. The result is
+// applied once the chat has been saved (its row doesn't exist before the first
+// reply succeeds), and nothing here may ever delay or break a reply: every
+// failure just leaves the placeholder in place.
 
 const TITLE_SYSTEM =
-  "Write a short title (3 to 6 words) for this chat. Reply with only the title: no quotes, no markdown, no trailing punctuation.";
-const TITLE_MAX_TOKENS = 40;
+  "You name chats. You are given the first message of a new chat. Write a short title for it: 3 to 6 words. Reply with only the title: no quotes, no markdown, no trailing punctuation.";
+// Titles are a handful of words, but a reasoning model spends its output budget
+// thinking first; 40 tokens left it with nothing to say and the placeholder
+// stayed. Non-reasoning models stop after a few tokens, so the room costs them nothing.
+const TITLE_MAX_TOKENS = 256;
 const TITLE_QUESTION_CHARS = 500;
-const TITLE_ANSWER_CHARS = 800;
 
 let titleListener: ((chatId: string) => void) | null = null;
 
@@ -459,34 +464,60 @@ export function onAssistantChatTitled(listener: (chatId: string) => void): void 
   titleListener = listener;
 }
 
-async function retitle(params: {
-  chatId: string;
-  placeholder: string;
-  question: string;
-  answer: string;
-  apiKey: string;
-  model: string;
-}): Promise<void> {
-  const { chatId, placeholder, question, answer, apiKey, model } = params;
+interface TitleOutcome {
+  title: string | null;
+  usage?: AssistantUsage;
+}
+
+interface TitleJob {
+  result: Promise<TitleOutcome>;
+  // Used when the turn fails or is stopped: no title is wanted any more.
+  abort: () => void;
+}
+
+function startTitle(params: { apiKey: string; model: string; question: string }): TitleJob {
+  const controller = new AbortController();
+  const result = (async (): Promise<TitleOutcome> => {
+    try {
+      const response = await complete({
+        apiKey: params.apiKey,
+        model: params.model,
+        // No tools, no history: just the opening message.
+        messages: [
+          { role: "system", content: TITLE_SYSTEM },
+          { role: "user", content: `First message: ${params.question.slice(0, TITLE_QUESTION_CHARS)}` },
+        ],
+        onText: () => {},
+        maxTokens: TITLE_MAX_TOKENS,
+        signal: controller.signal,
+      });
+      if (response.aborted) return { title: null };
+      if (!response.ok) {
+        console.warn(`Chat title request failed: ${response.reason ?? "unknown error"}`);
+        return { title: null, usage: response.usage };
+      }
+      const title = cleanTitle(response.message?.content ?? "");
+      if (!title) {
+        console.warn(
+          response.finishReason === "length"
+            ? "Chat title request ran out of tokens before writing a title. A reasoning model is a poor Title model; pick a small plain one in Settings → Assistant."
+            : "Chat title request returned nothing usable."
+        );
+      }
+      return { title, usage: response.usage };
+    } catch {
+      return { title: null };
+    }
+  })();
+  return { result, abort: () => controller.abort() };
+}
+
+// Called once the chat row exists. The request cost something whether or not
+// the title is usable, so its spend is always counted.
+async function applyTitle(job: TitleJob, chatId: string, placeholder: string): Promise<void> {
   try {
-    const result = await complete({
-      apiKey,
-      model,
-      // No tools, no history: just the opening exchange.
-      messages: [
-        { role: "system", content: TITLE_SYSTEM },
-        {
-          role: "user",
-          content: `Question: ${question.slice(0, TITLE_QUESTION_CHARS)}\n\nAnswer: ${answer.slice(0, TITLE_ANSWER_CHARS)}`,
-        },
-      ],
-      onText: () => {},
-      maxTokens: TITLE_MAX_TOKENS,
-    });
-    // The request cost something whether or not the title is usable.
-    if (result.usage) addChatUsage(chatId, result.usage);
-    if (!result.ok) return;
-    const title = cleanTitle(result.message?.content ?? "");
+    const { title, usage } = await job.result;
+    if (usage) addChatUsage(chatId, usage);
     if (!title || title === placeholder) return;
     // Only replaces the placeholder: if the user renamed the chat in the
     // meantime, their title stays (one atomic statement, no read-then-write gap).
@@ -625,7 +656,10 @@ async function runTurn({
 
   // Restored on any failure so history is never left half-written.
   const snapshot = convo.messages.slice();
+  // The model-written title, requested with the first reply (see above).
+  let titleJob: TitleJob | null = null;
   const rollback = (reason: string, needsSetup = false): AssistantReply => {
+    titleJob?.abort();
     convo.messages.splice(0, convo.messages.length, ...snapshot);
     return fail(reason, id, needsSetup);
   };
@@ -689,15 +723,10 @@ async function runTurn({
     const firstTurn = convo.title === null;
     convo.title ??= deriveTitle(asked);
     persist(id, convo, usage);
-    if (firstTurn && !stopped && full.trim() && settings.autoTitle !== false) {
-      void retitle({
-        chatId: id,
-        placeholder: convo.title,
-        question: asked,
-        answer: full.trim(),
-        apiKey,
-        model: settings.titleModel?.trim() || model,
-      });
+    if (titleJob) {
+      // A stopped or empty first turn keeps the question as its name.
+      if (firstTurn && !stopped && full.trim()) void applyTitle(titleJob, id, convo.title);
+      else titleJob.abort();
     }
     return {
       ok: true,
@@ -726,6 +755,8 @@ async function runTurn({
   };
 
   // What a chat list shows for a turn with nothing typed after its command.
+  // A chat that has never been saved: its first successful turn names it.
+  const firstTurnOfChat = convo.title === null;
   const files = regenerated?.attachments ?? attached;
   const asked =
     text ||
@@ -758,7 +789,7 @@ async function runTurn({
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal.aborted) return finishStopped("");
 
-      const result = await complete({
+      const request = complete({
         apiKey,
         model,
         messages: toWire(convo.messages, readImageDataUrl),
@@ -766,6 +797,13 @@ async function runTurn({
         onText: emit,
         signal,
       });
+      // The first message of a new chat also asks for a title, on the cheaper
+      // Title model if one is set. Sent right behind the reply's own request so
+      // the two run side by side.
+      if (step === 0 && !regenerate && firstTurnOfChat && settings.autoTitle !== false && asked) {
+        titleJob = startTitle({ apiKey, model: settings.titleModel?.trim() || model, question: asked });
+      }
+      const result = await request;
       if (result.aborted) return finishStopped(result.partialText ?? "");
       if (!result.ok || !result.message) {
         return rollback(result.reason ?? "Request failed", result.needsSetup);
