@@ -128,7 +128,7 @@ export async function getDueTasks(
     );
 
   const projectList = projects
-    .map((p: any) => ({ id: p.id, name: p.name }))
+    .map((p: any) => ({ id: p.id, name: p.name, parentId: p.parent_id ?? null }))
     .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
 
   return { ok: true, tasks, projects: projectList };

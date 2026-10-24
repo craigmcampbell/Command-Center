@@ -349,7 +349,15 @@ export default function App() {
     setAllTodoist(result);
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    setTodoist({ ...result, tasks: result.tasks.filter(task => task.deadline || (task.due && task.due.slice(0, 10) <= today)) });
+    // Home hides the Planet Depos project and everything nested under it.
+    const hidden = new Set(result.projects.filter(p => p.name.includes("Planet Depos")).map(p => p.id));
+    for (let grew = hidden.size > 0; grew; ) {
+      grew = false;
+      for (const p of result.projects) {
+        if (p.parentId && hidden.has(p.parentId) && !hidden.has(p.id)) { hidden.add(p.id); grew = true; }
+      }
+    }
+    setTodoist({ ...result, tasks: result.tasks.filter(task => !hidden.has(task.projectId) && (task.deadline || (task.due && task.due.slice(0, 10) <= today))) });
   }, []);
   const loadCalendar = useCallback(async () => {
     setCalendar(await window.api.calendar.events(calendarDate ?? undefined));

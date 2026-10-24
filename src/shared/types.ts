@@ -1017,6 +1017,7 @@ export interface TodoistTask {
 export interface TodoistProject {
   id: string;
   name: string;
+  parentId?: string | null;
 }
 
 export interface TodoistResult {
