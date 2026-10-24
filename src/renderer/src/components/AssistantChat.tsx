@@ -38,6 +38,7 @@ const TOOL_LABELS: Record<string, string> = {
   complete_task: "Completed task",
   reschedule_task: "Rescheduled task",
   create_task: "Created task",
+  recall_memory: "Memory lookup",
   remember: "Memory",
   forget: "Memory",
 };
@@ -62,6 +63,7 @@ const TOOL_ACTIVITY: Record<string, { doing: string; done: string }> = {
   complete_task: { doing: "Completing a task", done: "Completed a task" },
   reschedule_task: { doing: "Rescheduling a task", done: "Rescheduled a task" },
   create_task: { doing: "Creating a task", done: "Created a task" },
+  recall_memory: { doing: "Searching your memory", done: "Searched your memory" },
   remember: { doing: "Saving to memory", done: "Saved to memory" },
   forget: { doing: "Editing memory", done: "Edited memory" },
 };

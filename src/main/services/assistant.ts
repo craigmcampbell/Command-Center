@@ -65,6 +65,7 @@ import {
   setChatPinned,
 } from "./assistantChats";
 import { localDate, readMemoryFile } from "./assistantMemory";
+import { memoryPromptBlock } from "./assistantMemoryIndex";
 import {
   customSystemPrompt,
   hasUntrustedContext,
@@ -187,9 +188,7 @@ function askForApprovals(
 
 function buildSystem(memory: string): string {
   const weekday = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const memoryBlock = memory.trim()
-    ? `<memory>\n${memory.trim()}\n</memory>`
-    : "<memory>(empty)</memory>";
+  const memoryBlock = memoryPromptBlock(memory);
   const custom = customSystemPrompt();
   return [
     "You are the built-in assistant of Command Center, the user's personal desktop dashboard. They use you for quick questions, so answer directly and briefly.",

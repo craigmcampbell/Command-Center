@@ -288,6 +288,7 @@ describe("askAssistant", () => {
       "complete_task",
       "reschedule_task",
       "create_task",
+      "recall_memory",
       "remember",
       "forget",
     ]);
@@ -410,8 +411,57 @@ describe("askAssistant", () => {
     expect(sent[3].body.messages[0].content).toContain("Prefers terse answers");
   });
 
+  it("sends a core of a large memory and lets the model look up the rest", async () => {
+    const filler = Array.from({ length: 300 }, (_, i) => `- 2026-09-02: Filler fact ${i} with padding words here`);
+    fs.writeFileSync(
+      memoryFile,
+      ["- 2026-01-01: Daughter Mia plays the oboe", ...filler, "- 2026-09-09: Newest fact"].join("\n")
+    );
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "recall_memory", args: { query: "what instrument does Mia play" } }),
+      stop("The oboe.")
+    );
+    const reply = await askAssistant(null, "what does Mia play?");
+
+    const system = sent[0].body.messages[0].content;
+    expect(system).toContain("Newest fact");
+    expect(system).not.toContain("plays the oboe");
+    expect(system).toContain("recall_memory");
+
+    const result = JSON.parse(sent[1].body.messages.at(-1).content);
+    expect(result.total_facts).toBe(302);
+    expect(result.matches[0]).toBe("2026-01-01: Daughter Mia plays the oboe");
+    expect(reply.toolCalls).toMatchObject([{ name: "recall_memory", ok: true }]);
+  });
+
+  it("recall_memory reads the file fresh and says when nothing matches", async () => {
+    fs.writeFileSync(memoryFile, "- 2026-09-01: Likes tea\n");
+    const sent = scriptFetch(
+      callTools({ id: "c1", name: "recall_memory", args: { query: "kubernetes" } }),
+      stop("Nothing.")
+    );
+    await askAssistant(null, "anything about k8s?");
+    const result = JSON.parse(sent[1].body.messages.at(-1).content);
+    expect(result.matches).toEqual([]);
+    expect(result.note).toMatch(/Nothing in memory/);
+  });
+
+  it("does not count a memory lookup as reading third-party text", async () => {
+    settings.assistant.askBeforeRemember = false;
+    fs.writeFileSync(memoryFile, "- 2026-09-01: Likes tea\n");
+    scriptFetch(
+      callTools({ id: "c1", name: "recall_memory", args: { query: "tea" } }),
+      callTools({ id: "c2", name: "remember", args: { fact: "Also likes coffee" } }),
+      stop("Saved.")
+    );
+    const approvals: any[] = [];
+    const reply = await askAssistant(null, "remember coffee", hooks({ onApproval: (a) => approvals.push(a) }));
+    expect(approvals).toEqual([]);
+    expect(reply.remembered).toEqual(["Also likes coffee"]);
+  });
+
   it("caps memory size instead of growing forever", async () => {
-    fs.writeFileSync(memoryFile, "x".repeat(16 * 1024 - 5));
+    fs.writeFileSync(memoryFile, "x".repeat(128 * 1024 - 5));
     scriptFetch(
       callTools({ id: "c1", name: "remember", args: { fact: "too much" } }),
       stop("Couldn't.")

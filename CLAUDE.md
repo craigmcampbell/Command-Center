@@ -599,6 +599,22 @@ hotkey) — a drift there is silent.
   `reader_feed_unread` already loaded (`findCachedFeedItem`), so the card can
   quote a real title. `github_list_prs` is the read-only full list behind the
   five-per-repo widget. All four mutating ones are in `ASSISTANT_MUTATING_TOOLS`.
+- **Memory is retrieved, not always sent in full** (`assistantMemoryIndex.ts`,
+  pure). The markdown file stays the source of truth — hand-edited, possibly in
+  Obsidian — so there is **no separate index to keep in sync**: `searchMemory`
+  scores the file's lines directly with BM25 (lowercased, stopwords dropped,
+  plurals folded, the `- YYYY-MM-DD:` prefix ignored; a query word of 4+ letters
+  also matches longer words by prefix at 0.7 weight; ties go to the newer line).
+  A deliberate departure from SQLite FTS5: hundreds of one-line facts don't need
+  a schema, and this runs under vitest, which the native module can't. A memory
+  under ~6000 characters is sent whole, exactly as before. Above that the system
+  prompt carries a **core** — lines marked `[pinned]` or 📌 first, then the newest,
+  in file order — plus a note that memory is partial; the model reaches the rest
+  with `recall_memory(query, limit)`, which reads the file fresh (so it sees a
+  fact saved this very chat, unlike the frozen prompt). `recall_memory` counts as
+  a trusted tool: it returns what the prompt already shows. The size cap is
+  128 KB (was 16 KB); Tidy refuses files over 20 KB since it must return the whole
+  file in one response.
 - **Memory writes ask first.** `remember` shows an Allow/Deny card for **every**
   save by default (Settings → Assistant → "Ask me before saving anything to
   memory"; unset means on, only an explicit `false` relaxes it). Relaxed, it

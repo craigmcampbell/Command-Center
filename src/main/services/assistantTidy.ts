@@ -24,6 +24,7 @@ const TIDY_SYSTEM = [
 ].join("\n\n");
 
 const TIDY_MAX_TOKENS = 6000;
+const TIDY_MAX_INPUT_BYTES = 20 * 1024;
 // Tidying consolidates; a result noticeably longer than its input means the
 // model embellished, so it is rejected instead of offered.
 const MAX_GROWTH = 1.1;
@@ -55,6 +56,10 @@ export async function proposeMemoryTidy(): Promise<AssistantMemoryTidyResult> {
   const current = readMemoryFile();
   if (current.split("\n").filter((line) => line.trim()).length < 2) {
     return unchanged("There isn't enough in memory to tidy yet");
+  }
+  // The result must fit in one response, and a cut-off file is thrown away.
+  if (bytes(current) > TIDY_MAX_INPUT_BYTES) {
+    return unchanged("Memory is too large to tidy in one pass. Trim it by hand first");
   }
 
   const result = await complete({

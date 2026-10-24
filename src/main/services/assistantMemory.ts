@@ -2,9 +2,10 @@
 // app data folder by default, or at `assistant.memoryPath` (e.g. inside an
 // Obsidian vault, so it can be read and edited there too).
 //
-// The file is read ONCE when a chat starts and baked into that chat's system
-// prompt (see services/assistant.ts), so writes here never change a running
-// conversation — they show up from the next new one.
+// A core of the file (all of it while it is small) is read ONCE when a chat
+// starts and baked into that chat's system prompt (see services/assistant.ts),
+// so writes here never change a running conversation — they show up from the
+// next new one. `recall_memory` reads the file fresh, so it sees them at once.
 
 import { app } from "electron";
 import fs from "node:fs";
@@ -13,7 +14,10 @@ import type { AssistantMemoryResult } from "../../shared/types";
 import { cleanFact } from "./assistantTranscript";
 import { getAssistantSettings } from "./settings";
 
-export const MEMORY_MAX_BYTES = 16 * 1024;
+// Generous because only a core of it is sent each chat (assistantMemoryIndex.ts);
+// the rest is reached by `recall_memory`. Still bounded: Tidy sends the whole
+// file in one request, and a hand-edited file can grow without anyone noticing.
+export const MEMORY_MAX_BYTES = 128 * 1024;
 // `forget` refuses to delete more than this many lines in one call: a vague
 // fragment like "the" would otherwise be a one-shot way to wipe the file.
 export const FORGET_MAX_LINES = 5;
