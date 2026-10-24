@@ -19,6 +19,7 @@
 // missing token reaches the model as a readable error it can relay.
 
 import { ASSISTANT_MUTATING_TOOLS } from "../../shared/assistant";
+import type { AssistantAttachment } from "../../shared/types";
 import { getDockerContainers } from "./docker";
 import { getEventsForDay } from "./googleCalendar";
 import { getGitHubStatus, getOpenPullRequests } from "./github";
@@ -29,6 +30,7 @@ import {
   getFirecrawlSettings,
   getGithubScalarSettings,
   getGoogleCalendarSettings,
+  getOpenAISettings,
   getReaderSettings,
   getTodoistSettings,
   getYnabSettings,
@@ -50,17 +52,31 @@ import type { ChatMessage } from "./assistantTranscript";
 import { memoryLines, searchMemory } from "./assistantMemoryIndex";
 import { readSkillFile } from "./assistantSkills";
 import { parseWebUrl, scrapePage, searchWeb } from "./firecrawlWeb";
+import { prepareAttachments } from "./assistantAttachments";
+import {
+  DEFAULT_QUALITY,
+  generateImage,
+  IMAGE_QUALITIES,
+  IMAGE_SIZES,
+  PROMPT_MAX_CHARS,
+  type ImageQuality,
+  type ImageShape,
+} from "./openaiImages";
 
 export interface ToolOutcome {
   content: string;
   isError: boolean;
   remembered?: string;
+  // Files the tool produced (a generated image). Kept on the tool's message and
+  // shown with the reply; the model is only told they exist.
+  attachments?: AssistantAttachment[];
 }
 
 export interface PreparedTool {
   // Present when the user must confirm before `run` is called.
   approval?: { summary: string };
-  run: () => Promise<ToolOutcome>;
+  // `signal` fires when the user presses Stop, for tools that take a while.
+  run: (signal?: AbortSignal) => Promise<ToolOutcome>;
 }
 
 interface ToolDef {
@@ -251,6 +267,20 @@ export const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "generate_image",
+    description:
+      "Generate an image from a text description with OpenAI's image model. It costs money, so the user is asked to confirm first and sees your exact prompt. Only call it when the user asks for an image; write a complete, specific prompt (subject, style, composition, any text to include). The image is shown to the user under your reply, so don't describe it as if you could see it.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "A full description of the image to create." },
+        shape: { type: "string", enum: ["square", "landscape", "portrait"], description: "Defaults to square." },
+        quality: { type: "string", enum: ["low", "medium", "high"], description: "Defaults to medium. Use high only when asked." },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
     name: "web_search",
     description:
       "Search the web (through Firecrawl) and get back titles, URLs and short snippets. Costs credits, so search once with a good query rather than many times. Use web_scrape on a result to read the page.",
@@ -329,6 +359,9 @@ export const TOOLS = TOOL_DEFS.map((t) => ({ type: "function" as const, function
 // reply (each call spends credits), and their output counts as untrusted.
 export const WEB_TOOLS: ReadonlySet<string> = new Set(["web_search", "web_scrape"]);
 export const MAX_WEB_CALLS_PER_TURN = 6;
+// Image generation is offered only when an OpenAI key is set, and capped per reply.
+export const IMAGE_TOOLS: ReadonlySet<string> = new Set(["generate_image"]);
+export const MAX_IMAGES_PER_TURN = 2;
 
 // Offered only in a chat where a slash command has been used.
 export const SKILL_FILE_TOOL = "read_skill_file";
@@ -344,7 +377,8 @@ export const MUTATING_TOOLS = ASSISTANT_MUTATING_TOOLS;
 // ask before it writes to memory.
 // `recall_memory` reads what the system prompt already shows, so it is as
 // trusted as the prompt itself.
-const TRUSTED_TOOLS = new Set(["docker_status", "recall_memory", "read_skill_file", "remember", "forget"]);
+// `generate_image` returns no text from anyone else.
+const TRUSTED_TOOLS = new Set(["docker_status", "recall_memory", "read_skill_file", "generate_image", "remember", "forget"]);
 
 export function hasUntrustedContext(calledTools: Iterable<string>): boolean {
   for (const name of calledTools) if (!TRUSTED_TOOLS.has(name)) return true;
@@ -367,6 +401,12 @@ const okJson = (value: unknown): ToolOutcome => ({
   isError: false,
 });
 const fail = (reason: string): PreparedTool => ({ run: async () => err(reason) });
+
+// A short file name from a prompt: "a red fox in snow" -> "a-red-fox-in-snow".
+function slugOf(prompt: string): string {
+  const slug = prompt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40).replace(/-$/, "");
+  return slug || "generated-image";
+}
 
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
@@ -859,6 +899,44 @@ export async function prepareTool(
           run: async () => {
             const result = await createTask(getTodoistSettings(), title, projectId);
             return result.ok ? okJson({ created: true }) : err(result.reason ?? "Todoist failed");
+          },
+        };
+      }
+
+      case "generate_image": {
+        const prompt = str(args.prompt)?.trim();
+        if (!prompt) return fail("prompt is required");
+        if (prompt.length > PROMPT_MAX_CHARS) return fail(`prompt must be under ${PROMPT_MAX_CHARS} characters`);
+        const shape = args.shape === undefined ? "square" : str(args.shape);
+        if (!shape || !(shape in IMAGE_SIZES)) return fail("shape must be square, landscape or portrait");
+        const quality = args.quality === undefined ? DEFAULT_QUALITY : str(args.quality);
+        if (!quality || !(IMAGE_QUALITIES as readonly string[]).includes(quality)) {
+          return fail("quality must be low, medium or high");
+        }
+        return {
+          // The card quotes the exact prompt that will be sent, not a paraphrase.
+          approval: {
+            summary: `Generate an image (${shape}, ${quality} quality, costs money): “${oneLine(prompt, 700)}”`,
+          },
+          run: async (signal) => {
+            const result = await generateImage(
+              getOpenAISettings(),
+              { prompt, shape: shape as ImageShape, quality: quality as ImageQuality },
+              signal
+            );
+            if (!result.ok) return err(result.reason);
+            const stored = prepareAttachments([
+              { name: `${slugOf(prompt)}.png`, mime: result.mime, data: result.data },
+            ]);
+            if (!stored.ok) return err(stored.reason);
+            return {
+              content: JSON.stringify({
+                generated: true,
+                note: "The image is shown to the user under your reply. You can't see it, so don't describe it.",
+              }),
+              isError: false,
+              attachments: stored.attachments,
+            };
           },
         };
       }

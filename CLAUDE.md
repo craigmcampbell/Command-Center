@@ -624,6 +624,23 @@ hotkey) — a drift there is silent.
   only, bounded. It is offered to skill turns and to any chat that has used a
   command, never to a plain chat. Skill folders are often symlinks, which the
   scan follows. The skills path is fixed at `~/.agents/skills`.
+- **Image generation** (`openaiImages.ts`; `generate_image`): POSTs to OpenAI's
+  Images API (shape checked against the reference: GPT image models return
+  `data[0].b64_json`, three standard sizes, `low|medium|high` quality). Needs a
+  **regular project key** in Settings → Integrations → OpenAI (`openai.apiKey`) —
+  the existing Admin key can't generate — and the tool is only offered when one
+  is set. Model defaults to `gpt-image-1` (`openai.imageModel`). It spends money,
+  so it is in `ASSISTANT_MUTATING_TOOLS`: always behind a card that quotes the
+  **exact prompt**, shape and quality that will be sent (never the model's
+  paraphrase), refused by Regenerate, absent from a command's default allowlist,
+  and capped at 2 per reply. Quality defaults to `medium` because `auto` may pick
+  the expensive one. The PNG is stored like any attachment (hashed file, same
+  validation) and rides on the **tool message's** `attachments`, so the transcript
+  shows it under the reply and a reopened chat still does; the model is only told
+  that it exists, never given the bytes. `PreparedTool.run` now receives the abort
+  signal, so Stop cancels a generation in flight. The transcript's "Save image…"
+  uses a save dialog (`assistant:attachments:save`) that copies by validated id.
+  Doesn't count as third-party text, so it doesn't force `remember` to ask.
 - **Attachments** (`assistantAttachments.ts`; composer: paste, drop, or the `+`
   button, up to 5 files / 12 MB): PNG, JPEG, GIF and WebP images for vision
   models, and small UTF-8 text files. **Main trusts nothing the renderer says**:

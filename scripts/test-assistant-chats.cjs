@@ -83,6 +83,13 @@ const path = require('node:path');
     assert.equal(api.isAttachmentReferenced('not hex'), false, 'A malformed id matches nothing');
     assert.deepEqual(api.listChats('Hello'), [], 'Attached text is not searchable');
 
+    // A file a tool produced (a generated image) rides on the tool message.
+    const made = image('d'.repeat(64), 'fox.png');
+    api.saveChat('gen', 'Gen', [{ role: 'user', content: 'draw' }, { role: 'assistant', content: null, tool_calls: [{ id: 'g1', type: 'function', function: { name: 'generate_image', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'g1', content: '{"generated":true}', attachments: [made] }, { role: 'assistant', content: 'Here.' }]);
+    assert.deepEqual(api.loadChat('gen').messages[2].attachments, [made], 'Tool-produced files round-trip');
+    assert.deepEqual(api.chatImageIds('gen'), ['d'.repeat(64)], 'They count as the chat\'s images, so deleting the chat can clean them up');
+    api.deleteChat('gen');
+
     // Slash commands: skills from disk and saved prompts, each off until enabled.
     api.initAssistantCommands();
     api.initAssistantCommands();

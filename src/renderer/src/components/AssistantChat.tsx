@@ -42,6 +42,7 @@ const TOOL_LABELS: Record<string, string> = {
   web_search: "Web search",
   web_scrape: "Web page",
   recall_memory: "Memory lookup",
+  generate_image: "Image",
   remember: "Memory",
   forget: "Memory",
 };
@@ -69,6 +70,7 @@ const TOOL_ACTIVITY: Record<string, { doing: string; done: string }> = {
   web_search: { doing: "Searching the web", done: "Searched the web" },
   web_scrape: { doing: "Reading a web page", done: "Read a web page" },
   recall_memory: { doing: "Searching your memory", done: "Searched your memory" },
+  generate_image: { doing: "Generating an image", done: "Generated an image" },
   remember: { doing: "Saving to memory", done: "Saved to memory" },
   forget: { doing: "Editing memory", done: "Edited memory" },
 };
@@ -448,6 +450,13 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
           {item.text}
         </div>
       )}
+      {item.role === "assistant" && item.attachments?.length ? (
+        <div className="assistant-generated">
+          {item.attachments.map((a) => (
+            <GeneratedImage key={a.id} attachment={a} />
+          ))}
+        </div>
+      ) : null}
       {pending && <LiveTools tools={liveTools} />}
       <ApprovalCards approvals={approvals} onApprove={onApprove} />
       {item.needsSetup && (
@@ -638,6 +647,26 @@ function SentAttachment({ attachment }: { attachment: NonNullable<ChatItem["atta
       <span className="assistant-file-icon">IMG</span>
       <span className="assistant-attachment-name">{url === null ? `${attachment.name} (removed)` : attachment.name}</span>
     </span>
+  );
+}
+
+// An image the assistant made, with a way to keep it.
+function GeneratedImage({ attachment }: { attachment: NonNullable<ChatItem["attachments"]>[number] }) {
+  const [note, setNote] = useState<string | null>(null);
+  async function save() {
+    const result = await window.api.assistant.saveAttachment(attachment.id, attachment.name);
+    setNote(result.ok ? "Saved" : result.cancelled ? null : (result.reason ?? "Couldn't save"));
+  }
+  return (
+    <figure className="assistant-generated-image">
+      <SentAttachment attachment={attachment} />
+      <figcaption>
+        <button type="button" className="assistant-link" onClick={() => void save()}>
+          Save image…
+        </button>
+        {note && <span className="muted"> {note}</span>}
+      </figcaption>
+    </figure>
   );
 }
 

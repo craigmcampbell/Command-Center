@@ -191,6 +191,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           toolCalls: reply.toolCalls,
           remembered: reply.remembered,
           stopped: reply.stopped,
+          ...(reply.attachments?.length ? { attachments: reply.attachments } : {}),
         }
       : {
           id,

@@ -64,7 +64,8 @@ function toRow(m: ChatMessage): MessageRow {
     summary: m.role === "system" && m.summary ? 1 : 0,
     command: m.role === "user" && m.command ? m.command : null,
     injected: m.role === "user" && m.injected ? m.injected : null,
-    attachments: m.role === "user" && m.attachments?.length ? JSON.stringify(m.attachments) : null,
+    attachments:
+      (m.role === "user" || m.role === "tool") && m.attachments?.length ? JSON.stringify(m.attachments) : null,
   };
 }
 
@@ -80,7 +81,13 @@ function fromRow(row: MessageRow): ChatMessage {
   const archived = row.archived === 1 ? { archived: true as const } : {};
   switch (row.role) {
     case "tool":
-      return { role: "tool", tool_call_id: row.tool_call_id ?? "", content: row.content ?? "", ...archived };
+      return {
+        role: "tool",
+        tool_call_id: row.tool_call_id ?? "",
+        content: row.content ?? "",
+        ...(row.attachments ? { attachments: parseAttachments(row.attachments) } : {}),
+        ...archived,
+      };
     case "assistant": {
       const calls: ToolCall[] | null = row.tool_calls ? JSON.parse(row.tool_calls) : null;
       if (calls !== null && !Array.isArray(calls)) throw new Error("tool_calls is not a list");

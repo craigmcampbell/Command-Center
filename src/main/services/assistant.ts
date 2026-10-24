@@ -75,6 +75,8 @@ import {
   collectKnownUrls,
   customSystemPrompt,
   hasUntrustedContext,
+  IMAGE_TOOLS,
+  MAX_IMAGES_PER_TURN,
   MAX_WEB_CALLS_PER_TURN,
   MUTATING_TOOLS,
   prepareTool,
@@ -94,7 +96,7 @@ import {
   toTranscript,
   type ChatMessage,
 } from "./assistantTranscript";
-import { getAssistantSettings, getFirecrawlSettings } from "./settings";
+import { getAssistantSettings, getFirecrawlSettings, getOpenAISettings } from "./settings";
 
 // Re-exported so callers (IPC, tests) have one place to import the memory API.
 export { getAssistantMemory, saveAssistantMemory } from "./assistantMemory";
@@ -466,9 +468,11 @@ export function defaultCommandTools(): string[] {
 function offeredToolNames(
   restricted: { tools: string[] | null; kind: "skill" | "prompt" } | null,
   chatUsesCommands: boolean,
-  webEnabled: boolean
+  webEnabled: boolean,
+  imagesEnabled: boolean
 ): Set<string> {
   const known = new Set(TOOL_DEFS.map((t) => t.name));
+  if (!imagesEnabled) for (const name of IMAGE_TOOLS) known.delete(name);
   // The web tools can't work without a Firecrawl key, so they aren't offered.
   if (!webEnabled) for (const name of WEB_TOOLS) known.delete(name);
   if (!restricted) {
@@ -657,6 +661,9 @@ async function runTurn({
       usage,
       ...(stopped ? { stopped: true } : {}),
       ...(compacted ? { compacted: true } : {}),
+      ...(generated.length
+        ? { attachments: generated.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })) }
+        : {}),
     };
   };
 
@@ -692,9 +699,12 @@ async function runTurn({
   const offered = offeredToolNames(
     restricted,
     convo.messages.some((m) => m.role === "user" && m.command),
-    Boolean(getFirecrawlSettings().apiKey?.trim())
+    Boolean(getFirecrawlSettings().apiKey?.trim()),
+    Boolean(getOpenAISettings().apiKey?.trim())
   );
   let webCalls = 0;
+  let imageCalls = 0;
+  const generated: AssistantAttachment[] = [];
   const tools = TOOLS.filter((t) => offered.has(t.function.name));
 
   try {
@@ -740,7 +750,17 @@ async function runTurn({
               // Counted as each call starts (before any await), so calls made
               // together in one step share the budget in order.
               const overWebBudget = WEB_TOOLS.has(name) && ++webCalls > MAX_WEB_CALLS_PER_TURN;
-              tool = overWebBudget
+              const overImageBudget = IMAGE_TOOLS.has(name) && ++imageCalls > MAX_IMAGES_PER_TURN;
+              tool = overImageBudget
+                ? {
+                    run: async () => ({
+                      content: JSON.stringify({
+                        error: `Image generation is limited to ${MAX_IMAGES_PER_TURN} per reply. Ask the user before making more.`,
+                      }),
+                      isError: true,
+                    }),
+                  }
+                : overWebBudget
                 ? {
                     run: async () => ({
                       content: JSON.stringify({
@@ -784,7 +804,7 @@ async function runTurn({
                 ? (await verdicts)[needing.findIndex((p) => p.call.id === call.id)] === true
                 : true;
               outcome = allowed
-                ? await tool.run()
+                ? await tool.run(signal)
                 : { content: JSON.stringify({ error: DECLINED_MESSAGE }), isError: true };
             } catch {
               outcome = {
@@ -806,6 +826,7 @@ async function runTurn({
         // happened to finish), which is also how a reopened chat lists them.
         for (const { outcome, described } of outcomes) {
           toolCalls.push(described);
+          if (outcome.attachments) generated.push(...outcome.attachments);
           if (outcome.remembered) remembered.push(outcome.remembered);
         }
 
@@ -819,6 +840,7 @@ async function runTurn({
               role: "tool",
               tool_call_id: call.id,
               content: outcome.content,
+              ...(outcome.attachments?.length ? { attachments: outcome.attachments } : {}),
             })
           )
         );

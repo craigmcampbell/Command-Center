@@ -233,6 +233,7 @@ const api: CommandCenterApi = {
       attachments?: AssistantAttachmentInput[]
     ) => ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command, attachments),
     readAttachment: (id: string) => ipcRenderer.invoke("assistant:attachments:read", id),
+    saveAttachment: (id: string, name: string) => ipcRenderer.invoke("assistant:attachments:save", id, name),
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),

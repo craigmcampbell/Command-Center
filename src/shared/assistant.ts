@@ -12,6 +12,8 @@ export const ASSISTANT_MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "categorize_transaction",
   "reader_save_link",
   "reader_move_to_inbox",
+  // Spends money, and repeating it would spend more.
+  "generate_image",
   "forget",
 ]);
 

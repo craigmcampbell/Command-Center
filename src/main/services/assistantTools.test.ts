@@ -81,6 +81,7 @@ describe("tool catalogue", () => {
         "complete_task",
         "create_task",
         "forget",
+        "generate_image",
         "reader_move_to_inbox",
         "reader_save_link",
         "reschedule_task",

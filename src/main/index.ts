@@ -132,7 +132,7 @@ import {
   stopAssistant,
   type AskHooks,
 } from "./services/assistant";
-import { readImageDataUrl } from "./services/assistantAttachments";
+import { attachmentPath, cleanName, readImageDataUrl } from "./services/assistantAttachments";
 import { initAssistantChats } from "./services/assistantChats";
 import {
   getCommandSettings,
@@ -743,6 +743,23 @@ ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
 ipcMain.handle("assistant:attachments:read", (_evt, id: unknown) =>
   typeof id === "string" ? readImageDataUrl(id) : null
 );
+ipcMain.handle("assistant:attachments:save", async (evt, id: unknown, name: unknown) => {
+  const source = typeof id === "string" ? attachmentPath(id) : null;
+  if (!source) return { ok: false, reason: "That image is no longer available" };
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  const options = {
+    defaultPath: cleanName(name),
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+  };
+  const picked = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+  if (picked.canceled || !picked.filePath) return { ok: false, cancelled: true };
+  try {
+    fs.copyFileSync(source, picked.filePath);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't save the image there" };
+  }
+});
 // Slash commands. Plain handlers: the config reads the skills folder fresh each time.
 ipcMain.handle("assistant:commands:list", () => listEnabledCommands());
 ipcMain.handle("assistant:commands:config", async (): Promise<AssistantCommandConfig> => {

@@ -88,6 +88,11 @@ export interface OpenRouterScalarConfig {
 export interface OpenAIScalarConfig {
   adminApiKey?: string;
   refreshSeconds?: number;
+  // A regular project key, used only by the Assistant's image generation (an
+  // Admin key can't generate images).
+  apiKey?: string;
+  // Defaults to gpt-image-1.
+  imageModel?: string;
 }
 
 // A Firecrawl API key from their dashboard. Powers the AI tab's Firecrawl
@@ -232,6 +237,8 @@ export interface AssistantReply {
   toolCalls: AssistantToolCall[];
   // Facts the model saved to memory during this reply.
   remembered: string[];
+  // Images the assistant generated during this reply.
+  attachments?: AssistantAttachmentInfo[];
   // Older messages were summarized before this reply, so the on-screen
   // transcript (which has a divider where they were) should be reloaded.
   compacted?: boolean;
@@ -2054,6 +2061,8 @@ export interface CommandCenterApi {
     // An image attachment as a data URL, for showing it in the transcript.
     // null when the file is gone.
     readAttachment: (id: string) => Promise<string | null>;
+    // Opens a save dialog and copies an image attachment to where the user picks.
+    saveAttachment: (id: string, name: string) => Promise<{ ok: boolean; cancelled?: boolean; reason?: string }>;
     commands: {
       // Enabled commands, for the composer's "/" picker.
       list: () => Promise<AssistantCommandInfo[]>;

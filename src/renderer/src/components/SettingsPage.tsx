@@ -1184,14 +1184,20 @@ function OpenAICard({
   onSaved: (v: OpenAIScalarConfig) => void;
 }) {
   const [adminApiKey, setAdminApiKey] = useState(value.adminApiKey ?? "");
+  const [apiKey, setApiKey] = useState(value.apiKey ?? "");
+  const [imageModel, setImageModel] = useState(value.imageModel ?? "");
   const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setAdminApiKey(value.adminApiKey ?? "");
+    setApiKey(value.apiKey ?? "");
+    setImageModel(value.imageModel ?? "");
     setRefreshSeconds(String(value.refreshSeconds ?? 900));
-  }, [value.adminApiKey, value.refreshSeconds]);
+  }, [value.adminApiKey, value.apiKey, value.imageModel, value.refreshSeconds]);
   const dirty =
     adminApiKey !== (value.adminApiKey ?? "") ||
+    apiKey !== (value.apiKey ?? "") ||
+    imageModel !== (value.imageModel ?? "") ||
     refreshSeconds !== String(value.refreshSeconds ?? 900);
 
   async function handleSave(e: FormEvent) {
@@ -1199,6 +1205,8 @@ function OpenAICard({
     setSaving(true);
     const result = await window.api.settings.openai.update({
       adminApiKey: adminApiKey || undefined,
+      apiKey: apiKey || undefined,
+      imageModel: imageModel.trim() || undefined,
       refreshSeconds: Number(refreshSeconds) || 900,
     });
     setSaving(false);
@@ -1230,6 +1238,26 @@ function OpenAICard({
           min={1}
           value={refreshSeconds}
           onChange={(e) => setRefreshSeconds(e.target.value)}
+        />
+      </div>
+      <p className="settings-card-hint">
+        The Assistant can generate images when you add a regular <strong>API key</strong> (a
+        project key from OpenAI's dashboard; an Admin key can't generate). Each image costs money,
+        so the Assistant always shows you its exact prompt and asks first, and makes at most two
+        per reply. Leave the model blank for gpt-image-1.
+      </p>
+      <div className="settings-field-row">
+        <label>API key (images)</label>
+        <SecretField value={apiKey} onChange={setApiKey} placeholder="sk-…" />
+      </div>
+      <div className="settings-field-row">
+        <label>Image model</label>
+        <input
+          className="settings-input"
+          value={imageModel}
+          onChange={(e) => setImageModel(e.target.value)}
+          placeholder="gpt-image-1"
+          spellCheck={false}
         />
       </div>
       <div className="settings-card-footer">

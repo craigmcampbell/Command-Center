@@ -45,7 +45,9 @@ export type ChatMessage =
       attachments?: AssistantAttachment[];
     }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean }
-  | { role: "tool"; tool_call_id: string; content: string; archived?: boolean };
+  // `attachments` on a tool message are files the tool produced (a generated
+  // image): shown with the reply, never sent back to the model.
+  | { role: "tool"; tool_call_id: string; content: string; archived?: boolean; attachments?: AssistantAttachment[] };
 
 const MAX_FACT_CHARS = 500;
 const MAX_ARGS_CHARS = 160;
@@ -154,8 +156,11 @@ function factFromArguments(raw: string): string | null {
 // never appear — they are plumbing.
 export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[] {
   const toolResults = new Map<string, string>();
+  const toolFiles = new Map<string, AssistantAttachment[]>();
   for (const m of messages) {
-    if (m.role === "tool") toolResults.set(m.tool_call_id, m.content);
+    if (m.role !== "tool") continue;
+    toolResults.set(m.tool_call_id, m.content);
+    if (m.attachments?.length) toolFiles.set(m.tool_call_id, m.attachments);
   }
 
   const items: AssistantTranscriptItem[] = [];
@@ -195,6 +200,13 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
     for (const call of m.tool_calls ?? []) {
       const described = describeToolCall(call, toolResults.get(call.id));
       current.toolCalls.push(described);
+      const produced = toolFiles.get(call.id);
+      if (produced) {
+        current.attachments = [
+          ...(current.attachments ?? []),
+          ...produced.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })),
+        ];
+      }
       if (described.ok && call.function.name === "remember") {
         const fact = factFromArguments(call.function.arguments);
         if (fact) current.remembered.push(fact);

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const settings = vi.hoisted(() => ({
   firecrawl: {} as { apiKey?: string },
+  openai: {} as { apiKey?: string; imageModel?: string },
   assistant: {} as {
     apiKey?: string;
     model?: string;
@@ -97,6 +98,7 @@ vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
 vi.mock("./settings", () => ({
   getAssistantSettings: () => settings.assistant,
   getFirecrawlSettings: () => settings.firecrawl,
+  getOpenAISettings: () => settings.openai,
   getTodoistSettings: () => ({ apiToken: "t" }),
   getGoogleCalendarSettings: () => ({}),
   getGithubScalarSettings: () => ({}),
@@ -143,6 +145,10 @@ vi.mock("./assistantCommands", () => ({
 vi.mock("./assistantSkills", () => ({
   readSkillFile: vi.fn(async () => ({ ok: true, content: "REFERENCE TEXT", truncated: false })),
 }));
+vi.mock("./openaiImages", async (importActual) => ({
+  ...(await importActual<typeof import("./openaiImages")>()),
+  generateImage: vi.fn(),
+}));
 vi.mock("./firecrawlWeb", async (importActual) => ({
   ...(await importActual<typeof import("./firecrawlWeb")>()),
   searchWeb: vi.fn(),
@@ -168,6 +174,7 @@ vi.mock("./readerFeed", () => ({
 
 import { completeTask, createTask } from "./todoist";
 import { scrapePage, searchWeb } from "./firecrawlWeb";
+import { generateImage } from "./openaiImages";
 import {
   answerApproval,
   askAssistant,
@@ -2075,5 +2082,161 @@ describe("attachments", () => {
     expect(reply.compacted).toBe(true);
     expect(sent).toHaveLength(2);
     expect(seed.length).toBeGreaterThan(0);
+  });
+});
+
+describe("image generation", () => {
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6]);
+  const attachDir = path.join(os.tmpdir(), "assistant-attachments");
+  const draw = (id: string, prompt = "a red fox in snow", extra: object = {}) =>
+    callTools({ id, name: "generate_image", args: { prompt, ...extra } });
+  const names = (sent: Sent) => sent.body.tools.map((t) => t.function.name);
+
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    settings.firecrawl = {};
+    settings.openai = { apiKey: "sk-openai" };
+    store.chats.clear();
+    store.failSave = false;
+    cmds.table.clear();
+    vi.mocked(generateImage).mockReset().mockResolvedValue({ ok: true, data: PNG, mime: "image/png" });
+  });
+  afterEach(() => {
+    settings.openai = {};
+    vi.unstubAllGlobals();
+    fs.rmSync(attachDir, { recursive: true, force: true });
+  });
+
+  it("is offered only when an OpenAI key is set", async () => {
+    let sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "hi", hooks(), "r1");
+    expect(names(sent[0])).toContain("generate_image");
+    settings.openai = { adminApiKey: "sk-admin" };
+    sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "hi", hooks(), "r2");
+    expect(names(sent[0])).not.toContain("generate_image");
+  });
+
+  it("asks first, quoting the exact prompt and settings, and makes nothing until allowed", async () => {
+    scriptFetch(draw("c1", "a red fox in snow", { shape: "landscape", quality: "high" }), stop("Here it is."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw a fox", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({
+      tool: "generate_image",
+      summary: "Generate an image (landscape, high quality, costs money): “a red fox in snow”",
+    });
+    expect(generateImage).not.toHaveBeenCalled();
+    answerApproval(approvals[0].approvalId, true);
+    await pending;
+    expect(generateImage).toHaveBeenCalledWith(
+      { apiKey: "sk-openai" },
+      { prompt: "a red fox in snow", shape: "landscape", quality: "high" },
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("saves the image, shows it with the reply, and tells the model only that it exists", async () => {
+    const sent = scriptFetch(draw("c1"), stop("Here it is."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw a fox", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+
+    expect(reply.attachments).toEqual([
+      expect.objectContaining({ name: "a-red-fox-in-snow.png", mime: "image/png", kind: "image", size: PNG.length }),
+    ]);
+    const toolResult = JSON.parse(sent[1].body.messages.at(-1).content);
+    expect(toolResult.generated).toBe(true);
+    expect(JSON.stringify(sent[1].body.messages)).not.toContain("base64");
+    // It is on the stored tool message, so a reopened chat shows it.
+    const stored = store.chats.get(reply.conversationId)!.messages;
+    expect(stored.find((m: any) => m.role === "tool").attachments).toHaveLength(1);
+    expect(openAssistantChat(reply.conversationId).items[1].attachments).toEqual(reply.attachments);
+    expect(fs.readdirSync(attachDir)).toHaveLength(1);
+  });
+
+  it("does nothing when declined, and reports failures to the model", async () => {
+    scriptFetch(draw("c1"), stop("Okay."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, false);
+    const declined = await pending;
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(declined.toolCalls[0]).toMatchObject({ ok: false, declined: true });
+    expect(declined.attachments).toBeUndefined();
+
+    vi.mocked(generateImage).mockResolvedValue({ ok: false, reason: "OpenAI API key rejected" });
+    scriptFetch(draw("c2"), stop("Sorry."));
+    const again: any[] = [];
+    const second = askAssistant(null, "draw", hooks({ onApproval: (a) => again.push(a) }));
+    await vi.waitFor(() => expect(again).toHaveLength(1));
+    answerApproval(again[0].approvalId, true);
+    const failed = await second;
+    expect(failed.toolCalls[0]).toMatchObject({ ok: false, result: "OpenAI API key rejected" });
+    expect(failed.attachments).toBeUndefined();
+  });
+
+  it("rejects bad arguments before asking", async () => {
+    for (const args of [{ prompt: "" }, { prompt: "x", shape: "wide" }, { prompt: "x", quality: "ultra" }]) {
+      scriptFetch(callTools({ id: "c1", name: "generate_image", args }), stop("No."));
+      const approvals: any[] = [];
+      const reply = await askAssistant(null, "draw", hooks({ onApproval: (a) => approvals.push(a) }));
+      expect(approvals).toEqual([]);
+      expect(reply.toolCalls[0]).toMatchObject({ ok: false });
+    }
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("allows at most two per reply", async () => {
+    const sent = scriptFetch(callTools(
+      { id: "c1", name: "generate_image", args: { prompt: "one" } },
+      { id: "c2", name: "generate_image", args: { prompt: "two" } },
+      { id: "c3", name: "generate_image", args: { prompt: "three" } }
+    ), stop("Done."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "three images", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].items).toHaveLength(2);
+    answerApproval(approvals[0].approvalId, true);
+    await pending;
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(sent[1].body.messages.at(-1).content).error).toMatch(/limited to 2 per reply/);
+  });
+
+  it("is a change, so regenerate is refused and a command isn't given it by default", async () => {
+    scriptFetch(draw("c1"), stop("Here."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+    expect(await regenerateAssistant(reply.conversationId)).toMatchObject({ ok: false });
+
+    cmds.table.set("polish", { kind: "skill", enabled: true, tools: null, injected: "P" });
+    const sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r9", "polish");
+    expect(names(sent[0])).not.toContain("generate_image");
+  });
+
+  it("does not make later memory writes ask, since an image carries no third-party text", async () => {
+    scriptFetch(draw("c1"), callTools({ id: "c2", name: "remember", args: { fact: "Likes foxes" } }), stop("Done."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "draw and remember", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+    expect(approvals).toHaveLength(1);
+    expect(reply.remembered).toEqual(["Likes foxes"]);
   });
 });

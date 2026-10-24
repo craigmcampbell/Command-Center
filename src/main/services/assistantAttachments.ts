@@ -146,6 +146,14 @@ export function readImageDataUrl(id: string, dir: string = attachmentsDir()): st
   }
 }
 
+// Where an image lives on disk, for copying out; null for anything that isn't a
+// well-formed id of a file that exists.
+export function attachmentPath(id: string, dir: string = attachmentsDir()): string | null {
+  if (!ATTACHMENT_ID.test(id)) return null;
+  const file = path.join(dir, id);
+  return fs.existsSync(file) ? file : null;
+}
+
 // Removes image files. The caller says which are no longer referenced anywhere.
 export function deleteAttachmentFiles(ids: string[], dir: string = attachmentsDir()): void {
   for (const id of ids) {
