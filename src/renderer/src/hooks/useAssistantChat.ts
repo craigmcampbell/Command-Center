@@ -7,6 +7,7 @@ import type {
   AssistantToolCall,
   AssistantUsage,
 } from "../../../shared/types";
+import { sumUsage } from "../../../shared/assistantUsage";
 
 // All the state and actions of one Assistant conversation, shared by the
 // dashboard tab and the quick panel so they behave identically.
@@ -63,15 +64,6 @@ export interface UseAssistantChatOptions {
 }
 
 const NO_USAGE: AssistantUsage = { promptTokens: 0, completionTokens: 0, costUsd: null };
-
-function addUsage(total: AssistantUsage, step: AssistantUsage | undefined): AssistantUsage {
-  if (!step) return total;
-  return {
-    promptTokens: total.promptTokens + step.promptTokens,
-    completionTokens: total.completionTokens + step.completionTokens,
-    costUsd: step.costUsd === null ? total.costUsd : (total.costUsd ?? 0) + step.costUsd,
-  };
-}
 
 export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -228,7 +220,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     (reply: AssistantReply) => {
       if (reply.conversationId) setConversation(reply.conversationId);
       if (reply.ok) {
-        setUsage((u) => addUsage(u, reply.usage));
+        setUsage((u) => sumUsage(u, reply.usage));
         onSavedRef.current?.();
       }
       end();

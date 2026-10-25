@@ -44,7 +44,9 @@ import type {
   AssistantToolEvent,
   AssistantUsage,
 } from "../../shared/types";
+import { sumUsage } from "../../shared/assistantUsage";
 import { deleteAttachmentFiles, prepareAttachments, readImageDataUrl } from "./assistantAttachments";
+import { withCacheBreakpoints } from "./assistantCache";
 import { complete, type CompleteParams, type CompletionResult } from "./assistantClient";
 import {
   applyCompaction,
@@ -674,10 +676,7 @@ interface TurnRequest {
 }
 
 function addUsage(total: AssistantUsage, step: AssistantUsage | undefined): void {
-  if (!step) return;
-  total.promptTokens += step.promptTokens;
-  total.completionTokens += step.completionTokens;
-  if (step.costUsd !== null) total.costUsd = (total.costUsd ?? 0) + step.costUsd;
+  Object.assign(total, sumUsage(total, step));
 }
 
 function calledToolNames(messages: ChatMessage[]): string[] {
@@ -959,7 +958,11 @@ async function runTurn({
         apiKey,
         model,
         fallbackModels,
-        messages: toWire(convo.messages, readImageDataUrl),
+        messages: withCacheBreakpoints(
+          toWire(convo.messages, readImageDataUrl),
+          model,
+          settings.promptCache !== false
+        ),
         tools,
         onText: emit,
         signal,

@@ -144,6 +144,9 @@ export interface AssistantScalarConfig {
   // titles, summaries) has reached it.
   maxCostPerReplyUsd?: number;
   maxCostPerDayUsd?: number;
+  // Add prompt-cache breakpoints for models whose provider needs them
+  // (Anthropic). Unset means on; only an explicit false turns it off.
+  promptCache?: boolean;
 }
 
 // Today's assistant spend, for the daily cap. `unpriced` counts requests whose
@@ -371,6 +374,11 @@ export interface AssistantUsage {
   promptTokens: number;
   completionTokens: number;
   costUsd: number | null;
+  // Prompt tokens read from / written to the provider's prompt cache. Both are
+  // already counted in promptTokens. Absent (not 0) when the provider never
+  // reported them, so "nothing was cached" and "unknown" stay distinguishable.
+  cachedTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 // One turn of a stored chat, rebuilt for display. An assistant item is the

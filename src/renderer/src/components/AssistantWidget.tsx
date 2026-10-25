@@ -380,7 +380,7 @@ export default function AssistantWidget({
       headerRight={
         <div className="assistant-header-actions">
           {usageText && (
-            <span className="muted assistant-usage" title="Tokens and cost for this chat">
+            <span className="muted assistant-usage" title="Tokens and API-equivalent cost for this chat; cached = share of input tokens read from the provider's prompt cache">
               {usageText}
             </span>
           )}

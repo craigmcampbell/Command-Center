@@ -493,7 +493,7 @@ standing instructions, memory-file path and the hotkey are Settings → Assistan
 `assistant.ts` the loop and conversation state · `assistantClient.ts` one
 streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
 the approval rules · `assistantLinks.ts` the outbound-link check · `assistantMemory.ts` the memory file · `assistantChats.ts`
-SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTranscript.ts` pure helpers (message types, titles,
+SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantCache.ts` prompt-cache breakpoints · `assistantTranscript.ts` pure helpers (message types, titles,
 `toTranscript`) · `assistantWindow.ts` the quick panel · `assistantSpend.ts`
 the per-day spend ledger · `assistantModels.ts` the Settings model check. Renderer:
 `hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
@@ -551,7 +551,7 @@ hotkey) — a drift there is silent.
   function deciding what the model is sent: it drops archived rows, appends the
   latest summary to the system prompt (still one system message), strips the
   bookkeeping flags, and trims tool output over 2000 chars from turns older than
-  the recent window. The cut is always on a user message, so a `tool_calls`
+  the recent window (which moves in steps; see Prompt caching). The cut is always on a user message, so a `tool_calls`
   message never loses its results. The transcript and search keep seeing the
   full history, with a divider where the summary sits (`role: "summary"`;
   summary text is not searchable). A failed summary never fails the turn — it
@@ -565,6 +565,41 @@ hotkey) — a drift there is silent.
   compacts. The tab's **Compact** button does it on demand
   (`assistant:chats:compact`); a reply that compacted carries `compacted: true`
   so the renderer reloads its transcript.
+- **Prompt caching** (`assistantCache.ts`, pure; findings and doc URLs in its
+  header). Every request re-sends the whole live history, so a long chat is
+  cheap only if its start is read from the provider's cache. OpenAI, DeepSeek
+  and Gemini 2.5+ cache by themselves; **only `anthropic/` (and `~anthropic/`)
+  slugs get `cache_control` breakpoints**, in content-part form, on the system
+  message and the last two user messages (3 of Anthropic's 4). Every other model
+  gets the exact request it got before, and Settings → Assistant → "Use prompt
+  caching on Anthropic models" (unset = on) turns the markers off. Gemini is left
+  to implicit caching on purpose (explicit bills storage), and Qwen because its
+  slugs are served by providers that don't take the marker.
+  **The prefix must stay byte-identical between requests** — a change anywhere
+  re-prices everything after it — so, in `toWire` and around it:
+  - no clock, randomness or settings read inside `toWire`; the system prompt
+    stays frozen per running chat (it is rebuilt only on load);
+  - the tool list is `TOOLS` filtered in its fixed order — never sort by usage
+    or build it from a `Set`/`Map` whose order can change. The *set* of tools
+    can still change between turns (a command's allowlist, `read_skill_file`
+    once a command is used, a Firecrawl/OpenAI key added), and each change
+    costs one uncached request;
+  - old-tool-output trimming and old-image dropping **move in steps of
+    `STABLE_STEP_TURNS` (4) user turns, both on the same turn** (`wireCutoffs`),
+    not one turn at a time. Sliding them rewrote an already-sent message every
+    turn. The cost, accepted: up to 7 turns of untrimmed tool output and 5 of
+    images go to providers that don't cache;
+  - compaction rewrites the system prompt (the summary lives there), so it
+    resets the cache. It is rare, so that is fine; don't move the summary
+    elsewhere to "save" it without re-checking the breakpoints.
+  Markers move every turn, which is fine: they aren't part of the cached
+  content. Usage is parsed from `prompt_tokens_details.cached_tokens` /
+  `cache_write_tokens` (both inside `prompt_tokens`) into `cachedTokens` /
+  `cacheWriteTokens`, summed by `shared/assistantUsage.ts` in main and the
+  renderer alike, and kept per chat in nullable `cached_tokens` /
+  `cache_write_tokens` columns (NULL = never reported, like `cost_usd`). The tab
+  header shows "cached x%" (cached ÷ prompt tokens) only when a provider has
+  reported a figure.
 - **A turn is atomic.** History is only ever left in a state a provider accepts:
   an assistant message with `tool_calls` and **all** its `tool` results are
   pushed together after the tools finish; a failed turn restores a snapshot; a
@@ -684,8 +719,9 @@ hotkey) — a drift there is silent.
   typed; `attachments` is a JSON column on `assistant_messages`. On the wire
   `content` is a plain string unless the message has images (then OpenAI-style
   parts), so a chat without images is unchanged byte for byte. **Images are only
-  re-sent for the last 2 user turns**; older ones become a one-line note, because
-  they are the heaviest thing in a chat. Each counts ~1000 tokens toward the
+  re-sent for the last 2–5 user turns** (2 kept, the cut moving in steps; see
+  Prompt caching); older ones become a one-line note, because they are the
+  heaviest thing in a chat. Each counts ~1000 tokens toward the
   compaction estimate. Regenerate keeps a turn's files. Files are stored only
   after every cheap refusal (too long, unknown command), and a rolled-back turn
   deletes the images it brought. Deleting a chat, or rolling a turn back, removes

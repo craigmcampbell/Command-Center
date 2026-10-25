@@ -48,19 +48,35 @@ function elide(content: string): string {
   return `${content.slice(0, ELIDE_KEEP_CHARS)}… [older tool output trimmed: ${content.length} characters]`;
 }
 
-// Index (in `body`) of the first message of the oldest turn that is kept whole.
-function recentBoundary(body: ChatMessage[]): number {
-  const users: number[] = [];
-  body.forEach((m, i) => {
-    if (m.role === "user") users.push(i);
-  });
-  return users.length > KEEP_RECENT_TURNS ? users[users.length - KEEP_RECENT_TURNS] : 0;
-}
-
 // Images are only re-sent for the most recent turns: they are the heaviest thing
 // in a chat, and a picture from many turns ago has long since been described in
 // the replies. Older ones become a one-line note.
 export const KEEP_IMAGE_TURNS = 2;
+
+// The two cut-offs above (old tool output trimmed, old images dropped) rewrite a
+// message that was already sent, which ends the cached prefix there: everything
+// after it is re-read at the full rate (see assistantCache.ts). So they don't
+// slide one turn at a time. They move in steps of this many user turns, and
+// both on the same turn, so the prefix stays byte-identical from one turn to the
+// next and only changes once per step. The cost, accepted: up to
+// KEEP_RECENT_TURNS + STABLE_STEP_TURNS - 1 turns of untrimmed tool output, and
+// up to KEEP_IMAGE_TURNS + STABLE_STEP_TURNS - 1 turns of images, are sent to
+// providers that don't cache at all.
+export const STABLE_STEP_TURNS = 4;
+
+// How many leading user turns get trimmed tool output and lose their images,
+// for a chat with `users` live user turns.
+export function wireCutoffs(users: number): { elideTurns: number; imageTurns: number } {
+  const dropped = Math.max(0, users - KEEP_RECENT_TURNS);
+  const elideTurns = dropped - (dropped % STABLE_STEP_TURNS);
+  // Images keep their own, shorter window, but jump with the elision cut so a
+  // step only ever breaks the prefix once. Never fewer than KEEP_IMAGE_TURNS.
+  const imageTurns = Math.min(
+    Math.max(0, users - KEEP_IMAGE_TURNS),
+    elideTurns + KEEP_RECENT_TURNS - KEEP_IMAGE_TURNS
+  );
+  return { elideTurns, imageTurns };
+}
 // A flat estimate per image; providers bill by size, and ours are capped.
 const IMAGE_TOKEN_ESTIMATE = 1000;
 const ATTACHED_TEXT_MAX_CHARS = 60_000;
@@ -112,13 +128,21 @@ const NO_IMAGES: ImageResolver = () => null;
 // What the model is actually sent for a stored history. Archived messages are
 // dropped, the latest summary is appended to the system prompt, bookkeeping
 // flags are stripped, and bulky tool output from old turns is trimmed.
+//
+// A running chat's output must be a byte-identical prefix of its next turn's
+// (prompt caching depends on it), except at a STABLE_STEP_TURNS step or a
+// compaction. So nothing here may depend on the clock, on randomness, or on
+// anything outside `messages` besides the image bytes.
 export function toWire(messages: ChatMessage[], resolveImage: ImageResolver = NO_IMAGES): WireMessage[] {
   const live = messages.filter((m) => !m.archived);
   const summary = [...live].reverse().find(isSummary);
   const body = live.filter((m) => !isSummary(m));
-  const boundary = recentBoundary(body);
   const userIndexes = body.flatMap((m, i) => (m.role === "user" ? [i] : []));
-  const imageBoundary = userIndexes.length > KEEP_IMAGE_TURNS ? userIndexes[userIndexes.length - KEEP_IMAGE_TURNS] : 0;
+  const { elideTurns, imageTurns } = wireCutoffs(userIndexes.length);
+  // Index (in `body`) of the first message of the first turn kept whole.
+  const startOf = (turns: number): number => (turns > 0 ? userIndexes[turns] : 0);
+  const boundary = startOf(elideTurns);
+  const imageBoundary = startOf(imageTurns);
 
   return body.map((m, i): WireMessage => {
     switch (m.role) {

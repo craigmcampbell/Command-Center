@@ -19,11 +19,12 @@ export interface ToolCall {
 // strips them.
 // What goes over the wire: like ChatMessage, but a user message holding images
 // carries its content as parts (the OpenAI shape OpenRouter accepts).
+// `cache_control` marks a prompt-cache breakpoint; only assistantCache.ts sets it.
 export type ContentPart =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral" } }
   | { type: "image_url"; image_url: { url: string } };
 export type WireMessage =
-  | { role: "system"; content: string }
+  | { role: "system"; content: string | ContentPart[] }
   | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };

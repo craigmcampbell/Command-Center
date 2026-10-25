@@ -89,18 +89,30 @@ function toResult(
   };
 }
 
+// A count that is a real non-negative number, or undefined.
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 // OpenRouter reports tokens in the OpenAI shape plus a non-standard `cost`
 // (credits, which are USD). Absent cost stays null rather than becoming 0, so
-// a provider that doesn't report one never looks free.
-function parseUsage(raw: any): AssistantUsage | undefined {
+// a provider that doesn't report one never looks free. Prompt-cache reads and
+// writes ride in `prompt_tokens_details` (`cached_tokens`, `cache_write_tokens`),
+// already counted in `prompt_tokens`; each is left out when not reported.
+export function parseUsage(raw: any): AssistantUsage | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const promptTokens = Number(raw.prompt_tokens);
   const completionTokens = Number(raw.completion_tokens);
   if (!Number.isFinite(promptTokens) && !Number.isFinite(completionTokens)) return undefined;
+  const details = raw.prompt_tokens_details && typeof raw.prompt_tokens_details === "object" ? raw.prompt_tokens_details : {};
+  const cachedTokens = count(details.cached_tokens);
+  const cacheWriteTokens = count(details.cache_write_tokens);
   return {
     promptTokens: Number.isFinite(promptTokens) ? promptTokens : 0,
     completionTokens: Number.isFinite(completionTokens) ? completionTokens : 0,
     costUsd: typeof raw.cost === "number" && Number.isFinite(raw.cost) ? raw.cost : null,
+    ...(cachedTokens !== undefined ? { cachedTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
   };
 }
 
