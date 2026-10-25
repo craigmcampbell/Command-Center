@@ -42,6 +42,8 @@ import type {
   AssistantReply,
   AssistantToolCall,
   AssistantToolEvent,
+  AssistantTraceRequest,
+  AssistantTurnTrace,
   AssistantUsage,
 } from "../../shared/types";
 import { sumUsage } from "../../shared/assistantUsage";
@@ -53,6 +55,7 @@ import {
   buildSummaryInput,
   cleanSummary,
   DEFAULT_COMPACT_AT_TOKENS,
+  estimateTokens,
   estimateWireTokens,
   foldedTokens,
   MIN_FOLD_SHARE,
@@ -81,6 +84,7 @@ import {
 import { outboundLinkWarning } from "./assistantLinks";
 import { localDate, readMemoryFile } from "./assistantMemory";
 import { recordSpend, spendToday } from "./assistantSpend";
+import { deleteTraces, listTraces, saveTrace } from "./assistantTraces";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
 import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
 import {
@@ -100,6 +104,7 @@ import {
   type ToolOutcome,
 } from "./assistantTools";
 import {
+  attachTraces,
   cleanTitle,
   DECLINED_MESSAGE,
   deriveTitle,
@@ -323,6 +328,87 @@ function persist(id: string, convo: Conversation, usage: AssistantUsage): void {
   }
 }
 
+// ---- turn traces -----------------------------------------------------------
+//
+// Diagnostics for "Turn details" (see assistantTraces.ts). Same rule as
+// `persist`, more strictly: a trace is only ever built from numbers the loop
+// already has, and writing one can fail without anyone noticing but the log.
+
+type TraceSteps = AssistantTurnTrace["steps"];
+
+interface TurnTrace {
+  // Set once the turn knows which chat it belongs to; a turn refused before
+  // that (no key, empty message) records nothing.
+  chatId: string | null;
+  trace: AssistantTurnTrace;
+  // The trace has been written; a step added later (the title) re-writes it.
+  saved: boolean;
+}
+
+function recordTrace(turn: TurnTrace): void {
+  if (!turn.chatId) return;
+  try {
+    turn.trace.turnSeq = saveTrace(turn.chatId, turn.trace);
+    turn.saved = true;
+  } catch (error) {
+    console.warn("Couldn't save assistant turn trace", error);
+  }
+}
+
+// One model request, timed. `steps` is where its entry goes, or null when
+// nothing is tracing it. The caller's `onText` still sees every delta.
+async function tracedComplete(
+  steps: TraceSteps | null,
+  purpose: AssistantTraceRequest["purpose"],
+  step: number,
+  params: CompleteParams
+): Promise<CompletionResult> {
+  const started = Date.now();
+  let firstTokenAt: number | undefined;
+  let outputChars = 0;
+  // Through callModel, so retries and the spend ledger apply to traced requests too.
+  const result = await callModel({
+    ...params,
+    onText: (delta) => {
+      firstTokenAt ??= Date.now();
+      outputChars += delta.length;
+      params.onText(delta);
+    },
+  });
+  if (steps) {
+    try {
+      steps.push({
+        kind: "request",
+        purpose,
+        step,
+        model: params.model,
+        messageCount: params.messages.length,
+        estInputTokens: estimateTokens(params.messages),
+        latencyMs: Date.now() - started,
+        ...(firstTokenAt !== undefined ? { firstTokenMs: firstTokenAt - started } : {}),
+        ...(result.finishReason ? { finishReason: result.finishReason } : {}),
+        ...(result.usage ? { usage: result.usage } : {}),
+        toolCalls: result.message?.tool_calls?.length ?? 0,
+        outputChars,
+        ...(result.aborted ? { aborted: true } : {}),
+        ...(!result.ok && !result.aborted ? { error: result.reason ?? "Request failed" } : {}),
+      });
+    } catch {
+      // A missing step, never a failed request.
+    }
+  }
+  return result;
+}
+
+// Diagnostics never stop a chat from opening.
+function tracesFor(id: string): AssistantTurnTrace[] {
+  try {
+    return listTraces(id);
+  } catch {
+    return [];
+  }
+}
+
 // ---- chat history API (used by IPC) ----------------------------------------
 
 export function listAssistantChats(query?: string): AssistantChatSummary[] {
@@ -352,7 +438,7 @@ export function openAssistantChat(id: string): AssistantChatResult {
     title: stored.title,
     pinned: stored.pinned,
     usage: stored.usage,
-    items: toTranscript(stored.messages),
+    items: attachTraces(toTranscript(stored.messages), tracesFor(id)),
   };
 }
 
@@ -444,6 +530,11 @@ function discardUnusedImages(attachments: { id: string; kind: string }[]): void 
 export function deleteAssistantChat(id: string): { ok: boolean } {
   conversations.delete(id);
   try {
+    deleteTraces(id);
+  } catch {
+    // Orphaned traces are pruned at boot.
+  }
+  try {
     const images = chatImageIds(id);
     const deleted = deleteChat(id);
     if (deleted) discardUnusedImages(images.map((image) => ({ id: image, kind: "image" })));
@@ -482,7 +573,9 @@ async function compactConversation(
   minFoldTokens = 0,
   fallbackModels: string[] = [],
   // The turn that triggered it counts this toward its own spending cap.
-  onUsage?: (usage: AssistantUsage | undefined) => void
+  onUsage?: (usage: AssistantUsage | undefined) => void,
+  // The turn that triggered it, when there is one.
+  traceSteps: TraceSteps | null = null
 ): Promise<AssistantCompactResult> {
   const plan = planCompaction(convo.messages);
   if (!plan) return { ok: false, reason: "There isn't enough older conversation to summarize yet" };
@@ -490,7 +583,7 @@ async function compactConversation(
     return { ok: false, reason: "Too little older conversation to be worth summarizing" };
   }
   try {
-    const result = await callModel({
+    const result = await tracedComplete(traceSteps, "compact", -1, {
       apiKey,
       model,
       fallbackModels,
@@ -575,11 +668,18 @@ interface TitleJob {
   abort: () => void;
 }
 
-function startTitle(params: { apiKey: string; model: string; question: string }): TitleJob {
+function startTitle(params: {
+  apiKey: string;
+  model: string;
+  question: string;
+  // Receives the request's trace entry, whenever it finishes.
+  onTraced?: (steps: TraceSteps) => void;
+}): TitleJob {
   const controller = new AbortController();
   const result = (async (): Promise<TitleOutcome> => {
+    const steps: TraceSteps = [];
     try {
-      const response = await callModel({
+      const response = await tracedComplete(steps, "title", -1, {
         apiKey: params.apiKey,
         model: params.model,
         // No tools, no history: just the opening message.
@@ -607,6 +707,8 @@ function startTitle(params: { apiKey: string; model: string; question: string })
       return { title, usage: response.usage };
     } catch {
       return { title: null };
+    } finally {
+      if (steps.length) params.onTraced?.(steps);
     }
   })();
   return { result, abort: () => controller.abort() };
@@ -687,14 +789,54 @@ function calledToolNames(messages: ChatMessage[]): string[] {
   return names;
 }
 
-async function runTurn({
-  conversationId,
-  message,
-  command: commandName,
-  attachments: attachmentInputs,
-  hooks,
-  requestId,
-}: TurnRequest): Promise<AssistantReply> {
+// Every turn is traced: the trace is finished from whatever reply came back
+// (or the exception) and goes out with the reply as well as to the database.
+async function runTurn(request: TurnRequest): Promise<AssistantReply> {
+  const turn: TurnTrace = {
+    chatId: null,
+    saved: false,
+    trace: {
+      turnSeq: 0,
+      userIndex: 0,
+      startedAt: Date.now(),
+      durationMs: 0,
+      model: "",
+      ...(request.message === null ? { regenerate: true } : {}),
+      ...(request.command ? { command: request.command } : {}),
+      outcome: "error",
+      usage: { promptTokens: 0, completionTokens: 0, costUsd: null },
+      steps: [],
+    },
+  };
+  const finish = (outcome: AssistantTurnTrace["outcome"], error?: string): void => {
+    turn.trace.durationMs = Date.now() - turn.trace.startedAt;
+    turn.trace.outcome = outcome;
+    if (error && !turn.trace.error) turn.trace.error = error;
+    recordTrace(turn);
+  };
+  let reply: AssistantReply;
+  try {
+    reply = await runTracedTurn(request, turn);
+  } catch (error) {
+    finish("error", "Unexpected failure");
+    throw error;
+  }
+  finish(reply.ok ? (reply.stopped ? "stopped" : "ok") : "error", reply.ok ? undefined : reply.reason);
+  return turn.chatId ? { ...reply, trace: structuredClone(turn.trace) } : reply;
+}
+
+async function runTracedTurn(
+  {
+    conversationId,
+    message,
+    command: commandName,
+    attachments: attachmentInputs,
+    hooks,
+    requestId,
+  }: TurnRequest,
+  turn: TurnTrace
+): Promise<AssistantReply> {
+  const { trace } = turn;
   const regenerate = message === null;
   const fail = (reason: string, id: string, needsSetup = false): AssistantReply => ({
     ok: false,
@@ -730,6 +872,7 @@ async function runTurn({
       );
     }
   }
+  trace.model = model;
 
   let text = message?.trim() ?? "";
   let command: ResolvedCommand | null = null;
@@ -755,6 +898,7 @@ async function runTurn({
   const resolved = resolveConversation(conversationId, { createIfMissing: !regenerate });
   if (!resolved) return fail("That chat no longer exists", conversationId ?? "");
   const { id, convo } = resolved;
+  turn.chatId = id;
   convo.touched = Date.now();
   evictOldConversations();
 
@@ -788,7 +932,8 @@ async function runTurn({
           model,
           compactAt * MIN_FOLD_SHARE,
           fallbackModels,
-          (u) => u && countReplySpend(u)
+          (u) => u && countReplySpend(u),
+          trace.steps
         )
       ).ok;
     }
@@ -841,7 +986,8 @@ async function runTurn({
 
   const toolCalls: AssistantToolCall[] = [];
   const remembered: string[] = [];
-  const usage: AssistantUsage = { promptTokens: 0, completionTokens: 0, costUsd: null };
+  // The same object as the trace's, so the trace always shows the turn's spend.
+  const usage: AssistantUsage = trace.usage;
 
   // The reply is ALL assistant text across steps ("Let me check…" before a
   // tool call, then the answer), because that is what was streamed to the
@@ -906,6 +1052,7 @@ async function runTurn({
   let changed = false;
   const failTurn = (reason: string, needsSetup = false): AssistantReply => {
     if (!changed) return rollback(reason, needsSetup);
+    trace.error = reason;
     needSeparator = true;
     const note = `(The reply couldn't be finished: ${reason})`;
     emit(note);
@@ -922,6 +1069,7 @@ async function runTurn({
     (command ? `/${command.name}` : regenerated?.command ? `/${regenerated.command}` : "") ||
     files[0]?.name ||
     "";
+  trace.userIndex = convo.messages.filter((m) => m.role === "user").length;
   convo.messages.push({
     role: "user",
     content: text,
@@ -954,7 +1102,7 @@ async function runTurn({
         return failTurn(`Stopped at the ${formatUsd(replyCap)} per-reply spending cap`, true);
       }
 
-      const request = callModel({
+      const request = tracedComplete(trace.steps, "reply", step, {
         apiKey,
         model,
         fallbackModels,
@@ -971,7 +1119,17 @@ async function runTurn({
       // Title model if one is set. Sent right behind the reply's own request so
       // the two run side by side.
       if (step === 0 && !regenerate && firstTurnOfChat && settings.autoTitle !== false && asked) {
-        titleJob = startTitle({ apiKey, model: settings.titleModel?.trim() || model, question: asked });
+        titleJob = startTitle({
+          apiKey,
+          model: settings.titleModel?.trim() || model,
+          question: asked,
+          // Usually lands while the reply is still running; if not, the stored
+          // trace is re-written with it.
+          onTraced: (steps) => {
+            trace.steps.push(...steps);
+            if (turn.saved) recordTrace(turn);
+          },
+        });
       }
       const result = await request;
       if (result.aborted) return finishStopped(result.partialText ?? "");
@@ -1066,9 +1224,16 @@ async function runTurn({
           prepared.map(async (entry) => {
             const { call, event, tool } = entry;
             let outcome: ToolOutcome;
+            const timing = { approval: "none" as "none" | "allowed" | "declined", waitMs: 0, durationMs: 0 };
+            let started = Date.now();
             try {
               if (!tool) throw new Error("not prepared");
               const allowed = tool.approval ? (await verdicts)[cardIndex.get(entry) ?? -1] === true : true;
+              if (tool.approval) {
+                timing.approval = allowed ? "allowed" : "declined";
+                timing.waitMs = Date.now() - started;
+                started = Date.now();
+              }
               outcome = allowed
                 ? await tool.run(signal)
                 : { content: JSON.stringify({ error: DECLINED_MESSAGE }), isError: true };
@@ -1078,6 +1243,7 @@ async function runTurn({
                 isError: true,
               };
             }
+            timing.durationMs = Date.now() - started;
             const described = describeToolCall(call, outcome.content);
             hooks.onTool?.({
               ...event,
@@ -1085,12 +1251,22 @@ async function runTurn({
               ok: described.ok,
               ...(described.declined ? { declined: true } : {}),
             });
-            return { call, outcome, described };
+            return { call, outcome, described, timing };
           })
         );
         // Recorded in the order the model asked for them (not the order they
         // happened to finish), which is also how a reopened chat lists them.
-        for (const { call, outcome, described } of outcomes) {
+        for (const { call, outcome, described, timing } of outcomes) {
+          trace.steps.push({
+            kind: "tool",
+            step,
+            name: call.function.name,
+            approval: timing.approval,
+            ...(timing.approval !== "none" ? { waitMs: timing.waitMs } : {}),
+            durationMs: timing.durationMs,
+            ok: described.ok,
+            resultChars: outcome.content.length,
+          });
           if (!outcome.isError && (MUTATING_TOOLS.has(call.function.name) || call.function.name === "remember")) {
             changed = true;
           }

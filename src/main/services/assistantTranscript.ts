@@ -4,7 +4,12 @@
 // back into something a UI can show (a resumed chat has no other source of
 // truth for what was said, so the display is derived rather than stored twice).
 
-import type { AssistantAttachment, AssistantToolCall, AssistantTranscriptItem } from "../../shared/types";
+import type {
+  AssistantAttachment,
+  AssistantToolCall,
+  AssistantTranscriptItem,
+  AssistantTurnTrace,
+} from "../../shared/types";
 
 export interface ToolCall {
   id: string;
@@ -242,4 +247,36 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
     }
   }
   return items;
+}
+
+// Pairs each assistant item with the trace of the turn that produced it, by
+// which user message it answers. Only a turn that is still in the history can
+// own a reply: a failed attempt was rolled back, so it never labels the answer
+// that stands in its place (a failed regenerate shares that answer's user
+// message). When a reply was regenerated, the latest surviving turn wins.
+export function attachTraces(
+  items: AssistantTranscriptItem[],
+  traces: AssistantTurnTrace[]
+): AssistantTranscriptItem[] {
+  const byUser = new Map<number, AssistantTurnTrace>();
+  for (const trace of traces) {
+    if (trace.outcome === "error") continue;
+    const seen = byUser.get(trace.userIndex);
+    if (!seen || seen.turnSeq < trace.turnSeq) byUser.set(trace.userIndex, trace);
+  }
+  if (byUser.size === 0) return items;
+  let userIndex = -1;
+  let claimed = false;
+  return items.map((item) => {
+    if (item.role === "user") {
+      userIndex++;
+      claimed = false;
+      return item;
+    }
+    if (item.role !== "assistant" || claimed) return item;
+    const trace = byUser.get(userIndex);
+    if (!trace) return item;
+    claimed = true;
+    return { ...item, trace };
+  });
 }

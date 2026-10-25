@@ -9,7 +9,7 @@ const path = require('node:path');
   const output = path.join(__dirname, '../out/main/assistant-chats-test.cjs');
   try {
     await require('esbuild').build({
-      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/assistantCommands'; export * from './src/main/services/assistantSpend'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
+      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/assistantCommands'; export * from './src/main/services/assistantSpend'; export * from './src/main/services/assistantTraces'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
       outfile: output, bundle: true, platform: 'node', format: 'cjs', external: ['better-sqlite3'],
       plugins: [{ name: 'test-userdata', setup(build) {
         build.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test' }));
@@ -297,7 +297,31 @@ const path = require('node:path');
     assert.equal(api.deleteChat('b'), true);
     assert.equal(api.deleteChat('b'), false, 'Deleting twice reports nothing deleted');
     assert.equal(api.listChats().length, 3);
+    // Turn traces: numbered per chat, re-written in place, pruned, and cleared.
+    api.initAssistantTraces();
+    api.initAssistantTraces(); // idempotent
+    const trace = (over = {}) => ({ turnSeq: 0, userIndex: 0, startedAt: Date.now(), durationMs: 5, model: 'm', outcome: 'ok', usage: { promptTokens: 1, completionTokens: 1, costUsd: null }, steps: [], ...over });
+    assert.equal(api.saveTrace('tr', trace()), 1);
+    assert.equal(api.saveTrace('tr', trace({ userIndex: 1 })), 2);
+    assert.equal(api.saveTrace('other', trace()), 1, 'Turn numbers are per chat');
+    const late = trace({ turnSeq: 2, userIndex: 1, steps: [{ kind: 'request', purpose: 'title', step: -1 }] });
+    assert.equal(api.saveTrace('tr', late), 2, 'A trace that has a number is replaced, not duplicated');
+    assert.deepEqual(api.listTraces('tr').map(t => [t.turnSeq, t.steps.length]), [[1, 0], [2, 1]]);
+    for (let i = 0; i < api.MAX_TRACES_PER_CHAT + 5; i++) api.saveTrace('tr', trace());
+    const kept = api.listTraces('tr');
+    assert.equal(kept.length, api.MAX_TRACES_PER_CHAT, 'Pruned to the last N turns');
+    assert.equal(kept[kept.length - 1].turnSeq - kept[0].turnSeq, api.MAX_TRACES_PER_CHAT - 1);
+    db.prepare(`UPDATE assistant_traces SET data = 'not json' WHERE chat_id = 'other'`).run();
+    assert.deepEqual(api.listTraces('other'), [], 'An unreadable trace is skipped');
+    // A chat that was never saved: its traces go once they are a day old.
+    db.prepare(`UPDATE assistant_traces SET started_at = 1 WHERE chat_id = 'other'`).run();
+    api.initAssistantTraces();
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM assistant_traces WHERE chat_id = 'other'`).get().n, 0, 'Old orphan traces are pruned at boot');
+    assert.equal(api.listTraces('tr').length, api.MAX_TRACES_PER_CHAT, 'Recent ones are kept even without a chat row');
+    api.deleteTraces('tr');
+    assert.deepEqual(api.listTraces('tr'), []);
+
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, folders, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, folders, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete, turn traces');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

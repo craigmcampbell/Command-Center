@@ -142,6 +142,7 @@ import { attachmentPath, cleanName, readImageDataUrl } from "./services/assistan
 import { initAssistantChats } from "./services/assistantChats";
 import { initAssistantSpend, spendToday } from "./services/assistantSpend";
 import { checkAssistantModel } from "./services/assistantModels";
+import { initAssistantTraces } from "./services/assistantTraces";
 import {
   getCommandSettings,
   initAssistantCommands,
@@ -351,6 +352,8 @@ initProjects();
 initScratchpad();
 initAssistantChats();
 initAssistantSpend();
+// After the chats table: its orphan cleanup joins against it.
+initAssistantTraces();
 initAssistantCommands();
 initHabits();
 initNotes();

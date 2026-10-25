@@ -5,6 +5,7 @@ import type {
   AssistantAttachmentInfo,
   AssistantReply,
   AssistantToolCall,
+  AssistantTurnTrace,
   AssistantUsage,
 } from "../../../shared/types";
 import { sumUsage } from "../../../shared/assistantUsage";
@@ -56,6 +57,8 @@ export interface ChatItem {
   model?: string;
   // Part of the reply's cost went unreported, so the caps couldn't count it.
   costUnreported?: boolean;
+  // Timings and sizes of the turn behind this reply (or this error).
+  trace?: AssistantTurnTrace;
 }
 
 export interface UseAssistantChatOptions {
@@ -189,6 +192,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           ...(item.attachments ? { attachments: item.attachments } : {}),
           toolCalls: item.toolCalls,
           remembered: item.remembered,
+          ...(item.trace ? { trace: item.trace } : {}),
         }))
       );
       return true;
@@ -208,12 +212,14 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           ...(reply.model ? { model: reply.model } : {}),
           ...(reply.costUnreported ? { costUnreported: true } : {}),
           ...(reply.attachments?.length ? { attachments: reply.attachments } : {}),
+          ...(reply.trace ? { trace: reply.trace } : {}),
         }
       : {
           id,
           role: "error",
           text: reply.reason ?? "Something went wrong",
           needsSetup: reply.needsSetup,
+          ...(reply.trace ? { trace: reply.trace } : {}),
         };
 
   const afterReply = useCallback(
