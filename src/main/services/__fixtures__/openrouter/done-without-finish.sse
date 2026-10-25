@@ -1,0 +1,6 @@
+data: {"id": "gen-1761318030-dropped", "provider": "Chutes", "model": "deepseek/deepseek-chat-v3.1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "All done."}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318030-dropped", "provider": "Chutes", "model": "deepseek/deepseek-chat-v3.1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [], "usage": {"prompt_tokens": 900, "completion_tokens": 3, "total_tokens": 903, "cost": 0.00011, "is_byok": false, "prompt_tokens_details": {"cached_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0}}}
+
+data: [DONE]
+

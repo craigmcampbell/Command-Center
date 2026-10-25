@@ -38,15 +38,20 @@ import type {
   OpenRouterScalarConfig,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantModelCheck,
   AssistantScalarConfig,
+  AssistantSpendToday,
   RailwayScalarConfig,
   ProcessConfig,
   SubredditConfig,
+  TabConfig,
   VaultConfig,
   YnabScalarConfig,
   YouTubeChannelConfig,
 } from "../../../shared/types";
 import { DEFAULT_ASSISTANT_ACCELERATOR } from "../../../shared/assistant";
+import AssistantCommandsCard from "./AssistantCommandsCard";
+import AssistantMcpCard from "./AssistantMcpCard";
 import { validateAccelerator } from "../../../shared/accelerator";
 import { normalizeSubreddit } from "../../../shared/subreddit";
 import { parseChannelInput } from "../../../shared/youtubeChannel";
@@ -76,6 +81,7 @@ type SectionId =
   | "vaults"
   | "githubRepos"
   | "processes"
+  | "tabs"
   | "social"
   | "data";
 
@@ -87,6 +93,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "vaults", label: "Vaults" },
   { id: "githubRepos", label: "Repositories" },
   { id: "processes", label: "Processes" },
+  { id: "tabs", label: "Tabs" },
   { id: "social", label: "Social" },
   { id: "data", label: "Data" },
 ];
@@ -98,6 +105,7 @@ interface SettingsPageProps {
   initialSection?: SectionId;
   onClose: () => void;
   onProcessConfigsChange: (configs: ProcessConfig[]) => void;
+  onTabsChange: (tabs: TabConfig[]) => void;
   onAppRefreshMinutesChange: (minutes: number | undefined) => void;
   onDockerRefreshSecondsChange: (seconds: number) => void;
   onDockerUpdateSettingsChange: (settings: DockerSettings) => void;
@@ -1179,14 +1187,26 @@ function OpenAICard({
   onSaved: (v: OpenAIScalarConfig) => void;
 }) {
   const [adminApiKey, setAdminApiKey] = useState(value.adminApiKey ?? "");
+  const [apiKey, setApiKey] = useState(value.apiKey ?? "");
+  const [imageModel, setImageModel] = useState(value.imageModel ?? "");
+  const [imageShape, setImageShape] = useState(value.imageShape ?? "square");
+  const [imageQuality, setImageQuality] = useState(value.imageQuality ?? "medium");
   const [refreshSeconds, setRefreshSeconds] = useState(String(value.refreshSeconds ?? 900));
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setAdminApiKey(value.adminApiKey ?? "");
+    setApiKey(value.apiKey ?? "");
+    setImageModel(value.imageModel ?? "");
+    setImageShape(value.imageShape ?? "square");
+    setImageQuality(value.imageQuality ?? "medium");
     setRefreshSeconds(String(value.refreshSeconds ?? 900));
-  }, [value.adminApiKey, value.refreshSeconds]);
+  }, [value.adminApiKey, value.apiKey, value.imageModel, value.imageShape, value.imageQuality, value.refreshSeconds]);
   const dirty =
     adminApiKey !== (value.adminApiKey ?? "") ||
+    apiKey !== (value.apiKey ?? "") ||
+    imageModel !== (value.imageModel ?? "") ||
+    imageShape !== (value.imageShape ?? "square") ||
+    imageQuality !== (value.imageQuality ?? "medium") ||
     refreshSeconds !== String(value.refreshSeconds ?? 900);
 
   async function handleSave(e: FormEvent) {
@@ -1194,6 +1214,10 @@ function OpenAICard({
     setSaving(true);
     const result = await window.api.settings.openai.update({
       adminApiKey: adminApiKey || undefined,
+      apiKey: apiKey || undefined,
+      imageModel: imageModel.trim() || undefined,
+      imageShape: imageShape === "square" ? undefined : imageShape,
+      imageQuality: imageQuality === "medium" ? undefined : imageQuality,
       refreshSeconds: Number(refreshSeconds) || 900,
     });
     setSaving(false);
@@ -1227,6 +1251,55 @@ function OpenAICard({
           onChange={(e) => setRefreshSeconds(e.target.value)}
         />
       </div>
+      <p className="settings-card-hint">
+        The Assistant can generate images when you add a regular <strong>API key</strong> (a
+        project key from OpenAI's dashboard; an Admin key can't generate). Each image costs money,
+        so the Assistant always shows you its exact prompt and asks first, and makes at most two
+        per reply. Leave the model blank for gpt-image-1.
+      </p>
+      <div className="settings-field-row">
+        <label>API key (images)</label>
+        <SecretField value={apiKey} onChange={setApiKey} placeholder="sk-…" />
+      </div>
+      <div className="settings-field-row">
+        <label>Image model</label>
+        <input
+          className="settings-input"
+          value={imageModel}
+          onChange={(e) => setImageModel(e.target.value)}
+          placeholder="gpt-image-1"
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Default size</label>
+        <select
+          className="settings-input"
+          value={imageShape}
+          onChange={(e) => setImageShape(e.target.value as typeof imageShape)}
+        >
+          <option value="square">Square (1024×1024)</option>
+          <option value="landscape">Landscape (1536×1024)</option>
+          <option value="portrait">Portrait (1024×1536)</option>
+        </select>
+      </div>
+      <div className="settings-field-row">
+        <label>Default quality</label>
+        <select
+          className="settings-input"
+          value={imageQuality}
+          onChange={(e) => setImageQuality(e.target.value as typeof imageQuality)}
+        >
+          <option value="low">Low (cheapest)</option>
+          <option value="medium">Medium</option>
+          <option value="high">High (most expensive)</option>
+        </select>
+      </div>
+      <p className="settings-card-hint">
+        These apply when the Assistant doesn't pick a size itself. It will still choose landscape
+        for a banner or portrait for a wallpaper, or follow you if you ask for a size, and the
+        confirmation card always shows what it will use.
+      </p>
       <div className="settings-card-footer">
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
@@ -1294,6 +1367,41 @@ function FirecrawlCard({
   );
 }
 
+// "1.50", "$2" → dollars; blank, zero or junk → no cap.
+function parseUsd(text: string): number | undefined {
+  const n = Number(text.trim().replace(/^\$/, ""));
+  return text.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function usdText(value: number | undefined): string {
+  return value === undefined ? "" : String(value);
+}
+
+// One slug per line or comma-separated, in the order they should be tried.
+function parseSlugList(text: string): string[] {
+  return [...new Set(text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean))];
+}
+
+function formatSpend(today: AssistantSpendToday): string {
+  const cost = `$${today.costUsd < 0.01 && today.costUsd > 0 ? today.costUsd.toFixed(4) : today.costUsd.toFixed(2)}`;
+  const unseen = today.unpriced
+    ? `, plus ${today.unpriced} request${today.unpriced === 1 ? "" : "s"} with no reported cost`
+    : "";
+  return `${cost} across ${today.requests} request${today.requests === 1 ? "" : "s"}${unseen}`;
+}
+
+// Warnings from OpenRouter's model list about the slugs just saved. Advisory:
+// the settings are saved either way.
+function modelWarnings(checks: AssistantModelCheck[]): string[] {
+  const out: string[] = [];
+  for (const c of checks) {
+    if (!c.ok) out.push(`Couldn't check ${c.slug || "the model"}: ${c.reason ?? "unknown error"}.`);
+    else if (!c.known) out.push(`${c.slug} isn't in OpenRouter's model list. Check the spelling.`);
+    else if (!c.tools) out.push(`${c.slug} doesn't list tool calling, which the assistant needs.`);
+  }
+  return out;
+}
+
 function AssistantCard({
   value,
   onSaved,
@@ -1311,7 +1419,18 @@ function AssistantCard({
   // Unset means ask; only an explicit false relaxes it.
   const [askBeforeRemember, setAskBeforeRemember] = useState(value.askBeforeRemember !== false);
   const [memoryPath, setMemoryPath] = useState(value.memoryPath ?? "");
+  // Blank means the default; 0 turns automatic compaction off.
+  const [compactAt, setCompactAt] = useState(
+    value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)
+  );
+  // Unset means on; only an explicit false turns cache breakpoints off.
+  const [promptCache, setPromptCache] = useState(value.promptCache !== false);
   const [systemPrompt, setSystemPrompt] = useState(value.systemPrompt ?? "");
+  const [fallbacks, setFallbacks] = useState((value.fallbackModels ?? []).join("\n"));
+  const [replyCap, setReplyCap] = useState(usdText(value.maxCostPerReplyUsd));
+  const [dailyCap, setDailyCap] = useState(usdText(value.maxCostPerDayUsd));
+  const [spend, setSpend] = useState<AssistantSpendToday | null>(null);
+  const [checks, setChecks] = useState<AssistantModelCheck[] | null>(null);
   const [hotkey, setHotkey] = useState(currentHotkey);
   const [status, setStatus] = useState<CaptureHotkeyStatus | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1322,7 +1441,12 @@ function AssistantCard({
     setTitleModel(value.titleModel ?? "");
     setAskBeforeRemember(value.askBeforeRemember !== false);
     setMemoryPath(value.memoryPath ?? "");
+    setCompactAt(value.compactAtTokens === undefined ? "" : String(value.compactAtTokens));
+    setPromptCache(value.promptCache !== false);
     setSystemPrompt(value.systemPrompt ?? "");
+    setFallbacks((value.fallbackModels ?? []).join("\n"));
+    setReplyCap(usdText(value.maxCostPerReplyUsd));
+    setDailyCap(usdText(value.maxCostPerDayUsd));
     setHotkey(value.quickHotkey ?? DEFAULT_ASSISTANT_ACCELERATOR);
   }, [
     value.apiKey,
@@ -1331,11 +1455,17 @@ function AssistantCard({
     value.titleModel,
     value.askBeforeRemember,
     value.memoryPath,
+    value.compactAtTokens,
+    value.promptCache,
     value.systemPrompt,
+    value.fallbackModels,
+    value.maxCostPerReplyUsd,
+    value.maxCostPerDayUsd,
     value.quickHotkey,
   ]);
   useEffect(() => {
     void window.api.assistant.hotkeyStatus().then(setStatus);
+    void window.api.assistant.spendToday().then(setSpend);
   }, []);
 
   const dirty =
@@ -1345,7 +1475,12 @@ function AssistantCard({
     titleModel !== (value.titleModel ?? "") ||
     askBeforeRemember !== (value.askBeforeRemember !== false) ||
     memoryPath !== (value.memoryPath ?? "") ||
+    compactAt !== (value.compactAtTokens === undefined ? "" : String(value.compactAtTokens)) ||
+    promptCache !== (value.promptCache !== false) ||
     systemPrompt !== (value.systemPrompt ?? "") ||
+    parseSlugList(fallbacks).join("\n") !== (value.fallbackModels ?? []).join("\n") ||
+    replyCap !== usdText(value.maxCostPerReplyUsd) ||
+    dailyCap !== usdText(value.maxCostPerDayUsd) ||
     hotkey !== currentHotkey;
   const hotkeyError = hotkey.trim() ? validateAccelerator(hotkey) : null;
 
@@ -1353,6 +1488,10 @@ function AssistantCard({
     e.preventDefault();
     if (hotkeyError) return;
     setSaving(true);
+    const fallbackModels = parseSlugList(fallbacks);
+    const slugs = [model.trim(), ...fallbackModels].filter(Boolean);
+    const slugsChanged =
+      slugs.join("\n") !== [value.model?.trim() ?? "", ...(value.fallbackModels ?? [])].filter(Boolean).join("\n");
     const result = await window.api.settings.assistant.update({
       apiKey: apiKey || undefined,
       model: model.trim() || undefined,
@@ -1360,13 +1499,31 @@ function AssistantCard({
       titleModel: titleModel.trim() || undefined,
       askBeforeRemember,
       memoryPath: memoryPath.trim() || undefined,
+      compactAtTokens: /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : undefined,
+      promptCache,
       systemPrompt: systemPrompt.trim() || undefined,
+      fallbackModels: fallbackModels.length ? fallbackModels : undefined,
+      maxCostPerReplyUsd: parseUsd(replyCap),
+      maxCostPerDayUsd: parseUsd(dailyCap),
       quickHotkey: hotkey.trim(),
     });
     setStatus(await window.api.assistant.hotkeyStatus());
     setSaving(false);
     onSaved(result);
+    // Checked after saving, never instead of it: the list can lag a new model.
+    if (slugsChanged && slugs.length) {
+      setChecks(null);
+      setChecks(await Promise.all(slugs.map((slug) => window.api.assistant.checkModel(slug))));
+    }
   }
+
+  const warnings = checks ? modelWarnings(checks) : [];
+  // The primary model's context window, for a compaction suggestion that is
+  // only worth showing when it differs from what's set.
+  const primary = checks?.[0]?.slug === model.trim() ? checks[0] : null;
+  const effectiveCompactAt = /^\d+$/.test(compactAt.trim()) ? Number(compactAt.trim()) : 30000;
+  const suggestion =
+    primary?.suggestedCompactAt && primary.suggestedCompactAt !== effectiveCompactAt ? primary : null;
 
   return (
     <form className="settings-card" onSubmit={handleSave}>
@@ -1392,13 +1549,40 @@ function AssistantCard({
           spellCheck={false}
         />
       </div>
+      {warnings.map((w) => (
+        <p key={w} className="settings-card-warning">
+          {w}
+        </p>
+      ))}
+      {primary?.known && primary.tools && !suggestion && warnings.length === 0 && (
+        <p className="settings-card-hint">
+          {primary.slug} supports tool calling
+          {primary.contextLength ? ` (${primary.contextLength.toLocaleString()}-token context)` : ""}.
+        </p>
+      )}
+      <div className="settings-field-row settings-field-row-top">
+        <label>Fallbacks</label>
+        <textarea
+          className="settings-input settings-textarea"
+          value={fallbacks}
+          onChange={(e) => setFallbacks(e.target.value)}
+          placeholder="One model slug per line, tried in order (optional)"
+          rows={2}
+          spellCheck={false}
+        />
+      </div>
+      <p className="settings-card-hint">
+        If the model is rate-limited, down or rejects a request, OpenRouter tries these in order and
+        bills whichever one answers. Each reply shows which model answered. They need tool calling
+        too.
+      </p>
       <label className="settings-checkbox-label">
         <input
           type="checkbox"
           checked={autoTitle}
           onChange={(e) => setAutoTitle(e.target.checked)}
         />
-        Write a short title for each new chat after its first reply
+        Write a short title for each new chat from its first message
       </label>
       <div className="settings-field-row">
         <label>Title model</label>
@@ -1412,9 +1596,10 @@ function AssistantCard({
         />
       </div>
       <p className="settings-card-hint">
-        Titles are a second, tiny request per new chat, billed to the model above. A cheap, fast
-        model is plenty. Until the title arrives (and if it fails), a chat is named after your
-        first question.
+        The title is one tiny extra request, sent with your first message so it is usually ready
+        when the reply lands, and billed to the title model (or the main model if this is blank). Use
+        a small, plain model: a reasoning model can spend its whole budget thinking and return no
+        title. Until it arrives, and if it fails, a chat is named after your first question.
       </p>
       <label className="settings-checkbox-label">
         <input
@@ -1438,6 +1623,79 @@ function AssistantCard({
           spellCheck={false}
         />
       </div>
+      <div className="settings-field-row">
+        <label>Compact at</label>
+        <input
+          className="settings-input"
+          inputMode="numeric"
+          value={compactAt}
+          onChange={(e) => setCompactAt(e.target.value)}
+          placeholder="30000 (estimated tokens; 0 = never)"
+          spellCheck={false}
+        />
+      </div>
+      {suggestion && (
+        <p className="settings-card-hint">
+          {suggestion.slug} has a {suggestion.contextLength!.toLocaleString()}-token context window;{" "}
+          {suggestion.suggestedCompactAt!.toLocaleString()} would suit it.{" "}
+          <button
+            type="button"
+            className="assistant-link"
+            onClick={() => setCompactAt(String(suggestion.suggestedCompactAt))}
+          >
+            Use {suggestion.suggestedCompactAt!.toLocaleString()}
+          </button>
+        </p>
+      )}
+      <p className="settings-card-hint">
+        When a chat would grow past this, its older turns are summarized (one extra request on the
+        main model) and the model reads the summary instead. Nothing is deleted: the full chat stays
+        on screen and searchable. The Compact button in the tab does it on demand.
+      </p>
+      <div className="settings-field-row">
+        <label>Max per reply</label>
+        <input
+          className="settings-input"
+          inputMode="decimal"
+          value={replyCap}
+          onChange={(e) => setReplyCap(e.target.value)}
+          placeholder="(no cap) USD, e.g. 0.50"
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-field-row">
+        <label>Max per day</label>
+        <input
+          className="settings-input"
+          inputMode="decimal"
+          value={dailyCap}
+          onChange={(e) => setDailyCap(e.target.value)}
+          placeholder="(no cap) USD, e.g. 5"
+          spellCheck={false}
+        />
+      </div>
+      <p className="settings-card-hint">
+        Spending caps use the cost OpenRouter reports. A reply stops calling the model once it has
+        cost the per-reply amount (it can overshoot by the one step that crossed it). Once today’s
+        assistant spend — replies, titles and summaries — reaches the daily amount, new questions are
+        refused until tomorrow. A request whose provider reports no cost can’t be counted and is
+        flagged instead of treated as free.
+        {spend && <> Today so far: {formatSpend(spend)}.</>}
+      </p>
+      <label className="settings-checkbox-label">
+        <input
+          type="checkbox"
+          checked={promptCache}
+          onChange={(e) => setPromptCache(e.target.checked)}
+        />
+        Use prompt caching on Anthropic models
+      </label>
+      <p className="settings-card-hint">
+        Marks the stable start of each request so a long chat re-reads it at about a tenth of the
+        price. Writing the cache costs a quarter more than normal input, so a chat you only send one
+        message in costs slightly more. OpenAI, DeepSeek and Gemini cache on their own; this setting
+        doesn’t affect them. The tab header shows how much of a chat was read from cache.
+      </p>
       <div className="settings-field-row settings-field-row-top">
         <label>Instructions</label>
         <textarea
@@ -2612,6 +2870,119 @@ function ProcessesSection({
   );
 }
 
+// ---- tabs ----
+
+function TabRow({
+  tab,
+  isLastVisible,
+  onRename,
+  onToggleHidden,
+}: {
+  tab: TabConfig;
+  isLastVisible: boolean;
+  onRename: (label: string) => void;
+  onToggleHidden: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(tab.label);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+
+  function commit() {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== tab.label) onRename(trimmed);
+    else setValue(tab.label);
+    setEditing(false);
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`settings-array-row ${isDragging ? "dragging" : ""} ${tab.hidden ? "tab-row-hidden" : ""}`}
+    >
+      <button className="drag-handle" {...attributes} {...listeners} aria-label={`Reorder ${tab.label}`}>
+        <IconGrip />
+      </button>
+      {editing ? (
+        <input
+          className="settings-input"
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setValue(tab.label);
+              setEditing(false);
+            }
+          }}
+        />
+      ) : (
+        <div className="settings-array-row-main">
+          <span className="settings-array-row-label">{tab.label}</span>
+          {tab.hidden && <span className="settings-array-row-sub">hidden</span>}
+        </div>
+      )}
+      <span className="row-actions always-visible">
+        <button className="row-action" onClick={() => setEditing(true)} aria-label={`Rename ${tab.label}`} title="Rename">
+          <IconPencil />
+        </button>
+        <button
+          className="row-action"
+          onClick={onToggleHidden}
+          disabled={isLastVisible}
+          aria-label={tab.hidden ? `Show ${tab.label}` : `Hide ${tab.label}`}
+          title={isLastVisible ? "At least one tab must stay visible" : tab.hidden ? "Show tab" : "Hide tab"}
+        >
+          {tab.hidden ? <IconEyeOff /> : <IconEye />}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function TabsSection({ tabs, onChange }: { tabs: TabConfig[]; onChange: (tabs: TabConfig[]) => void }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const visibleCount = tabs.filter((t) => !t.hidden).length;
+
+  async function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = tabs.findIndex((t) => t.id === active.id);
+    const newIndex = tabs.findIndex((t) => t.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const next = arrayMove(tabs, oldIndex, newIndex);
+    onChange(next); // optimistic, so the row doesn't snap back while the write lands
+    onChange(await window.api.settings.tabs.reorder(next.map((t) => t.id)));
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>Tabs</h3>
+      <p className="settings-card-hint">
+        Drag to set the order of the tab strip, click the eye to show or hide a tab, and the pencil to rename
+        one. A hidden tab keeps its data and is simply left out of the strip and the command palette.
+      </p>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={tabs.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+          {tabs.map((t) => (
+            <TabRow
+              key={t.id}
+              tab={t}
+              isLastVisible={!t.hidden && visibleCount <= 1}
+              onRename={async (label) => onChange(await window.api.settings.tabs.rename(t.id, label))}
+              onToggleHidden={async () => onChange(await window.api.settings.tabs.setHidden(t.id, !t.hidden))}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
+    </div>
+  );
+}
+
 // ---- top-level page ----
 
 export default function SettingsPage({
@@ -2619,6 +2990,7 @@ export default function SettingsPage({
   initialSection,
   onClose,
   onProcessConfigsChange,
+  onTabsChange,
   onAppRefreshMinutesChange,
   onDockerRefreshSecondsChange,
   onDockerUpdateSettingsChange,
@@ -2636,11 +3008,15 @@ export default function SettingsPage({
 }: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
   const [data, setData] = useState<AppConfig | null>(null);
+  const [tabs, setTabs] = useState<TabConfig[]>([]);
 
   useEffect(() => {
     if (!open) return;
     setSection(initialSection ?? "general");
-    window.api.settings.getAll().then(setData);
+    window.api.settings.getAll().then((cfg) => {
+      setData(cfg);
+      setTabs(cfg.tabs ?? []);
+    });
   }, [open, initialSection]);
 
   useEffect(() => {
@@ -2819,10 +3195,14 @@ export default function SettingsPage({
               )}
 
               {section === "assistant" && (
-                <AssistantCard
-                  value={data.assistant ?? {}}
-                  onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
-                />
+                <>
+                  <AssistantCard
+                    value={data.assistant ?? {}}
+                    onSaved={(v) => setData((prev) => (prev ? { ...prev, assistant: v } : prev))}
+                  />
+                  <AssistantCommandsCard />
+                  <AssistantMcpCard />
+                </>
               )}
 
               {section === "vaults" && (
@@ -2847,6 +3227,16 @@ export default function SettingsPage({
                   onChange={(processes) => {
                     setData((prev) => (prev ? { ...prev, processes } : prev));
                     onProcessConfigsChange(processes);
+                  }}
+                />
+              )}
+
+              {section === "tabs" && (
+                <TabsSection
+                  tabs={tabs}
+                  onChange={(next) => {
+                    setTabs(next);
+                    onTabsChange(next);
                   }}
                 />
               )}

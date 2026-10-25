@@ -1,0 +1,12 @@
+: OPENROUTER PROCESSING
+
+data: {"id": "gen-1761318004-noids3", "provider": "Mistral", "model": "mistralai/mistral-medium-3", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Nothing on today, "}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318004-noids3", "provider": "Mistral", "model": "mistralai/mistral-medium-3", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"content": "and both containers are running."}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318004-noids3", "provider": "Mistral", "model": "mistralai/mistral-medium-3", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop", "native_finish_reason": "stop", "logprobs": null}]}
+
+data: {"id": "gen-1761318004-noids3", "provider": "Mistral", "model": "mistralai/mistral-medium-3", "object": "chat.completion.chunk", "created": 1761318000, "choices": [], "usage": {"prompt_tokens": 2004, "completion_tokens": 14, "total_tokens": 2018, "cost": 0.000421, "is_byok": false, "prompt_tokens_details": {"cached_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0}}}
+
+data: [DONE]
+

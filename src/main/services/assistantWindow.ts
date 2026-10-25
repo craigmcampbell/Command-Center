@@ -91,6 +91,12 @@ export function toggleAssistantWindow(): void {
   win.webContents.send("app:command", command);
 }
 
+// A dialog parented to the panel would be a sheet on a window that hides on
+// blur, so callers show it unparented instead.
+export function isAssistantPanel(w: BrowserWindow | null): boolean {
+  return w !== null && w === win;
+}
+
 export function hideAssistantWindow(): void {
   win?.hide();
 }

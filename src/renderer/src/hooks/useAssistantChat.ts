@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { previewUrlsToRelease, type PendingAttachment } from "../lib/attachments";
 import type {
   AssistantApproval,
+  AssistantAttachmentInfo,
   AssistantReply,
   AssistantToolCall,
+  AssistantTurnTrace,
   AssistantUsage,
 } from "../../../shared/types";
+import { sumUsage } from "../../../shared/assistantUsage";
 
 // All the state and actions of one Assistant conversation, shared by the
 // dashboard tab and the quick panel so they behave identically.
@@ -29,8 +33,17 @@ export interface LiveTool {
 
 export interface ChatItem {
   id: number;
-  role: "user" | "assistant" | "error";
+  role: "user" | "assistant" | "error" | "summary";
   text: string;
+  // On a user message: the slash command it ran.
+  command?: string;
+  // On a user message that is part of the saved chat: its place among the
+  // chat's questions, which is what an edit names. Unset on one whose turn
+  // failed (main rolled it back, so there is nothing to branch from).
+  turn?: number;
+  // On a user message: attached files. `previewUrl` is set for ones just sent
+  // from this window; a reopened chat loads images through readAttachment.
+  attachments?: (AssistantAttachmentInfo & { previewUrl?: string })[];
   // Set while the reply is still arriving; ties streamed deltas and
   // confirmation cards to this bubble. The final reply clears it.
   requestId?: string;
@@ -44,6 +57,12 @@ export interface ChatItem {
   stopped?: boolean;
   toolCalls?: AssistantToolCall[];
   remembered?: string[];
+  // On an assistant reply: the model that answered.
+  model?: string;
+  // Part of the reply's cost went unreported, so the caps couldn't count it.
+  costUnreported?: boolean;
+  // Timings and sizes of the turn behind this reply (or this error).
+  trace?: AssistantTurnTrace;
 }
 
 export interface UseAssistantChatOptions {
@@ -53,21 +72,14 @@ export interface UseAssistantChatOptions {
 
 const NO_USAGE: AssistantUsage = { promptTokens: 0, completionTokens: 0, costUsd: null };
 
-function addUsage(total: AssistantUsage, step: AssistantUsage | undefined): AssistantUsage {
-  if (!step) return total;
-  return {
-    promptTokens: total.promptTokens + step.promptTokens,
-    completionTokens: total.completionTokens + step.completionTokens,
-    costUsd: step.costUsd === null ? total.costUsd : (total.costUsd ?? 0) + step.costUsd,
-  };
-}
-
 export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [title, setTitle] = useState<string | null>(null);
   const [usage, setUsage] = useState<AssistantUsage>(NO_USAGE);
+  // Set when the open chat is a branch of another (still existing) one.
+  const [parent, setParent] = useState<{ id: string; title: string } | null>(null);
 
   // Mirrors of state for callbacks that must see the latest value without
   // being re-created (and re-subscribed) on every render.
@@ -80,6 +92,23 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  // A sent picture is shown from its local object URL until the transcript
+  // moves on (a new chat, another chat opened, a compaction reload), then the
+  // URL is released; left alone, each one would pin the image's bytes for the
+  // life of the window.
+  const shownPreviews = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const { keep, release } = previewUrlsToRelease(shownPreviews.current, items);
+    for (const url of release) URL.revokeObjectURL(url);
+    shownPreviews.current = keep;
+  }, [items]);
+  useEffect(
+    () => () => {
+      for (const url of shownPreviews.current) URL.revokeObjectURL(url);
+    },
+    []
+  );
   useEffect(() => {
     onSavedRef.current = onSaved;
   }, [onSaved]);
@@ -150,6 +179,35 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     };
   }, []);
 
+  // Loads a saved chat into view. Returns false if it no longer exists.
+  const openChat = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (busyRef.current) return false;
+      const chat = await window.api.assistant.chats.open(id);
+      if (!chat.ok) return false;
+      setConversation(id);
+      setTitle(chat.title);
+      setUsage(chat.usage);
+      setParent(chat.parent ?? null);
+      setItems(
+        chat.items.map((item) => ({
+          id: nextId.current++,
+          role: item.role,
+          text: item.text,
+          ...(item.command ? { command: item.command } : {}),
+          ...(item.model ? { model: item.model } : {}),
+          ...(item.turn !== undefined ? { turn: item.turn } : {}),
+          ...(item.attachments ? { attachments: item.attachments } : {}),
+          toolCalls: item.toolCalls,
+          remembered: item.remembered,
+          ...(item.trace ? { trace: item.trace } : {}),
+        }))
+      );
+      return true;
+    },
+    [setConversation]
+  );
+
   const finalItem = (id: number, reply: AssistantReply): ChatItem =>
     reply.ok
       ? {
@@ -159,43 +217,135 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           toolCalls: reply.toolCalls,
           remembered: reply.remembered,
           stopped: reply.stopped,
+          ...(reply.model ? { model: reply.model } : {}),
+          ...(reply.costUnreported ? { costUnreported: true } : {}),
+          ...(reply.attachments?.length ? { attachments: reply.attachments } : {}),
+          ...(reply.trace ? { trace: reply.trace } : {}),
         }
       : {
           id,
           role: "error",
           text: reply.reason ?? "Something went wrong",
           needsSetup: reply.needsSetup,
+          ...(reply.trace ? { trace: reply.trace } : {}),
         };
 
   const afterReply = useCallback(
     (reply: AssistantReply) => {
       if (reply.conversationId) setConversation(reply.conversationId);
       if (reply.ok) {
-        setUsage((u) => addUsage(u, reply.usage));
+        setUsage((u) => sumUsage(u, reply.usage));
         onSavedRef.current?.();
       }
       end();
+      // Older messages were summarized first, so the divider (and the summary
+      // request's cost) only appear in a freshly loaded transcript.
+      if (reply.ok && reply.compacted && reply.conversationId) void openChat(reply.conversationId);
     },
-    [end, setConversation]
+    [end, openChat, setConversation]
   );
 
   const send = useCallback(
-    async (raw: string): Promise<void> => {
+    async (raw: string, command?: string, files: PendingAttachment[] = []): Promise<void> => {
       const text = raw.trim();
-      if (!text || busyRef.current) return;
+      // A command can run with nothing typed after it, and a file with no words.
+      if ((!text && !command && files.length === 0) || busyRef.current) return;
       const requestId = crypto.randomUUID();
       const replyId = nextId.current++;
+      const userId = nextId.current++;
       begin(requestId);
       setItems((prev) => [
         ...prev,
-        { id: nextId.current++, role: "user", text },
+        {
+          id: userId,
+          role: "user",
+          text,
+          ...(command ? { command } : {}),
+          ...(files.length
+            ? {
+                attachments: files.map((f) => ({
+                  id: f.key,
+                  name: f.name,
+                  mime: f.mime,
+                  kind: f.kind,
+                  size: f.size,
+                  previewUrl: f.previewUrl,
+                })),
+              }
+            : {}),
+        },
         { id: replyId, role: "assistant", text: "", requestId },
       ]);
-      const reply = await window.api.assistant.ask(conversationIdRef.current, text, requestId);
-      setItems((prev) => prev.map((item) => (item.id === replyId ? finalItem(replyId, reply) : item)));
+      const reply = await window.api.assistant.ask(
+        conversationIdRef.current,
+        text,
+        requestId,
+        command,
+        files.length ? files.map((f) => ({ name: f.name, mime: f.mime, data: f.data })) : undefined
+      );
+      setItems((prev) => {
+        // A question that made it into the chat becomes editable: it is the
+        // next one after those already saved.
+        const turn = prev.filter((item) => item.role === "user" && item.turn !== undefined).length;
+        return prev.map((item) =>
+          item.id === replyId
+            ? finalItem(replyId, reply)
+            : item.id === userId && reply.ok
+              ? { ...item, turn }
+              : item
+        );
+      });
       afterReply(reply);
     },
     [afterReply, begin]
+  );
+
+  // Edits an earlier question: main copies the chat up to it into a new branch
+  // chat and runs the edited question there. The original is untouched; on
+  // success the branch is opened, on failure the original's transcript is put
+  // back with the reason underneath. `keepAttachments` are ids of the original
+  // question's files to keep.
+  const editAndBranch = useCallback(
+    async (turn: number, raw: string, command?: string, keepAttachments: string[] = []): Promise<void> => {
+      const chatId = conversationIdRef.current;
+      if (!chatId || busyRef.current) return;
+      const text = raw.trim();
+      const before = itemsRef.current;
+      const at = before.findIndex((item) => item.role === "user" && item.turn === turn);
+      if (at < 0) return;
+      const kept = (before[at].attachments ?? []).filter((a) => keepAttachments.includes(a.id));
+      if (!text && !command && kept.length === 0) return;
+      const requestId = crypto.randomUUID();
+      const replyId = nextId.current++;
+      begin(requestId);
+      setItems([
+        ...before.slice(0, at),
+        {
+          id: nextId.current++,
+          role: "user",
+          text,
+          ...(command ? { command } : {}),
+          ...(kept.length ? { attachments: kept } : {}),
+        },
+        { id: replyId, role: "assistant", text: "", requestId },
+      ]);
+      const reply = await window.api.assistant.branch(
+        chatId,
+        turn,
+        text,
+        requestId,
+        command,
+        kept.map((a) => a.id)
+      );
+      if (!reply.ok) {
+        setItems([...before, finalItem(nextId.current++, reply)]);
+        end();
+        return;
+      }
+      afterReply(reply);
+      await openChat(reply.conversationId);
+    },
+    [afterReply, begin, end, openChat]
   );
 
   const regenerate = useCallback(async (): Promise<void> => {
@@ -230,7 +380,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     if (activeRequest.current) void window.api.assistant.stop(activeRequest.current);
   }, []);
 
-  const answerApproval = useCallback((approvalId: string, allow: boolean): void => {
+  const answerApproval = useCallback((approvalId: string, allow: boolean, allowedItems?: string[]): void => {
     setItems((prev) =>
       prev.map((item) =>
         item.approvals?.some((a) => a.approvalId === approvalId)
@@ -238,39 +388,35 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           : item
       )
     );
-    void window.api.assistant.approve(approvalId, allow);
+    void window.api.assistant.approve(approvalId, allow, allowedItems);
   }, []);
+
+  // Summarizes the older part of the open chat now. Failures show as an error
+  // line (the chat itself is untouched).
+  const compact = useCallback(async (): Promise<void> => {
+    const chatId = conversationIdRef.current;
+    if (!chatId || busyRef.current) return;
+    begin("compact");
+    const result = await window.api.assistant.chats.compact(chatId);
+    end();
+    if (result.ok) {
+      await openChat(chatId);
+    } else {
+      setItems((prev) => [
+        ...prev,
+        { id: nextId.current++, role: "error", text: result.reason ?? "Couldn't summarize this chat" },
+      ]);
+    }
+  }, [begin, end, openChat]);
 
   const reset = useCallback((): void => {
     if (busyRef.current) return;
     setConversation(null);
     setTitle(null);
     setUsage(NO_USAGE);
+    setParent(null);
     setItems([]);
   }, [setConversation]);
-
-  // Loads a saved chat into view. Returns false if it no longer exists.
-  const openChat = useCallback(
-    async (id: string): Promise<boolean> => {
-      if (busyRef.current) return false;
-      const chat = await window.api.assistant.chats.open(id);
-      if (!chat.ok) return false;
-      setConversation(id);
-      setTitle(chat.title);
-      setUsage(chat.usage);
-      setItems(
-        chat.items.map((item) => ({
-          id: nextId.current++,
-          role: item.role,
-          text: item.text,
-          toolCalls: item.toolCalls,
-          remembered: item.remembered,
-        }))
-      );
-      return true;
-    },
-    [setConversation]
-  );
 
   return {
     items,
@@ -278,9 +424,12 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     conversationId,
     title,
     usage,
+    parent,
     send,
+    editAndBranch,
     stop,
     regenerate,
+    compact,
     answerApproval,
     reset,
     openChat,

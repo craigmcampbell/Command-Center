@@ -4,7 +4,12 @@
 // back into something a UI can show (a resumed chat has no other source of
 // truth for what was said, so the display is derived rather than stored twice).
 
-import type { AssistantToolCall, AssistantTranscriptItem } from "../../shared/types";
+import type {
+  AssistantAttachment,
+  AssistantToolCall,
+  AssistantTranscriptItem,
+  AssistantTurnTrace,
+} from "../../shared/types";
 
 export interface ToolCall {
   id: string;
@@ -12,10 +17,45 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-export type ChatMessage =
-  | { role: "system" | "user"; content: string }
+// `archived` marks a message that compaction folded into a summary: it stays in
+// the stored history (the transcript and search still show it) but is never
+// sent to the model. `summary` marks the system message holding that summary.
+// Neither flag may reach the provider; assistantCompaction.ts's `toWire`
+// strips them.
+// What goes over the wire: like ChatMessage, but a user message holding images
+// carries its content as parts (the OpenAI shape OpenRouter accepts).
+// `cache_control` marks a prompt-cache breakpoint; only assistantCache.ts sets it.
+export type ContentPart =
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral" } }
+  | { type: "image_url"; image_url: { url: string } };
+export type WireMessage =
+  | { role: "system"; content: string | ContentPart[] }
+  | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
+
+export type ChatMessage =
+  | {
+      role: "system" | "user";
+      content: string;
+      archived?: boolean;
+      summary?: boolean;
+      // A user message that started a slash command: the command's name, and the
+      // instructions put in front of `content` when it is sent to the model.
+      // `content` stays exactly what the user typed (that is what the
+      // transcript, titles and search show).
+      command?: string;
+      injected?: string;
+      // Files attached to a user message. Only images and small text files are
+      // accepted (assistantAttachments.ts); see `toWire` for how they are sent.
+      attachments?: AssistantAttachment[];
+    }
+  // `model` is who answered (OpenRouter's report; a fallback differs from the
+  // configured model). Display only: `toWire` never sends it.
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; archived?: boolean; model?: string }
+  // `attachments` on a tool message are files the tool produced (a generated
+  // image): shown with the reply, never sent back to the model.
+  | { role: "tool"; tool_call_id: string; content: string; archived?: boolean; attachments?: AssistantAttachment[] };
 
 const MAX_FACT_CHARS = 500;
 const MAX_ARGS_CHARS = 160;
@@ -32,6 +72,30 @@ const MAX_TITLE_CHARS = 60;
 // differently live than after a reload.
 export function cleanFact(fact: string): string {
   return fact.replace(/\s+/g, " ").trim().slice(0, MAX_FACT_CHARS);
+}
+
+// Every id a chat's tool calls already use.
+export function usedCallIds(messages: ChatMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "assistant") for (const c of m.tool_calls ?? []) ids.add(c.id);
+  }
+  return ids;
+}
+
+// A provider's call ids are not guaranteed unique: some send none (the client
+// then numbers them per step, so `call_0` recurs every step) and some repeat
+// one. Results, approvals and known-URL lookups are matched by id, so a repeat
+// would pair a result or a verdict with the wrong call. Any id that is empty or
+// already taken (earlier in the chat, or earlier in this step) is replaced.
+export function withUniqueCallIds(calls: ToolCall[], taken: Set<string>, makeId: () => string): ToolCall[] {
+  const seen = new Set(taken);
+  return calls.map((call) => {
+    let id = call.id;
+    while (!id || seen.has(id)) id = makeId();
+    seen.add(id);
+    return id === call.id ? call : { ...call, id };
+  });
 }
 
 export function deriveTitle(firstUserMessage: string): string {
@@ -124,16 +188,37 @@ function factFromArguments(raw: string): string | null {
 // never appear — they are plumbing.
 export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[] {
   const toolResults = new Map<string, string>();
+  const toolFiles = new Map<string, AssistantAttachment[]>();
   for (const m of messages) {
-    if (m.role === "tool") toolResults.set(m.tool_call_id, m.content);
+    if (m.role !== "tool") continue;
+    toolResults.set(m.tool_call_id, m.content);
+    if (m.attachments?.length) toolFiles.set(m.tool_call_id, m.attachments);
   }
 
   const items: AssistantTranscriptItem[] = [];
   let current: AssistantTranscriptItem | null = null;
+  let turn = 0;
 
   for (const m of messages) {
     if (m.role === "user") {
-      items.push({ role: "user", text: m.content, toolCalls: [], remembered: [] });
+      items.push({
+        role: "user",
+        text: m.content,
+        turn: turn++,
+        ...(m.command ? { command: m.command } : {}),
+        ...(m.attachments?.length
+          ? {
+              attachments: m.attachments.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })),
+            }
+          : {}),
+        toolCalls: [],
+        remembered: [],
+      });
+      current = null;
+      continue;
+    }
+    if (m.role === "system" && m.summary) {
+      items.push({ role: "summary", text: m.content, toolCalls: [], remembered: [] });
       current = null;
       continue;
     }
@@ -145,10 +230,18 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
     }
     const text = m.content?.trim();
     if (text) current.text += (current.text ? "\n\n" : "") + text;
+    if (m.model) current.model = m.model;
 
     for (const call of m.tool_calls ?? []) {
       const described = describeToolCall(call, toolResults.get(call.id));
       current.toolCalls.push(described);
+      const produced = toolFiles.get(call.id);
+      if (produced) {
+        current.attachments = [
+          ...(current.attachments ?? []),
+          ...produced.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })),
+        ];
+      }
       if (described.ok && call.function.name === "remember") {
         const fact = factFromArguments(call.function.arguments);
         if (fact) current.remembered.push(fact);
@@ -156,4 +249,36 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
     }
   }
   return items;
+}
+
+// Pairs each assistant item with the trace of the turn that produced it, by
+// which user message it answers. Only a turn that is still in the history can
+// own a reply: a failed attempt was rolled back, so it never labels the answer
+// that stands in its place (a failed regenerate shares that answer's user
+// message). When a reply was regenerated, the latest surviving turn wins.
+export function attachTraces(
+  items: AssistantTranscriptItem[],
+  traces: AssistantTurnTrace[]
+): AssistantTranscriptItem[] {
+  const byUser = new Map<number, AssistantTurnTrace>();
+  for (const trace of traces) {
+    if (trace.outcome === "error") continue;
+    const seen = byUser.get(trace.userIndex);
+    if (!seen || seen.turnSeq < trace.turnSeq) byUser.set(trace.userIndex, trace);
+  }
+  if (byUser.size === 0) return items;
+  let userIndex = -1;
+  let claimed = false;
+  return items.map((item) => {
+    if (item.role === "user") {
+      userIndex++;
+      claimed = false;
+      return item;
+    }
+    if (item.role !== "assistant" || claimed) return item;
+    const trace = byUser.get(userIndex);
+    if (!trace) return item;
+    claimed = true;
+    return { ...item, trace };
+  });
 }

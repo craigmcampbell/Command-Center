@@ -389,7 +389,7 @@ function CardFields({
           value={creditLimit}
           onChange={(e) => onCreditLimitChange(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Credit limit"
+          placeholder="Limit"
         />
       </td>
       <td className="card-col-apr">

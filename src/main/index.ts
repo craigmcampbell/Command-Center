@@ -118,6 +118,7 @@ import { getOpenAIUsage } from "./services/openai";
 import { getFirecrawlUsage } from "./services/firecrawl";
 import {
   answerApproval,
+  assistantLinkWarning,
   askAssistant,
   deleteAssistantChat,
   getAssistantMemory,
@@ -125,19 +126,49 @@ import {
   onAssistantChatTitled,
   openAssistantChat,
   pinAssistantChat,
+  compactAssistantChat,
+  createAssistantFolder,
+  deleteAssistantFolder,
+  listAssistantFolders,
+  moveAssistantChat,
   regenerateAssistant,
+  branchAssistantChat,
+  renameAssistantFolder,
   renameAssistantChat,
   saveAssistantMemory,
   stopAssistant,
   type AskHooks,
 } from "./services/assistant";
+import { attachmentPath, cleanName, readImageDataUrl } from "./services/assistantAttachments";
 import { initAssistantChats } from "./services/assistantChats";
+import { initAssistantSpend, spendToday } from "./services/assistantSpend";
+import { checkAssistantModel } from "./services/assistantModels";
+import { initAssistantTraces } from "./services/assistantTraces";
+import {
+  getCommandSettings,
+  initAssistantCommands,
+  listEnabledCommands,
+  removePromptCommand,
+  savePromptCommand,
+  setSkillSetting,
+} from "./services/assistantCommands";
+import { MUTATING_TOOLS, SKILL_FILE_TOOL, TOOL_DEFS, WEB_TOOLS } from "./services/assistantTools";
 import { proposeMemoryTidy } from "./services/assistantTidy";
+import { cachedMcpTools, closeAllMcp, connectMcpServer, getMcpStatus } from "./services/assistantMcp";
+import {
+  addMcpServer,
+  listMcpServerSettings,
+  removeMcpServer,
+  reorderMcpServers,
+  updateMcpServer,
+} from "./services/settings";
+import type { McpServerInput } from "../shared/types";
 import {
   assistantHotkeyStatus,
   destroyAssistantWindow,
   hideAssistantWindow,
   initAssistantWindow,
+  isAssistantPanel,
   registerAssistantHotkey,
 } from "./services/assistantWindow";
 import { DEFAULT_ASSISTANT_ACCELERATOR } from "../shared/assistant";
@@ -170,6 +201,7 @@ import {
   getSpendingTrends as getYnabTrends,
   getNetWorthHistory as getYnabNetWorth,
   getAccountBalanceHistory as getYnabAccountHistory,
+  getMonthSpending as getYnabMonthSpending,
   getMoneyMovements as getYnabMoneyMovements,
 } from "./services/ynabInsights";
 import {
@@ -180,6 +212,20 @@ import {
   removeBill,
   setBillNote,
 } from "./services/bills";
+import {
+  initDebts,
+  listDebts,
+  addDebt,
+  updateDebt,
+  removeDebt,
+  reorderDebts,
+  listOneTime,
+  addOneTime,
+  updateOneTime,
+  removeOneTime,
+  getDebtPlan,
+  setDebtPlan,
+} from "./services/debts";
 import { initCards, listCards, addCard, updateCard, removeCard } from "./services/cards";
 import {
   initNotes,
@@ -274,6 +320,7 @@ import {
   reorderProcesses,
   renameTab,
   reorderTabs,
+  setTabHidden,
 } from "./services/settings";
 import type {
   GoogleCalendarConfig,
@@ -301,6 +348,7 @@ import type {
   OpenAIScalarConfig,
   OpenAIPeriod,
   FirecrawlScalarConfig,
+  AssistantCommandConfig,
   AssistantScalarConfig,
   RailwayScalarConfig,
   StatsSettings,
@@ -313,12 +361,17 @@ initLinks();
 initProjects();
 initScratchpad();
 initAssistantChats();
+initAssistantSpend();
+// After the chats table: its orphan cleanup joins against it.
+initAssistantTraces();
+initAssistantCommands();
 initHabits();
 initNotes();
 initSettings();
 initTimeTracking();
 initBills();
 initCards();
+initDebts();
 
 // One-time migration: reads config.json (if present — dev's repo-root copy,
 // or an existing packaged install's userData copy) and seeds every settings
@@ -671,10 +724,37 @@ function assistantHooks(sender: Electron.WebContents, requestId: unknown): AskHo
 
 ipcMain.handle(
   "assistant:ask",
-  (evt, conversationId: unknown, message: unknown, requestId: unknown) =>
+  (evt, conversationId: unknown, message: unknown, requestId: unknown, command: unknown, attachments: unknown) =>
     askAssistant(
       typeof conversationId === "string" ? conversationId : null,
       typeof message === "string" ? message : "",
+      assistantHooks(evt.sender, requestId),
+      typeof requestId === "string" ? requestId : undefined,
+      typeof command === "string" && command ? command : undefined,
+      attachments
+    )
+);
+ipcMain.handle(
+  "assistant:branch",
+  (
+    evt,
+    sourceId: unknown,
+    turn: unknown,
+    message: unknown,
+    requestId: unknown,
+    command: unknown,
+    keepAttachments: unknown,
+    attachments: unknown
+  ) =>
+    branchAssistantChat(
+      typeof sourceId === "string" ? sourceId : "",
+      typeof turn === "number" ? turn : -1,
+      typeof message === "string" ? message : "",
+      {
+        command: typeof command === "string" && command ? command : undefined,
+        keepAttachments,
+        attachments,
+      },
       assistantHooks(evt.sender, requestId),
       typeof requestId === "string" ? requestId : undefined
     )
@@ -686,11 +766,38 @@ ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId:
     typeof requestId === "string" ? requestId : undefined
   )
 );
+// A link in a reply opens after a confirm when it looks like it is carrying
+// data out (assistantLinks.ts). Decided here, not in the renderer, so a
+// rendering change can't drop the check.
+ipcMain.handle("assistant:openLink", async (evt, url: unknown, conversationId: unknown) => {
+  if (typeof url !== "string") return false;
+  const warning = assistantLinkWarning(url, typeof conversationId === "string" ? conversationId : null);
+  if (warning) {
+    const options = {
+      type: "warning" as const,
+      buttons: ["Cancel", "Open anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "This link may send data from your chat",
+      detail: `${warning}\n\n${url}`,
+    };
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const { response } =
+      win && !isAssistantPanel(win) ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    if (response !== 1) return false;
+  }
+  await shell.openExternal(url);
+  return true;
+});
 ipcMain.handle("assistant:stop", (_evt, requestId: unknown) => {
   if (typeof requestId === "string") stopAssistant(requestId);
 });
-ipcMain.handle("assistant:approve", (_evt, approvalId: unknown, allow: unknown) => {
-  if (typeof approvalId === "string") answerApproval(approvalId, allow === true);
+ipcMain.handle("assistant:approve", (_evt, approvalId: unknown, allow: unknown, allowedItems: unknown) => {
+  if (typeof approvalId !== "string") return;
+  const items = Array.isArray(allowedItems)
+    ? allowedItems.filter((i): i is string => typeof i === "string")
+    : undefined;
+  answerApproval(approvalId, allow === true, items);
 });
 ipcMain.handle("assistant:chats:list", (_evt, query: unknown) =>
   listAssistantChats(typeof query === "string" ? query : undefined)
@@ -704,6 +811,86 @@ ipcMain.handle("assistant:chats:remove", (_evt, id: unknown) =>
 ipcMain.handle("assistant:chats:rename", (_evt, id: unknown, title: unknown) =>
   renameAssistantChat(typeof id === "string" ? id : "", typeof title === "string" ? title : "")
 );
+ipcMain.handle("assistant:attachments:read", (_evt, id: unknown) =>
+  typeof id === "string" ? readImageDataUrl(id) : null
+);
+ipcMain.handle("assistant:attachments:save", async (evt, id: unknown, name: unknown) => {
+  const source = typeof id === "string" ? attachmentPath(id) : null;
+  if (!source) return { ok: false, reason: "That image is no longer available" };
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  const options = {
+    defaultPath: cleanName(name),
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+  };
+  const picked = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+  if (picked.canceled || !picked.filePath) return { ok: false, cancelled: true };
+  try {
+    fs.copyFileSync(source, picked.filePath);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "Couldn't save the image there" };
+  }
+});
+// Slash commands. Plain handlers: the config reads the skills folder fresh each time.
+ipcMain.handle("assistant:commands:list", () => listEnabledCommands());
+ipcMain.handle("assistant:commands:config", async (): Promise<AssistantCommandConfig> => {
+  const { skillsDir, skills, prompts } = await getCommandSettings();
+  return {
+    skillsDir,
+    skills,
+    prompts,
+    tools: [
+      ...TOOL_DEFS.filter((t) => t.name !== SKILL_FILE_TOOL).map((t) => ({
+        name: t.name,
+        mutating: MUTATING_TOOLS.has(t.name) || t.name === "remember",
+        ...(WEB_TOOLS.has(t.name) ? { external: true } : {}),
+      })),
+      // MCP tools from the last listing. Never in a command's default
+      // allowlist; a custom list can name one.
+      ...cachedMcpTools().map((t) => ({ name: t.name, mutating: !t.readOnly, external: true })),
+    ],
+  };
+});
+// MCP servers: status and the Connect button. The list itself is settings:mcpServers:*.
+ipcMain.handle("assistant:mcp:status", () => getMcpStatus());
+ipcMain.handle("assistant:mcp:connect", (_evt, id: unknown) =>
+  typeof id === "number" ? connectMcpServer(id) : getMcpStatus()
+);
+ipcMain.handle("assistant:commands:setSkill", (_evt, name: unknown, values: any) =>
+  typeof name === "string"
+    ? setSkillSetting(name, { enabled: values?.enabled === true, tools: Array.isArray(values?.tools) ? values.tools : null })
+    : { ok: false, reason: "Missing name" }
+);
+ipcMain.handle("assistant:commands:savePrompt", (_evt, input: any) =>
+  savePromptCommand({
+    name: typeof input?.name === "string" ? input.name : "",
+    description: typeof input?.description === "string" ? input.description : "",
+    prompt: typeof input?.prompt === "string" ? input.prompt : "",
+    enabled: input?.enabled === true,
+    tools: Array.isArray(input?.tools) ? input.tools : null,
+  })
+);
+ipcMain.handle("assistant:commands:removePrompt", (_evt, name: unknown) =>
+  removePromptCommand(typeof name === "string" ? name : "")
+);
+// Folders in the history list.
+ipcMain.handle("assistant:folders:list", () => listAssistantFolders());
+ipcMain.handle("assistant:folders:create", (_evt, name: unknown) =>
+  createAssistantFolder(typeof name === "string" ? name : "")
+);
+ipcMain.handle("assistant:folders:rename", (_evt, id: unknown, name: unknown) =>
+  renameAssistantFolder(typeof id === "string" ? id : "", typeof name === "string" ? name : "")
+);
+ipcMain.handle("assistant:folders:remove", (_evt, id: unknown) =>
+  deleteAssistantFolder(typeof id === "string" ? id : "")
+);
+ipcMain.handle("assistant:chats:move", (_evt, id: unknown, folderId: unknown) =>
+  moveAssistantChat(typeof id === "string" ? id : "", typeof folderId === "string" ? folderId : null)
+);
+// A summarize request costs money and isn't idempotent: plain handle, not readHandler.
+ipcMain.handle("assistant:chats:compact", (_evt, id: unknown) =>
+  compactAssistantChat(typeof id === "string" ? id : "")
+);
 ipcMain.handle("assistant:chats:pin", (_evt, id: unknown, pinned: unknown) =>
   pinAssistantChat(typeof id === "string" ? id : "", pinned === true)
 );
@@ -711,6 +898,8 @@ ipcMain.handle("assistant:chats:pin", (_evt, id: unknown, pinned: unknown) =>
 // the user decides, via the ordinary memory:save).
 ipcMain.handle("assistant:memory:tidy", () => proposeMemoryTidy());
 ipcMain.handle("assistant:hotkeyStatus", () => assistantHotkeyStatus());
+ipcMain.handle("assistant:spendToday", () => spendToday());
+ipcMain.handle("assistant:checkModel", (_evt, slug: unknown) => checkAssistantModel(slug));
 ipcMain.handle("assistant:hidePanel", () => hideAssistantWindow());
 // The quick panel hands its chat to the dashboard: hide it, bring the main
 // window forward (it may be hidden to the tray), and tell it what to show.
@@ -851,6 +1040,9 @@ readHandler("ynab:netWorth", () => getYnabNetWorth(getYnabSettings()));
 readHandler("ynab:accountHistory", (_evt, accountIds: string[]) =>
   getYnabAccountHistory(getYnabSettings(), accountIds)
 );
+readHandler("ynab:monthSpending", (_evt, accountIds: string[]) =>
+  getYnabMonthSpending(getYnabSettings(), accountIds)
+);
 readHandler("ynab:moneyMovements", () => getYnabMoneyMovements(getYnabSettings()));
 ipcMain.handle("ynab:toggleAccountHidden", async (_evt, accountId: string) => {
   toggleYnabAccountHidden(accountId);
@@ -870,6 +1062,36 @@ ipcMain.handle(
 );
 ipcMain.handle("bills:remove", (_evt, id: number) => removeBill(id));
 ipcMain.handle("bills:setNote", (_evt, id: number, note: string) => setBillNote(id, note));
+
+// Debt tab: plan inputs only — the projection is computed in the renderer.
+ipcMain.handle("debts:list", () => listDebts());
+ipcMain.handle("debts:add", (_evt, input) => addDebt(input));
+ipcMain.handle("debts:update", (_evt, id: number, input) => updateDebt(id, input));
+ipcMain.handle("debts:remove", (_evt, id: number) => removeDebt(id));
+ipcMain.handle("debts:reorder", (_evt, ids: number[]) => reorderDebts(ids));
+ipcMain.handle("debts:oneTimeList", () => listOneTime());
+ipcMain.handle("debts:oneTimeAdd", (_evt, input) => addOneTime(input));
+ipcMain.handle("debts:oneTimeUpdate", (_evt, id: number, input) => updateOneTime(id, input));
+ipcMain.handle("debts:oneTimeRemove", (_evt, id: number) => removeOneTime(id));
+ipcMain.handle("debts:getPlan", () => getDebtPlan());
+ipcMain.handle("debts:setPlan", (_evt, plan) => setDebtPlan(plan));
+ipcMain.handle(
+  "debts:exportMarkdown",
+  async (_evt, markdown: string, defaultName: string): Promise<ExportResult> => {
+    const result = await dialog.showSaveDialog({
+      title: "Export debt plan",
+      defaultPath: path.basename(String(defaultName || "debt-plan.md")),
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      await fs.promises.writeFile(result.filePath, String(markdown), "utf8");
+      return { ok: true, path: result.filePath };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : "Could not write the file" };
+    }
+  }
+);
 
 // Cards: manually-tracked credit cards (name, credit limit, APR), shown
 // alongside Bills in the Finances tab.
@@ -1080,6 +1302,14 @@ ipcMain.handle("settings:railway:update", (_evt, values: RailwayScalarConfig) =>
   updateRailwaySettings(values)
 );
 
+ipcMain.handle("settings:mcpServers:list", () => listMcpServerSettings());
+ipcMain.handle("settings:mcpServers:add", (_evt, input: McpServerInput) => addMcpServer(input));
+ipcMain.handle("settings:mcpServers:update", (_evt, id: number, input: McpServerInput) =>
+  updateMcpServer(id, input)
+);
+ipcMain.handle("settings:mcpServers:remove", (_evt, id: number) => removeMcpServer(id));
+ipcMain.handle("settings:mcpServers:reorder", (_evt, orderedIds: number[]) => reorderMcpServers(orderedIds));
+
 ipcMain.handle("settings:youtubeChannels:list", () => listYouTubeChannelSettings());
 ipcMain.handle("settings:youtubeChannels:add", (_evt, label: string, channelId: string) =>
   addYouTubeChannel(label, channelId)
@@ -1140,6 +1370,7 @@ ipcMain.handle("settings:processes:reorder", (_evt, orderedIds: string[]) =>
 );
 
 ipcMain.handle("settings:tabs:rename", (_evt, id: string, label: string) => renameTab(id, label));
+ipcMain.handle("settings:tabs:setHidden", (_evt, id: string, hidden: boolean) => setTabHidden(id, hidden));
 ipcMain.handle("settings:tabs:reorder", (_evt, orderedIds: string[]) => reorderTabs(orderedIds));
 
 app.whenReady().then(() => {
@@ -1197,5 +1428,6 @@ app.on("before-quit", (event) => {
   // would make the hotkey dead until the next launch.
   destroyCaptureWindow();
   destroyAssistantWindow();
-  stopAllProcesses().finally(() => app.exit());
+  // MCP stdio servers are child processes too.
+  Promise.allSettled([stopAllProcesses(), closeAllMcp()]).finally(() => app.exit());
 });

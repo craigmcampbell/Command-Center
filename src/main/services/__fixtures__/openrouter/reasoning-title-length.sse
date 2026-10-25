@@ -1,0 +1,16 @@
+: OPENROUTER PROCESSING
+
+data: {"id": "gen-1761318050-title", "provider": "DeepSeek", "model": "deepseek/deepseek-r1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "", "reasoning": "The user wants a title for a chat about "}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318050-title", "provider": "DeepSeek", "model": "deepseek/deepseek-r1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"content": "", "reasoning": "planning a ship date. Let me think about what would be concise"}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id": "gen-1761318050-title", "provider": "DeepSeek", "model": "deepseek/deepseek-r1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"content": "", "reasoning": " and descriptive. Options: \"Ship date planning\", \"Planning the"}, "finish_reason": null, "native_finish_reason": null, "logprobs": null}]}
+
+data: {"id": "gen-1761318050-title", "provider": "DeepSeek", "model": "deepseek/deepseek-r1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "length", "native_finish_reason": "length", "logprobs": null}]}
+
+data: {"id": "gen-1761318050-title", "provider": "DeepSeek", "model": "deepseek/deepseek-r1", "object": "chat.completion.chunk", "created": 1761318000, "choices": [], "usage": {"prompt_tokens": 48, "completion_tokens": 256, "total_tokens": 304, "cost": 0.000563, "is_byok": false, "prompt_tokens_details": {"cached_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 256}}}
+
+data: [DONE]
+

@@ -7,11 +7,15 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRendererEvent } from "electron";
 import type {
   AppAlert,
+  McpServerInput,
   AppCommand,
   BackupSettings,
   CaptureSettings,
   CaptureTarget,
   CommandCenterApi,
+  DebtInput,
+  DebtOneTimeInput,
+  DebtPlanSettings,
   DockerSettings,
   GoogleCalendarConfig,
   GrimoireConfig,
@@ -25,6 +29,7 @@ import type {
   OpenAIPeriod,
   OpenAIScalarConfig,
   FirecrawlScalarConfig,
+  AssistantAttachmentInput,
   AssistantScalarConfig,
   AssistantDelta,
   AssistantApproval,
@@ -221,13 +226,36 @@ const api: CommandCenterApi = {
   },
 
   assistant: {
-    ask: (conversationId: string | null, message: string, requestId: string) =>
-      ipcRenderer.invoke("assistant:ask", conversationId, message, requestId),
+    ask: (
+      conversationId: string | null,
+      message: string,
+      requestId: string,
+      command?: string,
+      attachments?: AssistantAttachmentInput[]
+    ) => ipcRenderer.invoke("assistant:ask", conversationId, message, requestId, command, attachments),
+    folders: {
+      list: () => ipcRenderer.invoke("assistant:folders:list"),
+      create: (name: string) => ipcRenderer.invoke("assistant:folders:create", name),
+      rename: (id: string, name: string) => ipcRenderer.invoke("assistant:folders:rename", id, name),
+      remove: (id: string) => ipcRenderer.invoke("assistant:folders:remove", id),
+    },
+    readAttachment: (id: string) => ipcRenderer.invoke("assistant:attachments:read", id),
+    saveAttachment: (id: string, name: string) => ipcRenderer.invoke("assistant:attachments:save", id, name),
     regenerate: (conversationId: string, requestId: string) =>
       ipcRenderer.invoke("assistant:regenerate", conversationId, requestId),
+    branch: (
+      sourceId: string,
+      turn: number,
+      message: string,
+      requestId: string,
+      command?: string,
+      keepAttachments?: string[],
+      attachments?: unknown
+    ) =>
+      ipcRenderer.invoke("assistant:branch", sourceId, turn, message, requestId, command, keepAttachments, attachments),
     stop: (requestId: string) => ipcRenderer.invoke("assistant:stop", requestId),
-    approve: (approvalId: string, allow: boolean) =>
-      ipcRenderer.invoke("assistant:approve", approvalId, allow),
+    approve: (approvalId: string, allow: boolean, allowedItems?: string[]) =>
+      ipcRenderer.invoke("assistant:approve", approvalId, allow, allowedItems),
     // Same shape as onCommand: the raw IpcRendererEvent (which carries
     // `sender`) never crosses the bridge, and the unsubscribe is returned.
     onDelta: (cb: (delta: AssistantDelta) => void) => {
@@ -258,9 +286,27 @@ const api: CommandCenterApi = {
       rename: (id: string, title: string) =>
         ipcRenderer.invoke("assistant:chats:rename", id, title),
       pin: (id: string, pinned: boolean) => ipcRenderer.invoke("assistant:chats:pin", id, pinned),
+      compact: (id: string) => ipcRenderer.invoke("assistant:chats:compact", id),
+      move: (id: string, folderId: string | null) => ipcRenderer.invoke("assistant:chats:move", id, folderId),
+    },
+    commands: {
+      list: () => ipcRenderer.invoke("assistant:commands:list"),
+      config: () => ipcRenderer.invoke("assistant:commands:config"),
+      setSkill: (name: string, values: { enabled: boolean; tools: string[] | null }) =>
+        ipcRenderer.invoke("assistant:commands:setSkill", name, values),
+      savePrompt: (input: unknown) => ipcRenderer.invoke("assistant:commands:savePrompt", input),
+      removePrompt: (name: string) => ipcRenderer.invoke("assistant:commands:removePrompt", name),
+    },
+    mcp: {
+      status: () => ipcRenderer.invoke("assistant:mcp:status"),
+      connect: (id: number) => ipcRenderer.invoke("assistant:mcp:connect", id),
     },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
+    spendToday: () => ipcRenderer.invoke("assistant:spendToday"),
+    checkModel: (slug: string) => ipcRenderer.invoke("assistant:checkModel", slug),
     hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),
+    openLink: (url: string, conversationId: string | null) =>
+      ipcRenderer.invoke("assistant:openLink", url, conversationId),
     openInDashboard: (chatId: string | null, openSettings?: boolean) =>
       ipcRenderer.invoke("assistant:openInDashboard", chatId, openSettings === true),
     memory: {
@@ -344,6 +390,7 @@ const api: CommandCenterApi = {
     trends: () => ipcRenderer.invoke("ynab:trends"),
     netWorth: () => ipcRenderer.invoke("ynab:netWorth"),
     accountHistory: (accountIds: string[]) => ipcRenderer.invoke("ynab:accountHistory", accountIds),
+    monthSpending: (accountIds: string[]) => ipcRenderer.invoke("ynab:monthSpending", accountIds),
     moneyMovements: () => ipcRenderer.invoke("ynab:moneyMovements"),
     toggleAccountHidden: (accountId: string) =>
       ipcRenderer.invoke("ynab:toggleAccountHidden", accountId),
@@ -357,6 +404,23 @@ const api: CommandCenterApi = {
       ipcRenderer.invoke("bills:update", id, label, dueDay, autopay),
     remove: (id: number) => ipcRenderer.invoke("bills:remove", id),
     setNote: (id: number, note: string) => ipcRenderer.invoke("bills:setNote", id, note),
+  },
+
+  debts: {
+    list: () => ipcRenderer.invoke("debts:list"),
+    add: (input: DebtInput) => ipcRenderer.invoke("debts:add", input),
+    update: (id: number, input: DebtInput) => ipcRenderer.invoke("debts:update", id, input),
+    remove: (id: number) => ipcRenderer.invoke("debts:remove", id),
+    reorder: (orderedIds: number[]) => ipcRenderer.invoke("debts:reorder", orderedIds),
+    oneTimeList: () => ipcRenderer.invoke("debts:oneTimeList"),
+    oneTimeAdd: (input: DebtOneTimeInput) => ipcRenderer.invoke("debts:oneTimeAdd", input),
+    oneTimeUpdate: (id: number, input: DebtOneTimeInput) =>
+      ipcRenderer.invoke("debts:oneTimeUpdate", id, input),
+    oneTimeRemove: (id: number) => ipcRenderer.invoke("debts:oneTimeRemove", id),
+    getPlan: () => ipcRenderer.invoke("debts:getPlan"),
+    setPlan: (plan: DebtPlanSettings) => ipcRenderer.invoke("debts:setPlan", plan),
+    exportMarkdown: (markdown: string, defaultName: string) =>
+      ipcRenderer.invoke("debts:exportMarkdown", markdown, defaultName),
   },
 
   cards: {
@@ -476,6 +540,14 @@ const api: CommandCenterApi = {
       update: (values: RailwayScalarConfig) =>
         ipcRenderer.invoke("settings:railway:update", values),
     },
+    mcpServers: {
+      list: () => ipcRenderer.invoke("settings:mcpServers:list"),
+      add: (input: McpServerInput) => ipcRenderer.invoke("settings:mcpServers:add", input),
+      update: (id: number, input: McpServerInput) =>
+        ipcRenderer.invoke("settings:mcpServers:update", id, input),
+      remove: (id: number) => ipcRenderer.invoke("settings:mcpServers:remove", id),
+      reorder: (orderedIds: number[]) => ipcRenderer.invoke("settings:mcpServers:reorder", orderedIds),
+    },
     youtubeChannels: {
       list: () => ipcRenderer.invoke("settings:youtubeChannels:list"),
       add: (label: string, channelId: string) =>
@@ -525,6 +597,8 @@ const api: CommandCenterApi = {
     tabs: {
       rename: (id: string, label: string) => ipcRenderer.invoke("settings:tabs:rename", id, label),
       reorder: (orderedIds: string[]) => ipcRenderer.invoke("settings:tabs:reorder", orderedIds),
+      setHidden: (id: string, hidden: boolean) =>
+        ipcRenderer.invoke("settings:tabs:setHidden", id, hidden),
     },
   },
 };

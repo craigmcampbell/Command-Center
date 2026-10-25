@@ -8,6 +8,9 @@ import type { MouseEvent } from "react";
 export interface MarkdownPreviewHandlers {
   onToggleTask?: (from: number, to: number, nextChecked: boolean) => void;
   onOpenWikilink?: (filePath: string, label: string) => void;
+  // Replaces window.api.openUrl for external links (assistant replies route
+  // through a main-side check instead).
+  onOpenUrl?: (href: string) => void;
 }
 
 export function handleMarkdownPreviewClick(
@@ -54,6 +57,8 @@ export function handleMarkdownPreviewClick(
   if (link) {
     e.preventDefault();
     const href = link.getAttribute("href");
-    if (href) void window.api.openUrl(href);
+    if (!href) return;
+    if (handlers.onOpenUrl) handlers.onOpenUrl(href);
+    else void window.api.openUrl(href);
   }
 }

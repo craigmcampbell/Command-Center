@@ -1,3 +1,5 @@
+import type { DebtStrategy } from "./debtPlan";
+
 // Shared contract between main (services + IPC), preload (the bridge), and
 // the renderer (React components). This is what makes `window.api` typed.
 
@@ -86,6 +88,15 @@ export interface OpenRouterScalarConfig {
 export interface OpenAIScalarConfig {
   adminApiKey?: string;
   refreshSeconds?: number;
+  // A regular project key, used only by the Assistant's image generation (an
+  // Admin key can't generate images).
+  apiKey?: string;
+  // Defaults to gpt-image-1.
+  imageModel?: string;
+  // What the Assistant uses when neither you nor it asks for something else.
+  // Unset means square (1024x1024) and medium quality.
+  imageShape?: "square" | "landscape" | "portrait";
+  imageQuality?: "low" | "medium" | "high";
 }
 
 // A Firecrawl API key from their dashboard. Powers the AI tab's Firecrawl
@@ -121,6 +132,41 @@ export interface AssistantScalarConfig {
   // Global hotkey for the quick panel. Unset means the default combo; an empty
   // string means the user turned the hotkey off.
   quickHotkey?: string;
+  // Summarize the older part of a chat once it would exceed roughly this many
+  // tokens (estimated). Unset means the default; 0 turns automatic compaction off.
+  compactAtTokens?: number;
+  // Models OpenRouter tries, in order, when `model` fails (its `models`
+  // parameter). Empty or unset means none.
+  fallbackModels?: string[];
+  // Spending caps in USD, from the cost OpenRouter reports. Unset means no cap.
+  // Per reply: the loop stops calling the model once a reply has cost this
+  // much. Per day: new turns are refused once today's assistant spend (replies,
+  // titles, summaries) has reached it.
+  maxCostPerReplyUsd?: number;
+  maxCostPerDayUsd?: number;
+  // Add prompt-cache breakpoints for models whose provider needs them
+  // (Anthropic). Unset means on; only an explicit false turns it off.
+  promptCache?: boolean;
+}
+
+// Today's assistant spend, for the daily cap. `unpriced` counts requests whose
+// provider reported no cost: they are NOT in `costUsd`, and are not $0.
+export interface AssistantSpendToday {
+  costUsd: number;
+  requests: number;
+  unpriced: number;
+}
+
+// What OpenRouter's model list says about a slug, checked when Settings saves it.
+export interface AssistantModelCheck {
+  ok: boolean;
+  reason?: string;
+  slug: string;
+  known?: boolean;
+  tools?: boolean;
+  contextLength?: number;
+  // A compactAtTokens value that fits the model's context window.
+  suggestedCompactAt?: number;
 }
 
 // Railway account and workspace tokens both use the Bearer header. The
@@ -177,6 +223,8 @@ export interface TabConfig {
   id: string;
   label: string;
   sortOrder: number;
+  /** Not shown in the tab strip or the command palette (still reachable by a link). */
+  hidden: boolean;
 }
 
 // One tool the assistant ran while producing a reply — shown as a chip, and in
@@ -225,6 +273,189 @@ export interface AssistantReply {
   toolCalls: AssistantToolCall[];
   // Facts the model saved to memory during this reply.
   remembered: string[];
+  // Images the assistant generated during this reply.
+  attachments?: AssistantAttachmentInfo[];
+  // Older messages were summarized before this reply, so the on-screen
+  // transcript (which has a divider where they were) should be reloaded.
+  compacted?: boolean;
+  // The model that wrote the final step, as OpenRouter reports it — a
+  // fallback when the configured model failed.
+  model?: string;
+  // Some request in this reply reported no cost, so the spending caps could
+  // not count it. Set only when a cap is configured.
+  costUnreported?: boolean;
+  // What the turn's requests and tool calls cost and how long they took. Also
+  // set on a failed reply, which is when it is most useful.
+  trace?: AssistantTurnTrace;
+}
+
+// ---- turn traces (services/assistantTraces.ts) ----
+// Sizes and metadata only: no prompt text, reply text, arguments or results.
+
+// One model request. `purpose` tells the reply's own steps apart from the
+// summary request compaction makes first and the title request beside it.
+export interface AssistantTraceRequest {
+  kind: "request";
+  purpose: "reply" | "compact" | "title";
+  // The reply step (0-based); compaction and title requests are -1.
+  step: number;
+  model: string;
+  messageCount: number;
+  estInputTokens: number;
+  latencyMs: number;
+  // Until the first streamed text. Absent when no text streamed (a tool-only
+  // step, an error, or a non-streamed answer).
+  firstTokenMs?: number;
+  finishReason?: string;
+  usage?: AssistantUsage;
+  toolCalls: number;
+  outputChars: number;
+  error?: string;
+  aborted?: boolean;
+}
+
+export interface AssistantTraceTool {
+  kind: "tool";
+  step: number;
+  name: string;
+  // "none": the call needed no confirmation.
+  approval: "none" | "allowed" | "declined";
+  // Time spent waiting on the confirmation card.
+  waitMs?: number;
+  durationMs: number;
+  ok: boolean;
+  resultChars: number;
+}
+
+export interface AssistantTurnTrace {
+  // Per chat, from 1; 0 until the trace has been stored.
+  turnSeq: number;
+  // Which user message of the chat (0-based, archived ones included) this turn
+  // answered — how a reopened chat pairs a trace with its reply.
+  userIndex: number;
+  startedAt: number;
+  durationMs: number;
+  model: string;
+  regenerate?: boolean;
+  command?: string;
+  outcome: "ok" | "stopped" | "error";
+  error?: string;
+  // The reply's own requests; compaction and the title are billed to the chat
+  // separately and are not included here.
+  usage: AssistantUsage;
+  steps: (AssistantTraceRequest | AssistantTraceTool)[];
+}
+
+// A file attached to a user message. Images live on disk (named by their hash);
+// text files are kept inline in the stored message. `text` is only ever in main.
+export interface AssistantAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  kind: "image" | "text";
+  size: number;
+  text?: string;
+  // The text was cut to fit; the model was told.
+  truncated?: boolean;
+}
+
+// What the transcript and composer need to show one: no file contents.
+export type AssistantAttachmentInfo = Pick<AssistantAttachment, "id" | "name" | "mime" | "kind" | "size">;
+
+// A file as the renderer hands it to main with the message.
+export interface AssistantAttachmentInput {
+  name: string;
+  mime: string;
+  data: Uint8Array;
+}
+
+// A slash command: an enabled skill or saved prompt.
+export interface AssistantCommandInfo {
+  name: string;
+  description: string;
+  kind: "skill" | "prompt";
+}
+
+export interface AssistantCommandSetting {
+  name: string;
+  description: string;
+  enabled: boolean;
+  // null = the default allowlist (every tool that only reads).
+  tools: string[] | null;
+  // Saved prompts only.
+  prompt?: string;
+}
+
+export interface AssistantToolInfo {
+  name: string;
+  // Changes data, or writes to memory.
+  mutating: boolean;
+  // Reaches the internet (and spends credits).
+  external?: boolean;
+}
+
+export interface AssistantCommandConfig {
+  skillsDir: string;
+  skills: AssistantCommandSetting[];
+  prompts: AssistantCommandSetting[];
+  tools: AssistantToolInfo[];
+}
+
+// ---- Assistant: MCP servers ----
+//
+// Servers the Assistant can call tools on (Settings → Assistant → MCP servers).
+// Main process only: the renderer edits this list and reads a status, and never
+// talks to a server itself. See services/assistantMcp.ts.
+
+export type McpTransport = "stdio" | "http";
+
+export interface McpServerConfig {
+  id: number;
+  label: string;
+  transport: McpTransport;
+  // stdio: the command to spawn, its arguments, and extra environment variables.
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  // http (Streamable HTTP): the endpoint and an optional bearer token.
+  url?: string;
+  bearerToken?: string;
+  enabled: boolean;
+  // Run tools the server marks `readOnlyHint: true` without asking. Off by default.
+  trustReadOnly: boolean;
+  sortOrder: number;
+}
+
+export type McpServerInput = Omit<McpServerConfig, "id" | "sortOrder">;
+
+export interface McpToolStatus {
+  // What the model calls it: mcp__<server>__<tool>.
+  name: string;
+  // The server's own name for it.
+  tool: string;
+  description?: string;
+  readOnly: boolean;
+  // Runs without a confirmation card (read-only AND the server is trusted for that).
+  autoRun: boolean;
+}
+
+export interface McpServerStatus {
+  id: number;
+  label: string;
+  // idle = enabled but not connected yet (connections are made on first use).
+  state: "disabled" | "idle" | "connecting" | "connected" | "failed";
+  reason?: string;
+  tools: McpToolStatus[];
+}
+
+export interface AssistantCommandResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface AssistantCompactResult {
+  ok: boolean;
+  reason?: string;
 }
 
 // One row of the Assistant's chat history list.
@@ -233,6 +464,18 @@ export interface AssistantChatSummary {
   title: string;
   pinned: boolean;
   updatedAt: number; // epoch ms
+  // The folder it is filed in, or null for the top level.
+  folderId: string | null;
+  // A branch's parent chat (made by editing one of its questions); null for an
+  // ordinary chat or once the parent is deleted.
+  parentId: string | null;
+}
+
+// A folder in the chat history list. Folders are flat and only group chats:
+// deleting one moves its chats back to the top level, never deletes them.
+export interface AssistantFolder {
+  id: string;
+  name: string;
 }
 
 // Tokens and cost for one reply, or running totals for a whole chat.
@@ -241,15 +484,33 @@ export interface AssistantUsage {
   promptTokens: number;
   completionTokens: number;
   costUsd: number | null;
+  // Prompt tokens read from / written to the provider's prompt cache. Both are
+  // already counted in promptTokens. Absent (not 0) when the provider never
+  // reported them, so "nothing was cached" and "unknown" stay distinguishable.
+  cachedTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 // One turn of a stored chat, rebuilt for display. An assistant item is the
 // whole reply to one user message (every model step, plus its tool chips).
 export interface AssistantTranscriptItem {
-  role: "user" | "assistant";
+  // "summary" is the divider compaction leaves where older messages were
+  // folded away; `text` is the summary the model now sees in their place.
+  role: "user" | "assistant" | "summary";
   text: string;
+  // On a user item: the slash command that started the turn.
+  command?: string;
+  // On an assistant item: the model that answered, when it was recorded.
+  model?: string;
+  // On a user item: its 0-based place among the chat's user messages, which is
+  // how an edit names the question to branch from.
+  turn?: number;
+  attachments?: AssistantAttachmentInfo[];
   toolCalls: AssistantToolCall[];
   remembered: string[];
+  // On an assistant item: the trace of the turn that produced it, when one was
+  // recorded (turns from before traces existed have none).
+  trace?: AssistantTurnTrace;
 }
 
 export interface AssistantChatResult {
@@ -260,6 +521,8 @@ export interface AssistantChatResult {
   pinned: boolean;
   usage: AssistantUsage;
   items: AssistantTranscriptItem[];
+  // Set on a branch whose parent still exists.
+  parent?: { id: string; title: string } | null;
 }
 
 // The model wants to do something that changes data. Main holds the tool call
@@ -271,6 +534,9 @@ export interface AssistantApproval {
   approvalId: string;
   tool: string;
   summary: string;
+  // Present when several changes in one step share a card: each can be
+  // ticked or not. `tool` is "batch" and `summary` just counts them.
+  items?: { itemId: string; tool: string; summary: string }[];
 }
 
 // A chunk of streamed reply text, pushed from main while `assistant:ask` is
@@ -1514,6 +1780,49 @@ export interface CardItem {
   ynabAccountId: string | null;
 }
 
+// ---- Debt paydown plan (Debt tab) ----
+
+// A balance being paid down. `balance` is the manual figure; when the Debt is
+// linked to a YNAB account and `balance` is null the live balance owed is used
+// instead (a manual figure wins as an override). `payInFullSpending` is the
+// part of that balance cleared in full each month, excluded from the plan —
+// either typed by hand or (payInFullAuto) this month's spending in YNAB.
+// See GLOSSARY.md and docs ADR 0001. `cardId` is a one-time prefill source,
+// not a live coupling.
+export interface DebtItem {
+  id: number;
+  name: string;
+  balance: number | null;
+  apr: number;
+  minPayment: number;
+  payInFullSpending: number;
+  /** Linked debts only: use this month's YNAB spending instead of the typed amount. */
+  payInFullAuto: boolean;
+  ynabAccountId: string | null;
+  cardId: number | null;
+  sortOrder: number;
+}
+
+export type DebtInput = Omit<DebtItem, "id" | "sortOrder">;
+
+export interface DebtOneTimePayment {
+  id: number;
+  /** "YYYY-MM" */
+  month: string;
+  amount: number;
+  /** null = follow the strategy. */
+  targetDebtId: number | null;
+}
+
+export type DebtOneTimeInput = Omit<DebtOneTimePayment, "id">;
+
+export interface DebtPlanSettings {
+  extra: number;
+  strategy: DebtStrategy;
+  startsNextMonth: boolean;
+  customOrder: number[];
+}
+
 // Input for manually adding a transaction — amount is dollars, signed
 // (negative = outflow), converted to milliunits server-side. payeeId wins
 // over payeeName when a payee was picked from the autocomplete list; a typed
@@ -1597,6 +1906,14 @@ export interface YnabAccountHistoryResult {
   reason?: string;
   months: string[];
   balances: Record<string, number[]>;
+}
+
+// Month-to-date spending per YNAB account id, in dollars (refunds netted off,
+// never below zero). See getMonthSpending in ynabInsights.ts.
+export interface YnabMonthSpendingResult {
+  ok: boolean;
+  reason?: string;
+  spending: Record<string, number>;
 }
 
 // A budget reassignment between categories. A null side is Ready to Assign.
@@ -1893,13 +2210,30 @@ export interface CommandCenterApi {
     ask: (
       conversationId: string | null,
       message: string,
-      requestId: string
+      requestId: string,
+      // A slash command (an enabled skill or saved prompt) to run this turn with.
+      command?: string,
+      attachments?: AssistantAttachmentInput[]
     ) => Promise<AssistantReply>;
     // Re-runs the last question in a chat, replacing its answer.
     regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
+    // Edits an earlier question (`turn`: its index among the chat's user
+    // messages) as a new branch chat; the original is untouched. On success the
+    // reply's conversationId is the branch. `keepAttachments` are ids of the
+    // original question's files to keep; `attachments` are new ones.
+    branch: (
+      sourceId: string,
+      turn: number,
+      message: string,
+      requestId: string,
+      command?: string,
+      keepAttachments?: string[],
+      attachments?: AssistantAttachmentInput[]
+    ) => Promise<AssistantReply>;
     stop: (requestId: string) => Promise<void>;
-    // Answers an approval card; unanswered cards time out as denied.
-    approve: (approvalId: string, allow: boolean) => Promise<void>;
+    // Answers an approval card; unanswered cards time out as denied. For a
+    // batch card, `allowedItems` lists the ticked item ids (omitted = all).
+    approve: (approvalId: string, allow: boolean, allowedItems?: string[]) => Promise<void>;
     onDelta: (cb: (delta: AssistantDelta) => void) => () => void;
     onApproval: (cb: (approval: AssistantApproval) => void) => () => void;
     // Live tool activity for a running request (start/end of each call).
@@ -1910,9 +2244,55 @@ export interface CommandCenterApi {
       remove: (id: string) => Promise<{ ok: boolean }>;
       rename: (id: string, title: string) => Promise<{ ok: boolean }>;
       pin: (id: string, pinned: boolean) => Promise<{ ok: boolean }>;
+      // Files a chat in a folder; null returns it to the top level.
+      move: (id: string, folderId: string | null) => Promise<{ ok: boolean }>;
+      // Summarizes the older part of a chat now, regardless of its size.
+      compact: (id: string) => Promise<AssistantCompactResult>;
+    };
+    folders: {
+      list: () => Promise<AssistantFolder[]>;
+      create: (name: string) => Promise<{ ok: boolean; folder?: AssistantFolder }>;
+      rename: (id: string, name: string) => Promise<{ ok: boolean }>;
+      // Its chats go back to the top level.
+      remove: (id: string) => Promise<{ ok: boolean }>;
+    };
+    // An image attachment as a data URL, for showing it in the transcript.
+    // null when the file is gone.
+    readAttachment: (id: string) => Promise<string | null>;
+    // Opens a save dialog and copies an image attachment to where the user picks.
+    saveAttachment: (id: string, name: string) => Promise<{ ok: boolean; cancelled?: boolean; reason?: string }>;
+    commands: {
+      // Enabled commands, for the composer's "/" picker.
+      list: () => Promise<AssistantCommandInfo[]>;
+      // Everything Settings needs: every skill found, every saved prompt, the tools.
+      config: () => Promise<AssistantCommandConfig>;
+      setSkill: (
+        name: string,
+        values: { enabled: boolean; tools: string[] | null }
+      ) => Promise<AssistantCommandResult>;
+      savePrompt: (input: {
+        name: string;
+        description: string;
+        prompt: string;
+        enabled: boolean;
+        tools: string[] | null;
+      }) => Promise<AssistantCommandResult>;
+      removePrompt: (name: string) => Promise<AssistantCommandResult>;
+    };
+    mcp: {
+      status: () => Promise<McpServerStatus[]>;
+      // Connects (or reconnects) one server now and returns every server's status.
+      connect: (id: number) => Promise<McpServerStatus[]>;
     };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
+    // Today's spend across every assistant request, for the daily cap.
+    spendToday: () => Promise<AssistantSpendToday>;
+    // Looks a slug up in OpenRouter's public model list.
+    checkModel: (slug: string) => Promise<AssistantModelCheck>;
     hidePanel: () => Promise<void>;
+    // Opens a link from an assistant reply, after a native confirm when main
+    // judges it to be carrying data (see services/assistantLinks.ts).
+    openLink: (url: string, conversationId: string | null) => Promise<boolean>;
     // `openSettings` also opens Settings → Assistant (for a setup error).
     openInDashboard: (chatId: string | null, openSettings?: boolean) => Promise<void>;
     memory: {
@@ -1967,6 +2347,7 @@ export interface CommandCenterApi {
     trends: () => Promise<YnabTrendsResult>;
     netWorth: () => Promise<YnabNetWorthResult>;
     accountHistory: (accountIds: string[]) => Promise<YnabAccountHistoryResult>;
+    monthSpending: (accountIds: string[]) => Promise<YnabMonthSpendingResult>;
     moneyMovements: () => Promise<YnabMoneyMovementsResult>;
     toggleAccountHidden: (accountId: string) => Promise<YnabAccountsResult>;
   };
@@ -1976,6 +2357,20 @@ export interface CommandCenterApi {
     update: (id: number, label: string, dueDay: number, autopay: boolean) => Promise<BillItem[]>;
     remove: (id: number) => Promise<BillItem[]>;
     setNote: (id: number, note: string) => Promise<BillItem[]>;
+  };
+  debts: {
+    list: () => Promise<DebtItem[]>;
+    add: (input: DebtInput) => Promise<DebtItem[]>;
+    update: (id: number, input: DebtInput) => Promise<DebtItem[]>;
+    remove: (id: number) => Promise<DebtItem[]>;
+    reorder: (orderedIds: number[]) => Promise<DebtItem[]>;
+    oneTimeList: () => Promise<DebtOneTimePayment[]>;
+    oneTimeAdd: (input: DebtOneTimeInput) => Promise<DebtOneTimePayment[]>;
+    oneTimeUpdate: (id: number, input: DebtOneTimeInput) => Promise<DebtOneTimePayment[]>;
+    oneTimeRemove: (id: number) => Promise<DebtOneTimePayment[]>;
+    getPlan: () => Promise<DebtPlanSettings>;
+    setPlan: (plan: DebtPlanSettings) => Promise<DebtPlanSettings>;
+    exportMarkdown: (markdown: string, defaultName: string) => Promise<ExportResult>;
   };
   cards: {
     list: () => Promise<CardItem[]>;
@@ -2095,6 +2490,13 @@ export interface CommandCenterApi {
     railway: {
       update: (values: RailwayScalarConfig) => Promise<RailwayScalarConfig>;
     };
+    mcpServers: {
+      list: () => Promise<McpServerConfig[]>;
+      add: (input: McpServerInput) => Promise<McpServerConfig[]>;
+      update: (id: number, input: McpServerInput) => Promise<McpServerConfig[]>;
+      remove: (id: number) => Promise<McpServerConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<McpServerConfig[]>;
+    };
     youtubeChannels: {
       list: () => Promise<YouTubeChannelConfig[]>;
       add: (label: string, channelId: string) => Promise<YouTubeChannelConfig[]>;
@@ -2133,6 +2535,7 @@ export interface CommandCenterApi {
     tabs: {
       rename: (id: string, label: string) => Promise<TabConfig[]>;
       reorder: (orderedIds: string[]) => Promise<TabConfig[]>;
+      setHidden: (id: string, hidden: boolean) => Promise<TabConfig[]>;
     };
   };
 }

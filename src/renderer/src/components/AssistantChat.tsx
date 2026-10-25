@@ -1,12 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import type { AssistantToolCall, CaptureTarget } from "../../../shared/types";
-import { ASSISTANT_MUTATING_TOOLS } from "../../../shared/assistant";
+import type {
+  AssistantToolCall,
+  AssistantTraceRequest,
+  AssistantTraceTool,
+  AssistantTurnTrace,
+  AssistantUsage,
+  CaptureTarget,
+} from "../../../shared/types";
+import { ASSISTANT_MUTATING_TOOLS, isMcpToolName, mcpToolLabel } from "../../../shared/assistant";
+import { cachedShare } from "../../../shared/assistantUsage";
 import { renderMarkdown } from "../lib/markdown";
 import { handleMarkdownPreviewClick } from "../lib/markdownPreviewInteractions";
 import { chatToMarkdown, replyToMarkdown } from "../lib/assistantMarkdown";
+import type { AssistantApproval, AssistantCommandInfo } from "../../../shared/types";
+import { matchCommands } from "../lib/commandMatch";
+import { describeSize, MAX_FILES, MAX_TOTAL_BYTES, readAttachment, type PendingAttachment } from "../lib/attachments";
 import type { AssistantChatState, ChatItem, LiveTool } from "../hooks/useAssistantChat";
-import { IconCheck, IconCopy, IconX } from "./icons";
+import ImageViewer from "./ImageViewer";
+import Menu from "./Menu";
+import { IconArrowUp, IconCheck, IconCopy, IconPlus, IconX } from "./icons";
 
 // The transcript and composer for one Assistant conversation. Used by the
 // dashboard tab and the quick panel; the surrounding chrome (history, memory,
@@ -37,9 +50,19 @@ const TOOL_LABELS: Record<string, string> = {
   complete_task: "Completed task",
   reschedule_task: "Rescheduled task",
   create_task: "Created task",
+  web_search: "Web search",
+  web_scrape: "Web page",
+  recall_memory: "Memory lookup",
+  generate_image: "Image",
   remember: "Memory",
   forget: "Memory",
 };
+
+// A friendly name, falling back to "server: tool" for MCP tools and to the raw
+// name for anything else unknown.
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? (isMcpToolName(name) ? mcpToolLabel(name) : name);
+}
 
 // What the assistant is doing while a call runs, and the same thing once done.
 const TOOL_ACTIVITY: Record<string, { doing: string; done: string }> = {
@@ -61,6 +84,10 @@ const TOOL_ACTIVITY: Record<string, { doing: string; done: string }> = {
   complete_task: { doing: "Completing a task", done: "Completed a task" },
   reschedule_task: { doing: "Rescheduling a task", done: "Rescheduled a task" },
   create_task: { doing: "Creating a task", done: "Created a task" },
+  web_search: { doing: "Searching the web", done: "Searched the web" },
+  web_scrape: { doing: "Reading a web page", done: "Read a web page" },
+  recall_memory: { doing: "Searching your memory", done: "Searched your memory" },
+  generate_image: { doing: "Generating an image", done: "Generated an image" },
   remember: { doing: "Saving to memory", done: "Saved to memory" },
   forget: { doing: "Editing memory", done: "Edited memory" },
 };
@@ -74,11 +101,15 @@ function formatTokens(n: number): string {
   return n >= 10_000 ? `${(n / 1000).toFixed(0)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-export function formatUsage(usage: { promptTokens: number; completionTokens: number; costUsd: number | null }): string | null {
+export function formatUsage(usage: AssistantUsage): string | null {
   const total = usage.promptTokens + usage.completionTokens;
   if (total === 0) return null;
   const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd < 0.01 ? usage.costUsd.toFixed(4) : usage.costUsd.toFixed(2)}`;
-  return `${formatTokens(total)} tokens${cost}`;
+  // Only when the provider reported cache figures: "cached 0%" from one that
+  // never does would read as caching failing.
+  const share = cachedShare(usage);
+  const cached = share === null ? "" : ` · cached ${Math.round(share * 100)}%`;
+  return `${formatTokens(total)} tokens${cost}${cached}`;
 }
 
 interface AssistantChatProps {
@@ -93,6 +124,8 @@ interface AssistantChatProps {
 
 export default function AssistantChat({ chat, onOpenSettings, emptyState, focusToken }: AssistantChatProps) {
   const [draft, setDraft] = useState("");
+  // The user message being edited (as a branch), by ChatItem id.
+  const [editingId, setEditingId] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { items, busy } = chat;
@@ -111,14 +144,124 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
     if (!busy) inputRef.current?.focus();
   }, [busy]);
 
+  // Slash commands: enabled skills and saved prompts, offered while the draft
+  // is just "/" plus the start of a name.
+  const [commands, setCommands] = useState<AssistantCommandInfo[]>([]);
+  const [pick, setPick] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const loadCommands = useCallback(() => {
+    void window.api.assistant.commands
+      .list()
+      .then(setCommands)
+      .catch(() => setCommands([]));
+  }, []);
+  useEffect(loadCommands, [loadCommands, focusToken]);
+  useEffect(() => {
+    // Picks up a skill switched on in Settings without a reload.
+    window.addEventListener("focus", loadCommands);
+    return () => window.removeEventListener("focus", loadCommands);
+  }, [loadCommands]);
+
+  const typedName = /^\/([\w-]*)$/.exec(draft)?.[1] ?? null;
+  const matches = useMemo(
+    () => (typedName === null ? [] : matchCommands(commands, typedName)),
+    [commands, typedName]
+  );
+  const pickerOpen = matches.length > 0 && !busy && !dismissed;
+  useEffect(() => {
+    setPick(0);
+    setDismissed(false);
+  }, [typedName]);
+
+  // Attachments: pasted, dropped or picked, shown as chips until sent.
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function addFiles(files: File[]) {
+    if (busy || files.length === 0) return;
+    setAttachError(null);
+    const added: PendingAttachment[] = [];
+    for (const file of files) {
+      const current = [...pendingRef.current, ...added];
+      if (current.length >= MAX_FILES) {
+        setAttachError(`Attach at most ${MAX_FILES} files at a time`);
+        break;
+      }
+      const result = await readAttachment(file);
+      if (typeof result === "string") {
+        setAttachError(result);
+        continue;
+      }
+      if (current.reduce((n, a) => n + a.size, result.size) > MAX_TOTAL_BYTES) {
+        setAttachError("Those files are too large together");
+        if (result.previewUrl) URL.revokeObjectURL(result.previewUrl);
+        break;
+      }
+      added.push(result);
+    }
+    if (added.length) setPending((prev) => [...prev, ...added]);
+  }
+
+  function removePending(key: string) {
+    setPending((prev) => {
+      const gone = prev.find((a) => a.key === key);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return prev.filter((a) => a.key !== key);
+    });
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...e.clipboardData.files];
+    if (files.length === 0) return; // ordinary text paste
+    e.preventDefault();
+    void addFiles(files);
+  }
+
+  function complete(command: AssistantCommandInfo) {
+    setDraft(`/${command.name} `);
+    inputRef.current?.focus();
+  }
+
   function submit() {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && pending.length === 0) || busy) return;
+    const files = pending;
+    setPending([]);
+    setAttachError(null);
+    // "/name rest" runs that command if it's enabled; anything else (a path,
+    // an unknown word) is just text.
+    const parsed = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec(text);
+    const command = parsed && commands.find((c) => c.name.toLowerCase() === parsed[1].toLowerCase());
     setDraft("");
-    void chat.send(text);
+    if (command) void chat.send(parsed?.[2] ?? "", command.name, files);
+    else void chat.send(text, undefined, files);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (pickerOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setPick((p) => (p + step + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissed(true);
+        return;
+      }
+      const chosen = matches[Math.min(pick, matches.length - 1)];
+      // Enter on a name that is already complete runs it; otherwise it completes it.
+      if ((e.key === "Tab" || e.key === "Enter") && chosen && chosen.name !== typedName && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        complete(chosen);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
@@ -139,46 +282,134 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
   }, [items]);
 
   return (
-    <div className="assistant-main">
+    <div
+      className={`assistant-main${dragging ? " is-dragging" : ""}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDragging(false);
+        void addFiles([...e.dataTransfer.files]);
+      }}
+    >
       <div className="assistant-log" role="log" aria-live="polite" aria-busy={busy}>
         {items.length === 0 && (emptyState ?? <p className="muted">Ask me anything.</p>)}
         {rows.map(({ item, question, isLastAssistant }) => (
           <MessageRow
             key={item.id}
             item={item}
+            conversationId={chat.conversationId}
             question={question}
             canRegenerate={
               isLastAssistant &&
               !busy &&
               chat.conversationId !== null &&
-              !item.toolCalls?.some((c) => ASSISTANT_MUTATING_TOOLS.has(c.name))
+              // Any MCP call hides it. Main refuses only after one that wasn't
+              // read-only, but this side can't see the server's hints, so it
+              // errs towards not offering a repeat.
+              !item.toolCalls?.some((c) => ASSISTANT_MUTATING_TOOLS.has(c.name) || isMcpToolName(c.name))
             }
             onRegenerate={() => void chat.regenerate()}
+            canEdit={item.role === "user" && item.turn !== undefined && !busy && chat.conversationId !== null}
+            editing={editingId === item.id}
+            onStartEdit={() => setEditingId(item.id)}
+            onCancelEdit={() => setEditingId(null)}
+            onSubmitEdit={(text, command, keep) => {
+              setEditingId(null);
+              if (item.turn !== undefined) void chat.editAndBranch(item.turn, text, command, keep);
+            }}
             onApprove={chat.answerApproval}
             onOpenSettings={onOpenSettings}
           />
         ))}
         <div ref={bottomRef} />
       </div>
+      {(pending.length > 0 || attachError) && (
+        <div className="assistant-attachments" aria-label="Attachments">
+          {pending.map((a) => (
+            <span key={a.key} className="assistant-attachment-chip" title={`${a.name} · ${describeSize(a.size)}`}>
+              {a.previewUrl ? <img src={a.previewUrl} alt="" /> : <span className="assistant-file-icon">TXT</span>}
+              <span className="assistant-attachment-name">{a.name}</span>
+              <button type="button" onClick={() => removePending(a.key)} aria-label={`Remove ${a.name}`}>
+                ×
+              </button>
+            </span>
+          ))}
+          {attachError && <span className="assistant-attach-error">{attachError}</span>}
+        </div>
+      )}
       <div className="assistant-input-row">
+        {pickerOpen && (
+          <ul className="assistant-command-picker" role="listbox" aria-label="Commands">
+            {matches.map((c, i) => (
+              <li
+                key={c.name}
+                role="option"
+                aria-selected={i === pick}
+                className={i === pick ? "is-active" : undefined}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  complete(c);
+                }}
+              >
+                <strong>/{c.name}</strong>
+                {c.description && <span className="muted"> {c.description}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={inputRef}
           className="assistant-input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything…  (Enter to send, Shift+Enter for a new line)"
+          onPaste={handlePaste}
+          placeholder="Ask anything…  (Enter to send, / for commands, paste or drop files)"
           rows={2}
           disabled={busy}
           autoFocus
         />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void addFiles([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="assistant-attach-button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
+          aria-label="Attach files"
+          title="Attach images or text files (or paste or drop them)"
+        >
+          <IconPlus size={16} />
+        </button>
         {busy ? (
           <button type="button" className="assistant-stop" onClick={chat.stop}>
             Stop
           </button>
         ) : (
-          <button type="button" onClick={submit} disabled={!draft.trim()}>
+          <button
+            type="button"
+            className="assistant-send"
+            onClick={submit}
+            disabled={!draft.trim() && pending.length === 0}
+          >
             Send
+            <IconArrowUp size={13} />
           </button>
         )}
       </div>
@@ -188,25 +419,59 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
 
 interface MessageRowProps {
   item: ChatItem;
+  conversationId: string | null;
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
-  onApprove: (approvalId: string, allow: boolean) => void;
+  canEdit: boolean;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (text: string, command: string | undefined, keepAttachments: string[]) => void;
+  onApprove: (approvalId: string, allow: boolean, allowedItems?: string[]) => void;
   onOpenSettings: () => void;
 }
 
-function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, onOpenSettings }: MessageRowProps) {
+function MessageRow({
+  item,
+  conversationId,
+  question,
+  canRegenerate,
+  onRegenerate,
+  canEdit,
+  editing,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  onApprove,
+  onOpenSettings,
+}: MessageRowProps) {
   // Re-parsed on every streamed delta, which is cheap at chat-reply sizes; the
   // memo just keeps unrelated re-renders (typing in the input) from redoing it.
   // An unclosed fence or list mid-stream renders as-is and tidies itself as the
   // rest arrives. Computed before any early return to keep hook order stable.
   const html = useMemo(
-    () => (item.role === "assistant" ? renderMarkdown(item.text) : ""),
+    () => (item.role === "assistant" ? renderMarkdown(item.text, { remoteImages: false }) : ""),
     [item.role, item.text]
   );
 
   const pending = Boolean(item.requestId);
   const approvals = item.approvals ?? [];
+
+  // Where older messages were folded into a summary. They are still above (and
+  // searchable); the model reads this in their place.
+  if (item.role === "summary") {
+    return (
+      <details className="assistant-summary">
+        <summary>Earlier messages were summarized to save space</summary>
+        <p>{item.text}</p>
+      </details>
+    );
+  }
+
+  if (item.role === "user" && editing) {
+    return <EditQuestion item={item} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />;
+  }
 
   const liveTools = item.liveTools ?? [];
   const anyRunning = liveTools.some((t) => t.status === "running");
@@ -229,12 +494,46 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
       {item.role === "assistant" ? (
         <div
           className="assistant-bubble assistant-bubble-md note"
-          onClick={(e) => handleMarkdownPreviewClick(e, {})}
+          // Links go through main, which confirms one that looks like it is
+          // carrying data out (services/assistantLinks.ts).
+          onClick={(e) =>
+            handleMarkdownPreviewClick(e, { onOpenUrl: (href) => void window.api.assistant.openLink(href, conversationId) })
+          }
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <div className="assistant-bubble">{item.text}</div>
+        <div className="assistant-bubble">
+          {item.attachments?.length ? (
+            <div className="assistant-sent-attachments">
+              {item.attachments.map((a) => (
+                <SentAttachment key={a.id} attachment={a} />
+              ))}
+            </div>
+          ) : null}
+          {item.command && <span className="assistant-command-chip">/{item.command}</span>}
+          {item.command && item.text ? " " : ""}
+          {item.text}
+        </div>
       )}
+      {item.role === "user" && canEdit && (
+        <div className="assistant-reply-actions">
+          <button
+            type="button"
+            className="assistant-link"
+            onClick={onStartEdit}
+            title="Edit this question and continue in a new branch; this chat stays as it is"
+          >
+            Edit
+          </button>
+        </div>
+      )}
+      {item.role === "assistant" && item.attachments?.length ? (
+        <div className="assistant-generated">
+          {item.attachments.map((a) => (
+            <GeneratedImage key={a.id} attachment={a} />
+          ))}
+        </div>
+      ) : null}
       {pending && <LiveTools tools={liveTools} />}
       <ApprovalCards approvals={approvals} onApprove={onApprove} />
       {item.needsSetup && (
@@ -246,7 +545,7 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         <div className="assistant-chips">
           {item.toolCalls?.map((call, i) => (
             <span key={i} className={`assistant-chip${call.ok ? "" : " assistant-chip-bad"}`}>
-              {TOOL_LABELS[call.name] ?? call.name}
+              {toolLabel(call.name)}
               {call.ok ? "" : call.declined ? " declined" : " failed"}
             </span>
           ))}
@@ -258,14 +557,98 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
         </div>
       )}
       {!pending && Boolean(item.toolCalls?.length) && <ToolLog calls={item.toolCalls!} />}
+      {item.role === "assistant" && !pending && item.costUnreported && (
+        <p className="muted assistant-cost-note">
+          The provider reported no cost for part of this reply, so the spending caps couldn’t count it.
+        </p>
+      )}
+      {!pending && item.trace && <TurnDetails trace={item.trace} />}
       {item.role === "assistant" && !pending && (
         <ReplyActions
           text={item.text}
           question={question}
           canRegenerate={canRegenerate}
           onRegenerate={onRegenerate}
+          model={item.model}
         />
       )}
+    </div>
+  );
+}
+
+// Edits a question in place. Sending makes a branch (a new chat from this
+// point); the files and command can be dropped but not added, since they are
+// the original question's stored ones.
+function EditQuestion({
+  item,
+  onCancel,
+  onSubmit,
+}: {
+  item: ChatItem;
+  onCancel: () => void;
+  onSubmit: (text: string, command: string | undefined, keepAttachments: string[]) => void;
+}) {
+  const [text, setText] = useState(item.text);
+  const [command, setCommand] = useState(item.command);
+  const [kept, setKept] = useState(() => (item.attachments ?? []).map((a) => a.id));
+  const files = (item.attachments ?? []).filter((a) => kept.includes(a.id));
+  const canSend = Boolean(text.trim() || command || files.length);
+  const send = (): void => {
+    if (canSend) onSubmit(text, command, kept);
+  };
+  return (
+    <div className="assistant-msg assistant-msg-user assistant-edit">
+      {(command || files.length > 0) && (
+        <div className="assistant-attachments">
+          {command && (
+            <span className="assistant-attachment-chip">
+              <span className="assistant-attachment-name">/{command}</span>
+              <button type="button" onClick={() => setCommand(undefined)} aria-label={`Remove /${command}`}>
+                ×
+              </button>
+            </span>
+          )}
+          {files.map((a) => (
+            <span key={a.id} className="assistant-attachment-chip" title={`${a.name} · ${describeSize(a.size)}`}>
+              <span className="assistant-attachment-name">{a.name}</span>
+              <button
+                type="button"
+                onClick={() => setKept((ids) => ids.filter((id) => id !== a.id))}
+                aria-label={`Remove ${a.name}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <textarea
+        className="assistant-input"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            send();
+          }
+        }}
+        rows={3}
+        autoFocus
+        aria-label="Edit question"
+      />
+      <div className="assistant-edit-actions">
+        <span className="muted">Sends in a new branch; this chat stays as it is.</span>
+        <button type="button" className="assistant-link" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" className="assistant-send" onClick={send} disabled={!canSend}>
+          Branch and send
+          <IconArrowUp size={13} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -297,7 +680,8 @@ function LiveTools({ tools }: { tools: LiveTool[] }) {
     <ul className="assistant-live-tools" aria-label="Tool activity">
       {tools.map((tool) => {
         const activity = TOOL_ACTIVITY[tool.name];
-        const label = tool.status === "running" ? (activity?.doing ?? tool.name) : (activity?.done ?? tool.name);
+        const fallback = isMcpToolName(tool.name) ? `MCP ${mcpToolLabel(tool.name)}` : tool.name;
+        const label = tool.status === "running" ? (activity?.doing ?? fallback) : (activity?.done ?? fallback);
         const seconds = Math.floor((now - tool.startedAt) / 1000);
         return (
           <li key={tool.callId} className={`assistant-live-tool assistant-live-${tool.status}`}>
@@ -338,7 +722,7 @@ function ToolLog({ calls }: { calls: AssistantToolCall[] }) {
             <li key={i} className={`assistant-tool-entry${call.ok ? "" : " assistant-tool-entry-bad"}`}>
               <div className="assistant-tool-entry-head">
                 <StatusIcon status={call.ok ? "done" : call.declined ? "declined" : "failed"} />
-                <span className="assistant-tool-entry-name">{TOOL_LABELS[call.name] ?? call.name}</span>
+                <span className="assistant-tool-entry-name">{toolLabel(call.name)}</span>
                 <code>{call.name}</code>
                 {!call.ok && <span className="assistant-tool-entry-state">{call.declined ? "declined" : "failed"}</span>}
               </div>
@@ -357,6 +741,94 @@ function ToolLog({ calls }: { calls: AssistantToolCall[] }) {
   );
 }
 
+const seconds = (ms: number): string => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+const count = (n: number): string => n.toLocaleString();
+const dollars = (usd: number): string => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
+const PURPOSE_LABELS: Record<AssistantTraceRequest["purpose"], string> = {
+  reply: "Request",
+  compact: "Summary (compaction)",
+  title: "Title",
+};
+
+function RequestStep({ step }: { step: AssistantTraceRequest }) {
+  const bad = Boolean(step.error) || step.finishReason === "length";
+  return (
+    <li className={`assistant-trace-step${bad ? " assistant-tool-entry-bad" : ""}`}>
+      <div className="assistant-tool-entry-head">
+        <span className="assistant-tool-entry-name">
+          {PURPOSE_LABELS[step.purpose]}
+          {step.purpose === "reply" ? ` ${step.step + 1}` : ""}
+        </span>
+        <code>{step.model}</code>
+        <span className="muted">{seconds(step.latencyMs)}</span>
+        {step.firstTokenMs !== undefined && <span className="muted">first text {seconds(step.firstTokenMs)}</span>}
+      </div>
+      <div className="assistant-tool-entry-args">
+        {step.messageCount} messages, ~{count(step.estInputTokens)} tokens estimated
+        {step.usage && ` · ${count(step.usage.promptTokens)} in / ${count(step.usage.completionTokens)} out`}
+        {step.usage?.costUsd != null && ` · ${dollars(step.usage.costUsd)}`}
+        {step.toolCalls > 0 && ` · ${step.toolCalls} tool call${step.toolCalls === 1 ? "" : "s"}`}
+        {step.outputChars > 0 && ` · ${count(step.outputChars)} chars of text`}
+        {step.finishReason && ` · finish: ${step.finishReason}`}
+        {step.aborted && " · stopped"}
+      </div>
+      {step.error && <div className="assistant-trace-error">{step.error}</div>}
+    </li>
+  );
+}
+
+function ToolStep({ step }: { step: AssistantTraceTool }) {
+  return (
+    <li className={`assistant-trace-step assistant-trace-tool${step.ok ? "" : " assistant-tool-entry-bad"}`}>
+      <div className="assistant-tool-entry-head">
+        <StatusIcon status={step.ok ? "done" : step.approval === "declined" ? "declined" : "failed"} />
+        <span className="assistant-tool-entry-name">{TOOL_LABELS[step.name] ?? step.name}</span>
+        <code>{step.name}</code>
+        <span className="muted">{seconds(step.durationMs)}</span>
+      </div>
+      <div className="assistant-tool-entry-args">
+        {count(step.resultChars)} chars returned
+        {step.approval !== "none" &&
+          ` · ${step.approval === "allowed" ? "allowed" : "declined"} after ${seconds(step.waitMs ?? 0)}`}
+        {!step.ok && step.approval !== "declined" && " · failed"}
+      </div>
+    </li>
+  );
+}
+
+// How the turn behind a reply went: each request (timing, tokens, cost, why it
+// ended) and each tool call (duration, confirmation, result size), in order.
+// Recorded by main as metadata only — there is no text here to show.
+function TurnDetails({ trace }: { trace: AssistantTurnTrace }) {
+  const [open, setOpen] = useState(false);
+  const requests = trace.steps.filter((s): s is AssistantTraceRequest => s.kind === "request");
+  const tools = trace.steps.length - requests.length;
+  return (
+    <div className="assistant-tool-log">
+      <button type="button" className="assistant-link" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? "Hide" : "Show"} turn details ({seconds(trace.durationMs)})
+      </button>
+      {open && (
+        <>
+          <div className="assistant-trace-summary muted">
+            {requests.length} request{requests.length === 1 ? "" : "s"}, {tools} tool call{tools === 1 ? "" : "s"}
+            {` · ${count(trace.usage.promptTokens)} in / ${count(trace.usage.completionTokens)} out`}
+            {trace.usage.costUsd !== null && ` · ${dollars(trace.usage.costUsd)}`}
+            {trace.regenerate && " · regenerated"}
+            {trace.command && ` · /${trace.command}`}
+          </div>
+          {trace.error && <div className="assistant-trace-error">{trace.error}</div>}
+          <ul className="assistant-tool-log-list">
+            {trace.steps.map((step, i) =>
+              step.kind === "request" ? <RequestStep key={i} step={step} /> : <ToolStep key={i} step={step} />
+            )}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ApprovalCards({
   approvals,
   onApprove,
@@ -366,23 +838,147 @@ function ApprovalCards({
 }) {
   return (
     <>
-      {approvals.map((approval) => (
-        <div key={approval.approvalId} className="assistant-approval" role="group" aria-label="Confirm action">
-          <p>
-            <span className="assistant-approval-label">The assistant wants to</span>
-            {approval.summary}
-          </p>
-          <div className="assistant-approval-actions">
-            <button type="button" onClick={() => onApprove(approval.approvalId, true)}>
-              Allow
-            </button>
-            <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
-              Deny
-            </button>
+      {approvals.map((approval) =>
+        approval.items ? (
+          <BatchApprovalCard key={approval.approvalId} approval={approval} onApprove={onApprove} />
+        ) : (
+          <div key={approval.approvalId} className="assistant-approval" role="group" aria-label="Confirm action">
+            <p>
+              <span className="assistant-approval-label">The assistant wants to</span>
+              {approval.summary}
+            </p>
+            <div className="assistant-approval-actions">
+              <button type="button" className="assistant-approval-allow" onClick={() => onApprove(approval.approvalId, true)}>
+                Allow
+              </button>
+              <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
+                Deny
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      )}
     </>
+  );
+}
+
+// Images already shown once are kept: a transcript re-renders on every streamed
+// token, and each reopened chat would otherwise re-read the same files.
+const imageCache = new Map<string, string | null>();
+
+function SentAttachment({ attachment }: { attachment: NonNullable<ChatItem["attachments"]>[number] }) {
+  const [url, setUrl] = useState<string | null | undefined>(
+    attachment.previewUrl ?? imageCache.get(attachment.id)
+  );
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => {
+    if (attachment.kind !== "image" || url !== undefined) return;
+    let live = true;
+    void window.api.assistant.readAttachment(attachment.id).then((loaded) => {
+      imageCache.set(attachment.id, loaded);
+      if (live) setUrl(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, [attachment.id, attachment.kind, url]);
+
+  if (attachment.kind === "text") {
+    return (
+      <span className="assistant-attachment-chip" title={attachment.name}>
+        <span className="assistant-file-icon">TXT</span>
+        <span className="assistant-attachment-name">{attachment.name}</span>
+      </span>
+    );
+  }
+  return url ? (
+    <>
+      <button
+        type="button"
+        className="assistant-image-button"
+        onClick={() => setZoomed(true)}
+        aria-label={`View larger: ${attachment.name}`}
+        title="Click to enlarge"
+      >
+        <img className="assistant-sent-image" src={url} alt={attachment.name} />
+      </button>
+      {zoomed && <ImageViewer src={url} name={attachment.name} id={attachment.id} onClose={() => setZoomed(false)} />}
+    </>
+  ) : (
+    <span className="assistant-attachment-chip" title={attachment.name}>
+      <span className="assistant-file-icon">IMG</span>
+      <span className="assistant-attachment-name">{url === null ? `${attachment.name} (removed)` : attachment.name}</span>
+    </span>
+  );
+}
+
+// An image the assistant made, with a way to keep it.
+function GeneratedImage({ attachment }: { attachment: NonNullable<ChatItem["attachments"]>[number] }) {
+  const [note, setNote] = useState<string | null>(null);
+  async function save() {
+    const result = await window.api.assistant.saveAttachment(attachment.id, attachment.name);
+    setNote(result.ok ? "Saved" : result.cancelled ? null : (result.reason ?? "Couldn't save"));
+  }
+  return (
+    <figure className="assistant-generated-image">
+      <SentAttachment attachment={attachment} />
+      <figcaption>
+        <button type="button" className="assistant-link" onClick={() => void save()}>
+          Save image…
+        </button>
+        {note && <span className="muted"> {note}</span>}
+      </figcaption>
+    </figure>
+  );
+}
+
+// Several changes from one step in a single card. Everything starts ticked, so
+// the common answer is one click; unticking drops just that item (it reports
+// back to the model as declined).
+function BatchApprovalCard({
+  approval,
+  onApprove,
+}: {
+  approval: AssistantApproval;
+  onApprove: (approvalId: string, allow: boolean, allowedItems?: string[]) => void;
+}) {
+  const items = approval.items ?? [];
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set(items.map((i) => i.itemId)));
+  const toggle = (id: string) =>
+    setTicked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  return (
+    <div className="assistant-approval" role="group" aria-label={`Confirm ${items.length} actions`}>
+      <p>
+        <span className="assistant-approval-label">The assistant wants to make {items.length} changes</span>
+      </p>
+      <ul className="assistant-approval-items">
+        {items.map((item) => (
+          <li key={item.itemId}>
+            <label>
+              <input type="checkbox" checked={ticked.has(item.itemId)} onChange={() => toggle(item.itemId)} />
+              <span>{item.summary}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="assistant-approval-actions">
+        <button
+          type="button"
+          className="assistant-approval-allow"
+          disabled={ticked.size === 0}
+          onClick={() => onApprove(approval.approvalId, true, [...ticked])}
+        >
+          {ticked.size === items.length ? "Allow all" : `Allow ${ticked.size} of ${items.length}`}
+        </button>
+        <button type="button" className="assistant-approval-deny" onClick={() => onApprove(approval.approvalId, false)}>
+          Deny all
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -391,11 +987,14 @@ function ReplyActions({
   question,
   canRegenerate,
   onRegenerate,
+  model,
 }: {
   text: string;
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  // Who answered; a fallback model when the configured one failed.
+  model?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -418,6 +1017,11 @@ function ReplyActions({
         </button>
       )}
       <SaveToNotes build={() => replyToMarkdown(question, text)} label="Save" />
+      {model && (
+        <span className="muted assistant-reply-model" title="The model that answered">
+          {model}
+        </span>
+      )}
     </div>
   );
 }
@@ -426,41 +1030,42 @@ function ReplyActions({
 // through the same `capture.submit` as the Quick Capture panel, which also tells
 // the owning widget to drop its stale buffer so the next autosave can't erase
 // what was just appended.
-export function SaveToNotes({ build, label }: { build: () => string; label: string }) {
-  const [open, setOpen] = useState(false);
+export function SaveToNotes({
+  build,
+  label,
+  disabled,
+}: {
+  build: () => string;
+  label: string;
+  disabled?: boolean;
+}) {
   const [status, setStatus] = useState<string | null>(null);
 
   async function save(target: CaptureTarget) {
-    setOpen(false);
     const result = await window.api.capture.submit(target, build());
     setStatus(result.ok ? "Saved" : (result.reason ?? "Couldn't save"));
     window.setTimeout(() => setStatus(null), 2500);
   }
 
   if (status) return <span className="muted assistant-save-status">{status}</span>;
-  if (!open) {
-    return (
-      <button type="button" className="assistant-link" onClick={() => setOpen(true)} aria-expanded={false}>
-        {label} to…
-      </button>
-    );
-  }
   return (
-    <span className="assistant-save-menu">
-      {SAVE_TARGETS.map((t) => (
-        <button key={t.id} type="button" className="assistant-link" onClick={() => void save(t.id)}>
-          {t.label}
-        </button>
-      ))}
-      <button type="button" className="assistant-link" onClick={() => setOpen(false)} aria-label="Cancel">
-        ×
-      </button>
-    </span>
+    <Menu
+      label={label}
+      disabled={disabled}
+      align="right"
+      className="assistant-link"
+      items={SAVE_TARGETS.map((t) => ({ key: t.id, label: t.label, onSelect: () => void save(t.id) }))}
+    />
   );
 }
 
 // Used by the tab header: a whole conversation as one markdown block.
 export function chatMarkdown(chat: AssistantChatState): string {
   const firstQuestion = chat.items.find((i) => i.role === "user")?.text ?? null;
-  return chatToMarkdown(chat.title ?? firstQuestion, chat.items);
+  return chatToMarkdown(
+    chat.title ?? firstQuestion,
+    chat.items.filter(
+      (i): i is ChatItem & { role: "user" | "assistant" | "error" } => i.role !== "summary"
+    )
+  );
 }

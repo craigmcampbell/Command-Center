@@ -1,7 +1,13 @@
-// Persistence for the Assistant's chat history. One row per chat; the message
-// list is a JSON column rather than a row per message because a chat is only
-// ever read or replaced whole (resume loads all of it, a new turn rewrites it),
-// never queried by message.
+// Persistence for the Assistant's chat history. `assistant_chats` holds one row
+// of metadata per chat (title, pin, usage); `assistant_messages` holds one row
+// per message, in order. Rows rather than a JSON blob because compaction flags
+// individual messages (`archived`, `summary`) and later features hang data off
+// single messages. A chat is still only ever read or replaced whole, so a save
+// rewrites its rows in one transaction.
+//
+// The old `assistant_chats.messages` JSON column is kept, not dropped: boot
+// copies each chat that has no message rows yet into the new table and leaves
+// the original as an untouched backup. New chats write `'[]'` there.
 //
 // The system prompt is deliberately NOT stored: it embeds today's date and a
 // snapshot of the memory file, both stale by the time a chat is resumed, so
@@ -12,18 +18,20 @@
 // something up. `search_text` holds just what was SAID (user and assistant
 // text), maintained on every save.
 
+import { randomUUID } from "node:crypto";
 import { getDatabase } from "./db";
-import type { ChatMessage } from "./assistantTranscript";
-import type { AssistantChatSummary, AssistantUsage } from "../../shared/types";
+import type { ChatMessage, ToolCall } from "./assistantTranscript";
+import type { AssistantAttachment, AssistantChatSummary, AssistantFolder, AssistantUsage } from "../../shared/types";
 
 interface ChatRow {
   id: string;
   title: string;
-  messages: string;
   pinned: number;
   prompt_tokens: number;
   completion_tokens: number;
   cost_usd: number | null;
+  cached_tokens: number | null;
+  cache_write_tokens: number | null;
   updated_at: number;
 }
 
@@ -33,9 +41,104 @@ export interface StoredChat {
   pinned: boolean;
   messages: ChatMessage[];
   usage: AssistantUsage;
+  // Set on a branch (an earlier question edited): the chat it was copied from,
+  // or null once that chat is deleted.
+  parent: { id: string; title: string } | null;
+}
+
+// Where a branch came from: the parent chat and the `seq` of the user message
+// that was edited. Written once, when the branch is first saved.
+export interface ChatOrigin {
+  parentId: string;
+  seq: number;
+}
+
+interface MessageRow {
+  role: ChatMessage["role"];
+  content: string | null;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  archived: number;
+  summary: number;
+  command: string | null;
+  injected: string | null;
+  attachments: string | null;
+  model: string | null;
 }
 
 const MAX_SEARCH_TEXT_CHARS = 100_000;
+
+function toRow(m: ChatMessage): MessageRow {
+  return {
+    role: m.role,
+    content: m.content,
+    tool_calls: m.role === "assistant" && m.tool_calls ? JSON.stringify(m.tool_calls) : null,
+    tool_call_id: m.role === "tool" ? m.tool_call_id : null,
+    archived: m.archived ? 1 : 0,
+    summary: m.role === "system" && m.summary ? 1 : 0,
+    command: m.role === "user" && m.command ? m.command : null,
+    injected: m.role === "user" && m.injected ? m.injected : null,
+    attachments:
+      (m.role === "user" || m.role === "tool") && m.attachments?.length ? JSON.stringify(m.attachments) : null,
+    model: m.role === "assistant" && m.model ? m.model : null,
+  };
+}
+
+function parseAttachments(json: string): AssistantAttachment[] {
+  const parsed = JSON.parse(json);
+  if (!Array.isArray(parsed)) throw new Error("attachments is not a list");
+  return parsed;
+}
+
+// Throws on a malformed `tool_calls` payload; loadChat turns that into "no such
+// chat" rather than a half-readable one.
+function fromRow(row: MessageRow): ChatMessage {
+  const archived = row.archived === 1 ? { archived: true as const } : {};
+  switch (row.role) {
+    case "tool":
+      return {
+        role: "tool",
+        tool_call_id: row.tool_call_id ?? "",
+        content: row.content ?? "",
+        ...(row.attachments ? { attachments: parseAttachments(row.attachments) } : {}),
+        ...archived,
+      };
+    case "assistant": {
+      const calls: ToolCall[] | null = row.tool_calls ? JSON.parse(row.tool_calls) : null;
+      if (calls !== null && !Array.isArray(calls)) throw new Error("tool_calls is not a list");
+      return {
+        role: "assistant",
+        content: row.content,
+        ...(calls ? { tool_calls: calls } : {}),
+        ...(row.model ? { model: row.model } : {}),
+        ...archived,
+      };
+    }
+    case "system":
+      return { role: "system", content: row.content ?? "", ...(row.summary === 1 ? { summary: true } : {}), ...archived };
+    default:
+      return {
+        role: "user",
+        content: row.content ?? "",
+        ...(row.command ? { command: row.command } : {}),
+        ...(row.injected ? { injected: row.injected } : {}),
+        ...(row.attachments ? { attachments: parseAttachments(row.attachments) } : {}),
+        ...archived,
+      };
+  }
+}
+
+// Replaces a chat's messages. Callers wrap it in a transaction.
+function writeMessages(chatId: string, messages: ChatMessage[]): void {
+  const db = getDatabase();
+  db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(chatId);
+  const insert = db.prepare(
+    `INSERT INTO assistant_messages
+       (chat_id, seq, role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments, model)
+     VALUES (@chatId, @seq, @role, @content, @tool_calls, @tool_call_id, @archived, @summary, @command, @injected, @attachments, @model)`
+  );
+  messages.forEach((m, seq) => insert.run({ chatId, seq, ...toRow(m) }));
+}
 
 // Only what a person would remember being said — never tool payloads.
 export function searchTextOf(messages: ChatMessage[]): string {
@@ -77,7 +180,61 @@ export function initAssistantChats(): void {
   // NULL, not 0, means "the provider never reported a cost" — the two must not
   // be confused or a free-looking $0.00 would hide real spend.
   addColumnIfMissing("assistant_chats", "cost_usd", "REAL");
+  // Prompt-cache reads/writes, part of prompt_tokens. NULL until a provider
+  // reports them, for the same reason as cost_usd.
+  addColumnIfMissing("assistant_chats", "cached_tokens", "INTEGER");
+  addColumnIfMissing("assistant_chats", "cache_write_tokens", "INTEGER");
+  // Folders for the history list. A chat in a folder that no longer exists reads
+  // as top level (the join below), so a deleted folder can never hide a chat.
+  addColumnIfMissing("assistant_chats", "folder_id", "TEXT");
+  // Branches: a chat made by editing an earlier question of another one. The
+  // parent may be deleted later; the joins below then read the link as absent.
+  addColumnIfMissing("assistant_chats", "parent_chat_id", "TEXT");
+  addColumnIfMissing("assistant_chats", "branched_at_seq", "INTEGER");
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
   db.exec(`CREATE INDEX IF NOT EXISTS assistant_chats_updated ON assistant_chats (updated_at DESC)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
+    chat_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_calls TEXT,
+    tool_call_id TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    summary INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, seq)
+  ) WITHOUT ROWID`);
+  // Added with slash commands; a table made by the first version lacks them.
+  addColumnIfMissing("assistant_messages", "command", "TEXT");
+  addColumnIfMissing("assistant_messages", "injected", "TEXT");
+  addColumnIfMissing("assistant_messages", "attachments", "TEXT");
+  // Which model answered (fallbacks can differ from the configured one).
+  addColumnIfMissing("assistant_messages", "model", "TEXT");
+
+  // One-time, idempotent: a chat with no message rows yet is copied over from
+  // its JSON column. A chat that has rows is never touched again, so this is
+  // safe on every boot.
+  const unmigrated = db
+    .prepare(
+      `SELECT id, messages FROM assistant_chats
+        WHERE messages != '[]'
+          AND NOT EXISTS (SELECT 1 FROM assistant_messages m WHERE m.chat_id = assistant_chats.id)`
+    )
+    .all() as { id: string; messages: string }[];
+  const migrate = db.transaction((id: string, messages: ChatMessage[]) => writeMessages(id, messages));
+  for (const row of unmigrated) {
+    try {
+      const parsed = JSON.parse(row.messages);
+      if (Array.isArray(parsed) && parsed.length > 0) migrate(row.id, parsed);
+    } catch {
+      // A corrupt legacy row stays unreadable, exactly as before.
+    }
+  }
 
   // Backfill search text for chats saved before it existed.
   const stale = db
@@ -93,26 +250,42 @@ export function initAssistantChats(): void {
   }
 }
 
+// Adds a turn's cache counts to the running ones. A NULL addend leaves the
+// total as it was; the first reported count turns a NULL total into a number.
+const addCacheCounts = (cached: string, written: string): string => `
+  cached_tokens = CASE WHEN ${cached} IS NULL THEN cached_tokens
+    ELSE COALESCE(cached_tokens, 0) + ${cached} END,
+  cache_write_tokens = CASE WHEN ${written} IS NULL THEN cache_write_tokens
+    ELSE COALESCE(cache_write_tokens, 0) + ${written} END`;
+
+function cacheParams(usage: AssistantUsage): { cachedTokens: number | null; cacheWriteTokens: number | null } {
+  return { cachedTokens: usage.cachedTokens ?? null, cacheWriteTokens: usage.cacheWriteTokens ?? null };
+}
+
 // Insert-or-replace. Deliberately leaves `title` and `pinned` alone on update:
 // those are the user's to change (rename/pin), and a later reply in the chat
 // must not undo them. `usage` is the cost of THIS turn and is added to the
-// running totals.
+// running totals. `origin` only applies to the first save (the insert): a
+// branch's link back to its parent never changes afterwards.
 export function saveChat(
   id: string,
   title: string,
   messages: ChatMessage[],
-  usage?: AssistantUsage
+  usage?: AssistantUsage,
+  origin?: ChatOrigin
 ): void {
   const now = Date.now();
   const turn = usage ?? { promptTokens: 0, completionTokens: 0, costUsd: null };
-  getDatabase()
+  const db = getDatabase();
+  const upsert = db
     .prepare(
       `INSERT INTO assistant_chats
-         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd, created_at, updated_at)
+         (id, title, messages, search_text, prompt_tokens, completion_tokens, cost_usd,
+          cached_tokens, cache_write_tokens, created_at, updated_at, parent_chat_id, branched_at_seq)
        VALUES
-         (@id, @title, @messages, @searchText, @promptTokens, @completionTokens, @costUsd, @now, @now)
+         (@id, @title, '[]', @searchText, @promptTokens, @completionTokens, @costUsd,
+          @cachedTokens, @cacheWriteTokens, @now, @now, @parentId, @seq)
        ON CONFLICT(id) DO UPDATE SET
-         messages = excluded.messages,
          search_text = excluded.search_text,
          prompt_tokens = prompt_tokens + excluded.prompt_tokens,
          completion_tokens = completion_tokens + excluded.completion_tokens,
@@ -120,31 +293,48 @@ export function saveChat(
            WHEN excluded.cost_usd IS NULL THEN cost_usd
            ELSE COALESCE(cost_usd, 0) + excluded.cost_usd
          END,
+         ${addCacheCounts("excluded.cached_tokens", "excluded.cache_write_tokens")},
          updated_at = excluded.updated_at`
-    )
-    .run({
+    );
+  db.transaction(() => {
+    upsert.run({
       id,
       title,
-      messages: JSON.stringify(messages),
       searchText: searchTextOf(messages),
       promptTokens: turn.promptTokens,
       completionTokens: turn.completionTokens,
       costUsd: turn.costUsd,
+      ...cacheParams(turn),
       now,
+      parentId: origin?.parentId ?? null,
+      seq: origin?.seq ?? null,
     });
+    writeMessages(id, messages);
+  })();
 }
 
 export function loadChat(id: string): StoredChat | null {
   const row = getDatabase()
     .prepare(
-      `SELECT id, title, messages, pinned, prompt_tokens, completion_tokens, cost_usd, updated_at
-         FROM assistant_chats WHERE id = ?`
+      `SELECT c.id, c.title, c.pinned, c.prompt_tokens, c.completion_tokens, c.cost_usd,
+              c.cached_tokens, c.cache_write_tokens, c.updated_at,
+              p.id AS parent_id, p.title AS parent_title
+         FROM assistant_chats c
+         LEFT JOIN assistant_chats p ON p.id = c.parent_chat_id
+        WHERE c.id = ?`
     )
-    .get(id) as ChatRow | undefined;
+    .get(id) as (ChatRow & { parent_id: string | null; parent_title: string | null }) | undefined;
   if (!row) return null;
   try {
-    const messages = JSON.parse(row.messages);
-    if (!Array.isArray(messages)) return null;
+    const rows = getDatabase()
+      .prepare(
+        `SELECT role, content, tool_calls, tool_call_id, archived, summary, command, injected, attachments, model
+           FROM assistant_messages WHERE chat_id = ? ORDER BY seq`
+      )
+      .all(id) as MessageRow[];
+    // A saved chat always has at least its opening question.
+    if (rows.length === 0) return null;
+    const messages = rows.map(fromRow);
     return {
       id: row.id,
       title: row.title,
@@ -154,7 +344,10 @@ export function loadChat(id: string): StoredChat | null {
         promptTokens: row.prompt_tokens,
         completionTokens: row.completion_tokens,
         costUsd: row.cost_usd,
+        ...(row.cached_tokens !== null ? { cachedTokens: row.cached_tokens } : {}),
+        ...(row.cache_write_tokens !== null ? { cacheWriteTokens: row.cache_write_tokens } : {}),
       },
+      parent: row.parent_id ? { id: row.parent_id, title: row.parent_title ?? "" } : null,
     };
   } catch {
     // A corrupt row reads as "no such chat" instead of breaking the history list.
@@ -168,7 +361,7 @@ export function loadChat(id: string): StoredChat | null {
 export function listChats(query?: string): AssistantChatSummary[] {
   const terms = (query ?? "").split(/\s+/).filter(Boolean).slice(0, 8);
   const where = terms
-    .map(() => `(title LIKE ? ESCAPE '\\' OR search_text LIKE ? ESCAPE '\\')`)
+    .map(() => `(c.title LIKE ? ESCAPE '\\' OR c.search_text LIKE ? ESCAPE '\\')`)
     .join(" AND ");
   const params = terms.flatMap((t) => {
     const like = `%${escapeLike(t)}%`;
@@ -176,17 +369,74 @@ export function listChats(query?: string): AssistantChatSummary[] {
   });
   const rows = getDatabase()
     .prepare(
-      `SELECT id, title, pinned, updated_at FROM assistant_chats
+      `SELECT c.id, c.title, c.pinned, c.updated_at, f.id AS folder_id, p.id AS parent_id
+         FROM assistant_chats c
+         LEFT JOIN assistant_folders f ON f.id = c.folder_id
+         LEFT JOIN assistant_chats p ON p.id = c.parent_chat_id
         ${where ? `WHERE ${where}` : ""}
-        ORDER BY pinned DESC, updated_at DESC LIMIT 200`
+        ORDER BY c.pinned DESC, c.updated_at DESC LIMIT 200`
     )
-    .all(...params) as Pick<ChatRow, "id" | "title" | "pinned" | "updated_at">[];
+    .all(...params) as (Pick<ChatRow, "id" | "title" | "pinned" | "updated_at"> & {
+      folder_id: string | null;
+      parent_id: string | null;
+    })[];
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
     pinned: r.pinned === 1,
     updatedAt: r.updated_at,
+    folderId: r.folder_id,
+    parentId: r.parent_id,
   }));
+}
+
+// ---- folders ---------------------------------------------------------------
+
+const FOLDER_NAME_MAX = 60;
+const cleanFolderName = (name: string): string => name.replace(/\s+/g, " ").trim().slice(0, FOLDER_NAME_MAX);
+
+export function listFolders(): AssistantFolder[] {
+  return getDatabase()
+    .prepare(`SELECT id, name FROM assistant_folders ORDER BY sort_order, created_at`)
+    .all() as AssistantFolder[];
+}
+
+export function createFolder(name: string): AssistantFolder | null {
+  const clean = cleanFolderName(name);
+  if (!clean) return null;
+  const db = getDatabase();
+  const next = (db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM assistant_folders`).get() as { n: number }).n;
+  const id = randomUUID();
+  db.prepare(`INSERT INTO assistant_folders (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)`).run(
+    id,
+    clean,
+    next,
+    Date.now()
+  );
+  return { id, name: clean };
+}
+
+export function renameFolder(id: string, name: string): boolean {
+  const clean = cleanFolderName(name);
+  if (!clean) return false;
+  return getDatabase().prepare(`UPDATE assistant_folders SET name = ? WHERE id = ?`).run(clean, id).changes > 0;
+}
+
+// Its chats return to the top level; none is deleted.
+export function deleteFolder(id: string): boolean {
+  const db = getDatabase();
+  return db.transaction(() => {
+    db.prepare(`UPDATE assistant_chats SET folder_id = NULL WHERE folder_id = ?`).run(id);
+    return db.prepare(`DELETE FROM assistant_folders WHERE id = ?`).run(id).changes > 0;
+  })();
+}
+
+// Files a chat in a folder (null = top level). Doesn't touch updated_at, so
+// tidying the list never reorders it. A folder that doesn't exist is refused.
+export function moveChat(id: string, folderId: string | null): boolean {
+  const db = getDatabase();
+  if (folderId !== null && !db.prepare(`SELECT 1 FROM assistant_folders WHERE id = ?`).get(folderId)) return false;
+  return db.prepare(`UPDATE assistant_chats SET folder_id = ? WHERE id = ?`).run(folderId, id).changes > 0;
 }
 
 export function renameChat(id: string, title: string): boolean {
@@ -224,10 +474,17 @@ export function addChatUsage(id: string, usage: AssistantUsage): boolean {
            cost_usd = CASE
              WHEN @costUsd IS NULL THEN cost_usd
              ELSE COALESCE(cost_usd, 0) + @costUsd
-           END
+           END,
+           ${addCacheCounts("@cachedTokens", "@cacheWriteTokens")}
          WHERE id = @id`
       )
-      .run({ id, ...usage }).changes > 0
+      .run({
+        id,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        costUsd: usage.costUsd,
+        ...cacheParams(usage),
+      }).changes > 0
   );
 }
 
@@ -239,6 +496,35 @@ export function setChatPinned(id: string, pinned: boolean): boolean {
   );
 }
 
+// Image attachment ids referenced by a chat's messages.
+export function chatImageIds(chatId: string): string[] {
+  const rows = getDatabase()
+    .prepare(`SELECT attachments FROM assistant_messages WHERE chat_id = ? AND attachments IS NOT NULL`)
+    .all(chatId) as { attachments: string }[];
+  const ids = new Set<string>();
+  for (const row of rows) {
+    try {
+      for (const a of parseAttachments(row.attachments)) if (a.kind === "image") ids.add(a.id);
+    } catch {
+      // A corrupt row references nothing we can name.
+    }
+  }
+  return [...ids];
+}
+
+// True if any stored message still refers to this attachment.
+export function isAttachmentReferenced(id: string): boolean {
+  return Boolean(
+    getDatabase()
+      .prepare(`SELECT 1 FROM assistant_messages WHERE attachments LIKE ? LIMIT 1`)
+      .get(`%"${id.replace(/[^a-f0-9]/g, "")}"%`)
+  );
+}
+
 export function deleteChat(id: string): boolean {
-  return getDatabase().prepare(`DELETE FROM assistant_chats WHERE id = ?`).run(id).changes > 0;
+  const db = getDatabase();
+  return db.transaction(() => {
+    db.prepare(`DELETE FROM assistant_messages WHERE chat_id = ?`).run(id);
+    return db.prepare(`DELETE FROM assistant_chats WHERE id = ?`).run(id).changes > 0;
+  })();
 }
