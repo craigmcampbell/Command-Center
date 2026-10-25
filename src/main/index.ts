@@ -118,6 +118,7 @@ import { getOpenAIUsage } from "./services/openai";
 import { getFirecrawlUsage } from "./services/firecrawl";
 import {
   answerApproval,
+  assistantLinkWarning,
   askAssistant,
   deleteAssistantChat,
   getAssistantMemory,
@@ -154,6 +155,7 @@ import {
   destroyAssistantWindow,
   hideAssistantWindow,
   initAssistantWindow,
+  isAssistantPanel,
   registerAssistantHotkey,
 } from "./services/assistantWindow";
 import { DEFAULT_ASSISTANT_ACCELERATOR } from "../shared/assistant";
@@ -723,6 +725,29 @@ ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId:
     typeof requestId === "string" ? requestId : undefined
   )
 );
+// A link in a reply opens after a confirm when it looks like it is carrying
+// data out (assistantLinks.ts). Decided here, not in the renderer, so a
+// rendering change can't drop the check.
+ipcMain.handle("assistant:openLink", async (evt, url: unknown, conversationId: unknown) => {
+  if (typeof url !== "string") return false;
+  const warning = assistantLinkWarning(url, typeof conversationId === "string" ? conversationId : null);
+  if (warning) {
+    const options = {
+      type: "warning" as const,
+      buttons: ["Cancel", "Open anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "This link may send data from your chat",
+      detail: `${warning}\n\n${url}`,
+    };
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const { response } =
+      win && !isAssistantPanel(win) ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    if (response !== 1) return false;
+  }
+  await shell.openExternal(url);
+  return true;
+});
 ipcMain.handle("assistant:stop", (_evt, requestId: unknown) => {
   if (typeof requestId === "string") stopAssistant(requestId);
 });

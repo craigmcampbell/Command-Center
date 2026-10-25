@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The panel only renders Assistant UI, much of it model output that may
+         echo a prompt-injected page, so nothing here may reach the network:
+         images only from the bundle, data: (stored attachments) or blob:
+         (composer previews), and no fetch at all. Dev relaxes script-src and
+         connect-src for Vite (electron.vite.config.ts); a build ships this as is. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title>Assistant</title>
   </head>
   <body class="assistant-quick-body">

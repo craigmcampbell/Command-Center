@@ -48,7 +48,8 @@ import { completeTask, createTask, getDueTasks, setTaskDueDate } from "./todoist
 import { approveTransaction, getCategories, getUnapprovedTransactions, setTransactionCategory } from "./ynab";
 import { saveLink } from "./reader";
 import { findCachedFeedItem, moveFeedItemToInbox } from "./readerFeed";
-import { hasUntrustedContext, MUTATING_TOOLS, prepareTool, TOOL_DEFS } from "./assistantTools";
+import { collectKnownUrls, hasUntrustedContext, MUTATING_TOOLS, prepareTool, TOOL_DEFS } from "./assistantTools";
+import type { ChatMessage } from "./assistantTranscript";
 
 const TASKS = [
   { id: "t1", content: "Water the plants", project: "Home", due: "2026-10-12", overdue: false, priority: 1, labels: [] },
@@ -364,5 +365,78 @@ describe("hasUntrustedContext", () => {
     for (const name of ["get_due_tasks", "get_schedule", "search_notes", "github_status", "ynab_unapproved", "read_note", "git_status"]) {
       expect(hasUntrustedContext(["docker_status", name])).toBe(true);
     }
+  });
+});
+
+describe("web_search approval", () => {
+  it("runs without a card until untrusted text has been read in an earlier step", async () => {
+    expect((await prepareTool("web_search", JSON.stringify({ query: "cats" }), noContext)).approval).toBeUndefined();
+    // Siblings in the same step only: the model hadn't seen their results.
+    const sibling = await prepareTool("web_search", JSON.stringify({ query: "cats" }), { ...noContext, untrustedSeen: true, untrustedBefore: false });
+    expect(sibling.approval).toBeUndefined();
+  });
+
+  it("asks once tainted, quoting the whitespace-collapsed query in full", async () => {
+    const prepared = await prepareTool("web_search", JSON.stringify({ query: "  a\n\tb  c " }), {
+      untrustedSeen: true,
+      untrustedBefore: true,
+      askBeforeRemember: false,
+    });
+    expect(prepared.approval?.summary).toBe("Search the web for: “a b c”");
+  });
+
+  it("refuses a tainted query too long to show in full", async () => {
+    const prepared = await prepareTool("web_search", JSON.stringify({ query: "x".repeat(301) }), {
+      untrustedSeen: true,
+      askBeforeRemember: false,
+    });
+    expect(prepared.approval).toBeUndefined();
+    expect(json(await prepared.run()).error).toMatch(/limited to 300 characters/);
+  });
+});
+
+describe("collectKnownUrls", () => {
+  const call = (id: string, name: string, args: unknown = {}) => ({
+    id,
+    type: "function" as const,
+    function: { name, arguments: JSON.stringify(args) },
+  });
+  const searchResult = (id: string, url: string): ChatMessage => ({
+    role: "tool",
+    tool_call_id: id,
+    content: JSON.stringify({ results: [{ title: "t", url, snippet: "s" }] }),
+  });
+
+  it("vouches for typed URLs and for results of a search made before anything untrusted was read", () => {
+    const messages = [
+      { role: "user", content: "see https://typed.example/a." },
+      { role: "assistant", content: null, tool_calls: [call("s1", "web_search")] },
+      searchResult("s1", "https://clean.example/r#frag"),
+    ] as ChatMessage[];
+    expect([...collectKnownUrls(messages)].sort()).toEqual(["https://clean.example/r", "https://typed.example/a"]);
+  });
+
+  it("does not vouch for results of a search made after untrusted text was read", () => {
+    const messages = [
+      { role: "user", content: "what's due?" },
+      { role: "assistant", content: null, tool_calls: [call("t1", "get_due_tasks")] },
+      { role: "tool", tool_call_id: "t1", content: "{}" },
+      { role: "assistant", content: null, tool_calls: [call("s1", "web_search")] },
+      searchResult("s1", "https://steered.example/r"),
+    ] as ChatMessage[];
+    expect(collectKnownUrls(messages).has("https://steered.example/r")).toBe(false);
+  });
+
+  it("treats an earlier search's snippets as untrusted for the next search", () => {
+    const messages = [
+      { role: "user", content: "x" },
+      { role: "assistant", content: null, tool_calls: [call("s1", "web_search")] },
+      searchResult("s1", "https://first.example/"),
+      { role: "assistant", content: null, tool_calls: [call("s2", "web_search")] },
+      searchResult("s2", "https://second.example/"),
+    ] as ChatMessage[];
+    const known = collectKnownUrls(messages);
+    expect(known.has("https://first.example/")).toBe(true);
+    expect(known.has("https://second.example/")).toBe(false);
   });
 });

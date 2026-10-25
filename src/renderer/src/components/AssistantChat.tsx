@@ -285,6 +285,7 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
           <MessageRow
             key={item.id}
             item={item}
+            conversationId={chat.conversationId}
             question={question}
             canRegenerate={
               isLastAssistant &&
@@ -387,6 +388,7 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
 
 interface MessageRowProps {
   item: ChatItem;
+  conversationId: string | null;
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
@@ -394,7 +396,7 @@ interface MessageRowProps {
   onOpenSettings: () => void;
 }
 
-function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, onOpenSettings }: MessageRowProps) {
+function MessageRow({ item, conversationId, question, canRegenerate, onRegenerate, onApprove, onOpenSettings }: MessageRowProps) {
   // Re-parsed on every streamed delta, which is cheap at chat-reply sizes; the
   // memo just keeps unrelated re-renders (typing in the input) from redoing it.
   // An unclosed fence or list mid-stream renders as-is and tidies itself as the
@@ -439,7 +441,11 @@ function MessageRow({ item, question, canRegenerate, onRegenerate, onApprove, on
       {item.role === "assistant" ? (
         <div
           className="assistant-bubble assistant-bubble-md note"
-          onClick={(e) => handleMarkdownPreviewClick(e, {})}
+          // Links go through main, which confirms one that looks like it is
+          // carrying data out (services/assistantLinks.ts).
+          onClick={(e) =>
+            handleMarkdownPreviewClick(e, { onOpenUrl: (href) => void window.api.assistant.openLink(href, conversationId) })
+          }
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (

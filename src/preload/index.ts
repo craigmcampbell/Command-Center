@@ -288,6 +288,8 @@ const api: CommandCenterApi = {
     },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
     hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),
+    openLink: (url: string, conversationId: string | null) =>
+      ipcRenderer.invoke("assistant:openLink", url, conversationId),
     openInDashboard: (chatId: string | null, openSettings?: boolean) =>
       ipcRenderer.invoke("assistant:openInDashboard", chatId, openSettings === true),
     memory: {

@@ -2105,6 +2105,9 @@ export interface CommandCenterApi {
     };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
     hidePanel: () => Promise<void>;
+    // Opens a link from an assistant reply, after a native confirm when main
+    // judges it to be carrying data (see services/assistantLinks.ts).
+    openLink: (url: string, conversationId: string | null) => Promise<boolean>;
     // `openSettings` also opens Settings → Assistant (for a setup error).
     openInDashboard: (chatId: string | null, openSettings?: boolean) => Promise<void>;
     memory: {
