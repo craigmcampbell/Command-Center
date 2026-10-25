@@ -197,12 +197,14 @@ export function toTranscript(messages: ChatMessage[]): AssistantTranscriptItem[]
 
   const items: AssistantTranscriptItem[] = [];
   let current: AssistantTranscriptItem | null = null;
+  let turn = 0;
 
   for (const m of messages) {
     if (m.role === "user") {
       items.push({
         role: "user",
         text: m.content,
+        turn: turn++,
         ...(m.command ? { command: m.command } : {}),
         ...(m.attachments?.length
           ? {

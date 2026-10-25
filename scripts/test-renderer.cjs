@@ -107,7 +107,12 @@ for (const channel of new Set(channels)) ipcMain.handle(channel, async (evt, ...
     const q = (args[0] ?? '').toLowerCase();
     return chatList.filter(c => !q || c.title.toLowerCase().includes(q)).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }
-  if (channel === 'assistant:chats:open') return { ok: true, id: args[0], title: 'Plan the sprint', pinned: false, usage: { promptTokens: 1200, completionTokens: 300, costUsd: 0.0123 }, items: [{ role: 'user', text: 'Plan the sprint', toolCalls: [], remembered: [] }, { role: 'assistant', text: 'Sprint transcript reply', toolCalls: [{ name: 'get_due_tasks', ok: true }], remembered: [] }] };
+  if (channel === 'assistant:branch') {
+    chatList = [...chatList, { id: 'branch-1', title: 'Plan the sprint (branch)', pinned: false, updatedAt: Date.now() + 1000, folderId: null, parentId: args[0] }];
+    return { ok: true, conversationId: 'branch-1', text: 'Branch reply', toolCalls: [], remembered: [], usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.0001 } };
+  }
+  if (channel === 'assistant:chats:open' && args[0] === 'branch-1') return { ok: true, id: 'branch-1', title: 'Plan the sprint (branch)', pinned: false, parent: { id: 'old-1', title: 'Plan the sprint' }, usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.0001 }, items: [{ role: 'user', text: 'Plan the next sprint', turn: 0, toolCalls: [], remembered: [] }, { role: 'assistant', text: 'Branch reply', toolCalls: [], remembered: [] }] };
+  if (channel === 'assistant:chats:open') return { ok: true, id: args[0], title: 'Plan the sprint', pinned: false, usage: { promptTokens: 1200, completionTokens: 300, costUsd: 0.0123 }, items: [{ role: 'user', text: 'Plan the sprint', turn: 0, toolCalls: [], remembered: [] }, { role: 'assistant', text: 'Sprint transcript reply', toolCalls: [{ name: 'get_due_tasks', ok: true }], remembered: [] }] };
   if (channel === 'assistant:chats:remove') { chatList = chatList.filter(c => c.id !== args[0]); return { ok: true }; }
   if (channel === 'assistant:ask' && args[1] === 'show markdown') return { ok: true, conversationId: 'conv-1', toolCalls: [], remembered: [], text: '## Plan\n\nThis is **bold**, *italic* and `inline`.\n\n- first\n- second\n\n```ts\nconst x = 1;\n```\n\n[docs](https://example.com) and [bad](javascript:alert(1))\n\n<img src=x onerror="window.__pwned=1"> <script>window.__pwned=2</script>' };
   if (channel === 'assistant:ask' && args[1] === 'trigger setup') return { ok: false, needsSetup: true, reason: 'No model configured', conversationId: 'conv-2', text: '', toolCalls: [], remembered: [] };
@@ -159,7 +164,20 @@ app.whenReady().then(async () => {
   win.webContents.on('console-message', (_, level, message) => { if (level >= 3) errors.push(message); });
   await win.loadFile(path.join(project, 'out/renderer/index.html'));
   const wait = ms => new Promise(r => setTimeout(r, ms));
-  const click = label => win.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find(e => e.textContent.trim() === ${JSON.stringify(label)}); if (!button) throw new Error('Missing button: '+${JSON.stringify(label)}); button.click(); })()`);
+  // A label that lives in a header menu ("View", "More") is found by opening
+  // each closed menu in turn until it appears.
+  const click = label => win.webContents.executeJavaScript(`(async () => {
+    const find = () => [...document.querySelectorAll('button')].find(e => e.textContent.trim() === ${JSON.stringify(label)});
+    let button = find();
+    for (const trigger of button ? [] : [...document.querySelectorAll('button[aria-haspopup="menu"]')]) {
+      trigger.click();
+      await new Promise(r => setTimeout(r, 50));
+      if ((button = find())) break;
+      trigger.click();
+    }
+    if (!button) throw new Error('Missing button: '+${JSON.stringify(label)});
+    button.click();
+  })()`);
   await wait(1800);
   assert.equal(calls.filter(([c]) => c.startsWith('stats:')).length, 0, 'Home should not collect stats');
   await win.webContents.executeJavaScript(`document.querySelector('.settings-trigger').click()`);
@@ -334,7 +352,7 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(project, 'out/assistant-markdown-smoke.png'), (await win.webContents.capturePage()).toPNG());
   // Both routes into Settings land on the Assistant section, not General.
   const activeSettingsSection = () => win.webContents.executeJavaScript(`document.querySelector('.settings-nav-item.active')?.textContent`);
-  await click('Settings');
+  await click('Assistant settings…');
   await wait(200);
   assert.equal(await activeSettingsSection(), 'Assistant', 'Header link opens the Assistant settings section');
   assert.ok(await win.webContents.executeJavaScript(`[...document.querySelectorAll('.settings-card h3')].some(e => e.textContent === 'Assistant')`), 'Assistant card is in its own section');
@@ -366,6 +384,29 @@ app.whenReady().then(async () => {
   await click('Send');
   await wait(900);
   assert.equal(calls.filter(([c]) => c === 'assistant:ask').at(-1)[1][0], 'old-1', 'A new message in an opened chat continues that chat');
+  // Editing an earlier question branches into a new chat; the original stays listed.
+  const userEditButtons = () => win.webContents.executeJavaScript(`[...document.querySelectorAll('.assistant-msg-user')].map(m => [...m.querySelectorAll('button')].some(b => b.textContent.trim() === 'Edit'))`);
+  assert.deepEqual(await userEditButtons(), [true, true], 'Both saved questions (the reopened one and the one just sent) can be edited');
+  await win.webContents.executeJavaScript(`[...document.querySelectorAll('.assistant-msg-user')][0].querySelector('button').click()`);
+  await wait(100);
+  assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.assistant-edit textarea').value`), 'Plan the sprint', 'The editor starts with the original text');
+  await win.webContents.executeJavaScript(`(() => { const t = document.querySelector('.assistant-edit textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(t, 'Plan the next sprint'); t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await click('Branch and send');
+  await wait(500);
+  const branchCall = calls.filter(([c]) => c === 'assistant:branch').at(-1)[1];
+  assert.deepEqual([branchCall[0], branchCall[1], branchCall[2], branchCall[5]], ['old-1', 0, 'Plan the next sprint', []], 'The edit names the original chat and the question by turn');
+  assert.ok(await win.webContents.executeJavaScript(`(() => { const t = document.querySelector('.assistant-log').textContent; return t.includes('Plan the next sprint') && t.includes('Branch reply') && !t.includes('Sprint transcript reply'); })()`), 'The branch is opened in place of the original');
+  assert.ok(await win.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some(b => b.textContent.includes('Branched from Plan the sprint'))`), 'The header links back to the parent');
+  assert.deepEqual(
+    await win.webContents.executeJavaScript(`[...document.querySelectorAll('.assistant-chat')].map(li => [li.querySelector('.assistant-chat-title').textContent, li.classList.contains('assistant-chat-branch')])`),
+    [['Docker ports question', false], ['Plan the sprint', false], ['↳Plan the sprint (branch)', true]],
+    'The branch is listed under its parent, and the original is still there'
+  );
+  fs.writeFileSync(path.join(project, 'out/assistant-branch-smoke.png'), (await win.webContents.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Branched from')).click()`);
+  await wait(250);
+  assert.deepEqual(calls.filter(([c]) => c === 'assistant:chats:open').at(-1)[1], ['old-1'], 'The link opens the parent');
+  chatList = chatList.filter(c => c.id !== 'branch-1');
   // Cancelling a delete leaves the chat alone.
   const clickDelete = title => win.webContents.executeJavaScript(`document.querySelector('button[aria-label="Delete chat: ${title}"]').click()`);
   await clickDelete('Plan the sprint');
@@ -598,7 +639,7 @@ app.whenReady().then(async () => {
   assert.ok((await rowsText()).includes('Ports FAQ'));
 
   // Settings: standing instructions and the quick-panel hotkey.
-  await click('Settings');
+  await click('Assistant settings…');
   await wait(250);
   const card = `[...document.querySelectorAll('.settings-card')].find(c => c.querySelector('h3')?.textContent === 'Assistant')`;
   assert.equal(await exec(`${card}.querySelector('textarea')?.maxLength`), 4000, 'Instructions field is bounded');

@@ -37,6 +37,10 @@ export interface ChatItem {
   text: string;
   // On a user message: the slash command it ran.
   command?: string;
+  // On a user message that is part of the saved chat: its place among the
+  // chat's questions, which is what an edit names. Unset on one whose turn
+  // failed (main rolled it back, so there is nothing to branch from).
+  turn?: number;
   // On a user message: attached files. `previewUrl` is set for ones just sent
   // from this window; a reopened chat loads images through readAttachment.
   attachments?: (AssistantAttachmentInfo & { previewUrl?: string })[];
@@ -74,6 +78,8 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [title, setTitle] = useState<string | null>(null);
   const [usage, setUsage] = useState<AssistantUsage>(NO_USAGE);
+  // Set when the open chat is a branch of another (still existing) one.
+  const [parent, setParent] = useState<{ id: string; title: string } | null>(null);
 
   // Mirrors of state for callbacks that must see the latest value without
   // being re-created (and re-subscribed) on every render.
@@ -182,6 +188,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
       setConversation(id);
       setTitle(chat.title);
       setUsage(chat.usage);
+      setParent(chat.parent ?? null);
       setItems(
         chat.items.map((item) => ({
           id: nextId.current++,
@@ -189,6 +196,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
           text: item.text,
           ...(item.command ? { command: item.command } : {}),
           ...(item.model ? { model: item.model } : {}),
+          ...(item.turn !== undefined ? { turn: item.turn } : {}),
           ...(item.attachments ? { attachments: item.attachments } : {}),
           toolCalls: item.toolCalls,
           remembered: item.remembered,
@@ -244,11 +252,12 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
       if ((!text && !command && files.length === 0) || busyRef.current) return;
       const requestId = crypto.randomUUID();
       const replyId = nextId.current++;
+      const userId = nextId.current++;
       begin(requestId);
       setItems((prev) => [
         ...prev,
         {
-          id: nextId.current++,
+          id: userId,
           role: "user",
           text,
           ...(command ? { command } : {}),
@@ -274,10 +283,69 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
         command,
         files.length ? files.map((f) => ({ name: f.name, mime: f.mime, data: f.data })) : undefined
       );
-      setItems((prev) => prev.map((item) => (item.id === replyId ? finalItem(replyId, reply) : item)));
+      setItems((prev) => {
+        // A question that made it into the chat becomes editable: it is the
+        // next one after those already saved.
+        const turn = prev.filter((item) => item.role === "user" && item.turn !== undefined).length;
+        return prev.map((item) =>
+          item.id === replyId
+            ? finalItem(replyId, reply)
+            : item.id === userId && reply.ok
+              ? { ...item, turn }
+              : item
+        );
+      });
       afterReply(reply);
     },
     [afterReply, begin]
+  );
+
+  // Edits an earlier question: main copies the chat up to it into a new branch
+  // chat and runs the edited question there. The original is untouched; on
+  // success the branch is opened, on failure the original's transcript is put
+  // back with the reason underneath. `keepAttachments` are ids of the original
+  // question's files to keep.
+  const editAndBranch = useCallback(
+    async (turn: number, raw: string, command?: string, keepAttachments: string[] = []): Promise<void> => {
+      const chatId = conversationIdRef.current;
+      if (!chatId || busyRef.current) return;
+      const text = raw.trim();
+      const before = itemsRef.current;
+      const at = before.findIndex((item) => item.role === "user" && item.turn === turn);
+      if (at < 0) return;
+      const kept = (before[at].attachments ?? []).filter((a) => keepAttachments.includes(a.id));
+      if (!text && !command && kept.length === 0) return;
+      const requestId = crypto.randomUUID();
+      const replyId = nextId.current++;
+      begin(requestId);
+      setItems([
+        ...before.slice(0, at),
+        {
+          id: nextId.current++,
+          role: "user",
+          text,
+          ...(command ? { command } : {}),
+          ...(kept.length ? { attachments: kept } : {}),
+        },
+        { id: replyId, role: "assistant", text: "", requestId },
+      ]);
+      const reply = await window.api.assistant.branch(
+        chatId,
+        turn,
+        text,
+        requestId,
+        command,
+        kept.map((a) => a.id)
+      );
+      if (!reply.ok) {
+        setItems([...before, finalItem(nextId.current++, reply)]);
+        end();
+        return;
+      }
+      afterReply(reply);
+      await openChat(reply.conversationId);
+    },
+    [afterReply, begin, end, openChat]
   );
 
   const regenerate = useCallback(async (): Promise<void> => {
@@ -346,6 +414,7 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     setConversation(null);
     setTitle(null);
     setUsage(NO_USAGE);
+    setParent(null);
     setItems([]);
   }, [setConversation]);
 
@@ -355,7 +424,9 @@ export function useAssistantChat({ onSaved }: UseAssistantChatOptions = {}) {
     conversationId,
     title,
     usage,
+    parent,
     send,
+    editAndBranch,
     stop,
     regenerate,
     compact,

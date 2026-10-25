@@ -81,6 +81,26 @@ const path = require('node:path');
     api.deleteChat('att1');
     assert.equal(api.isAttachmentReferenced(A), false);
     assert.equal(api.isAttachmentReferenced('not hex'), false, 'A malformed id matches nothing');
+
+    // Branches: a chat made by editing an earlier question links back to its
+    // parent. The link is written on the first save only, and reads as absent
+    // once the parent is gone. A shared image survives deleting either chat.
+    api.saveChat('parent', 'Plans', [{ role: 'user', content: 'q0', attachments: [image(A, 'p.png')] }, { role: 'assistant', content: 'a0' }, { role: 'user', content: 'q1' }, { role: 'assistant', content: 'a1' }]);
+    api.saveChat('branch', 'Plans (branch)', [{ role: 'user', content: 'q0', attachments: [image(A, 'p.png')] }, { role: 'assistant', content: 'a0' }, { role: 'user', content: 'q1 edited' }, { role: 'assistant', content: 'b1' }], undefined, { parentId: 'parent', seq: 2 });
+    assert.deepEqual(db.prepare(`SELECT parent_chat_id, branched_at_seq FROM assistant_chats WHERE id = 'branch'`).get(), { parent_chat_id: 'parent', branched_at_seq: 2 });
+    assert.deepEqual(api.loadChat('branch').parent, { id: 'parent', title: 'Plans' });
+    assert.equal(api.loadChat('parent').parent, null, 'An ordinary chat has no parent');
+    assert.deepEqual(Object.fromEntries(api.listChats().map(c => [c.id, c.parentId])), { parent: null, branch: 'parent' });
+    api.saveChat('branch', 'ignored', [{ role: 'user', content: 'q0' }], undefined, { parentId: 'elsewhere', seq: 9 });
+    assert.equal(db.prepare(`SELECT parent_chat_id FROM assistant_chats WHERE id = 'branch'`).get().parent_chat_id, 'parent', 'A later save never moves the link');
+    api.saveChat('branch', 'ignored', [{ role: 'user', content: 'q0', attachments: [image(A, 'p.png')] }, { role: 'assistant', content: 'a0' }]);
+    assert.equal(api.loadChat('parent').messages.length, 4, 'Saving the branch never touches the parent');
+    api.deleteChat('parent');
+    assert.equal(api.isAttachmentReferenced(A), true, 'The branch still uses the shared image');
+    assert.equal(api.loadChat('branch').parent, null, 'A deleted parent reads as no link');
+    assert.equal(api.listChats().find(c => c.id === 'branch').parentId, null);
+    api.deleteChat('branch');
+    assert.equal(api.isAttachmentReferenced(A), false);
     assert.deepEqual(api.listChats('Hello'), [], 'Attached text is not searchable');
 
     // Folders: flat groups for the history list.
@@ -322,6 +342,6 @@ const path = require('node:path');
     assert.deepEqual(api.listTraces('tr'), []);
 
     db.close();
-    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, folders, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete, turn traces');
+    console.log('Assistant chats SQLite smoke passed: migration to message rows, compaction flags, slash commands, attachments, branches, folders, upsert, usage, pin, rename, AI-title guard, search, corrupt row, delete, turn traces');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(output, { force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

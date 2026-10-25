@@ -419,6 +419,9 @@ export interface AssistantChatSummary {
   updatedAt: number; // epoch ms
   // The folder it is filed in, or null for the top level.
   folderId: string | null;
+  // A branch's parent chat (made by editing one of its questions); null for an
+  // ordinary chat or once the parent is deleted.
+  parentId: string | null;
 }
 
 // A folder in the chat history list. Folders are flat and only group chats:
@@ -452,6 +455,9 @@ export interface AssistantTranscriptItem {
   command?: string;
   // On an assistant item: the model that answered, when it was recorded.
   model?: string;
+  // On a user item: its 0-based place among the chat's user messages, which is
+  // how an edit names the question to branch from.
+  turn?: number;
   attachments?: AssistantAttachmentInfo[];
   toolCalls: AssistantToolCall[];
   remembered: string[];
@@ -468,6 +474,8 @@ export interface AssistantChatResult {
   pinned: boolean;
   usage: AssistantUsage;
   items: AssistantTranscriptItem[];
+  // Set on a branch whose parent still exists.
+  parent?: { id: string; title: string } | null;
 }
 
 // The model wants to do something that changes data. Main holds the tool call
@@ -2162,6 +2170,19 @@ export interface CommandCenterApi {
     ) => Promise<AssistantReply>;
     // Re-runs the last question in a chat, replacing its answer.
     regenerate: (conversationId: string, requestId: string) => Promise<AssistantReply>;
+    // Edits an earlier question (`turn`: its index among the chat's user
+    // messages) as a new branch chat; the original is untouched. On success the
+    // reply's conversationId is the branch. `keepAttachments` are ids of the
+    // original question's files to keep; `attachments` are new ones.
+    branch: (
+      sourceId: string,
+      turn: number,
+      message: string,
+      requestId: string,
+      command?: string,
+      keepAttachments?: string[],
+      attachments?: AssistantAttachmentInput[]
+    ) => Promise<AssistantReply>;
     stop: (requestId: string) => Promise<void>;
     // Answers an approval card; unanswered cards time out as denied. For a
     // batch card, `allowedItems` lists the ticked item ids (omitted = all).

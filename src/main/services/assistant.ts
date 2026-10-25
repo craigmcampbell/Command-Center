@@ -64,6 +64,7 @@ import {
   SUMMARY_SYSTEM,
   toWire,
 } from "./assistantCompaction";
+import { branchTitle, keptAttachments, planBranch } from "./assistantBranch";
 import {
   addChatUsage,
   chatImageIds,
@@ -80,6 +81,7 @@ import {
   renameChatIfUnchanged,
   saveChat,
   setChatPinned,
+  type ChatOrigin,
 } from "./assistantChats";
 import { outboundLinkWarning } from "./assistantLinks";
 import { localDate, readMemoryFile } from "./assistantMemory";
@@ -131,6 +133,8 @@ interface Conversation {
   // written to the database: a chat whose opening question failed leaves no row.
   title: string | null;
   touched: number;
+  // A branch not yet saved: written with its first save (see branchAssistantChat).
+  origin?: ChatOrigin;
 }
 
 const conversations = new Map<string, Conversation>();
@@ -322,7 +326,7 @@ function evictOldConversations(): void {
 // fails the reply still goes out, the chat just won't be in the history list.
 function persist(id: string, convo: Conversation, usage: AssistantUsage): void {
   try {
-    saveChat(id, convo.title ?? "New chat", convo.messages.slice(1), usage);
+    saveChat(id, convo.title ?? "New chat", convo.messages.slice(1), usage, convo.origin);
   } catch (error) {
     console.error("Couldn't save assistant chat", error);
   }
@@ -439,6 +443,7 @@ export function openAssistantChat(id: string): AssistantChatResult {
     pinned: stored.pinned,
     usage: stored.usage,
     items: attachTraces(toTranscript(stored.messages), tracesFor(id)),
+    parent: stored.parent,
   };
 }
 
@@ -773,6 +778,8 @@ interface TurnRequest {
   command?: string;
   // Raw files from the renderer; validated and stored by prepareAttachments.
   attachments?: unknown;
+  // Files already stored for this question (an edited one keeps its originals).
+  presetAttachments?: AssistantAttachment[];
   hooks: AskHooks;
   requestId: string;
 }
@@ -831,6 +838,7 @@ async function runTracedTurn(
     message,
     command: commandName,
     attachments: attachmentInputs,
+    presetAttachments: preset = [],
     hooks,
     requestId,
   }: TurnRequest,
@@ -888,7 +896,7 @@ async function runTracedTurn(
       }
     }
     // A command can be run with nothing typed after it.
-    const hasFiles = Array.isArray(attachmentInputs) && attachmentInputs.length > 0;
+    const hasFiles = preset.length > 0 || (Array.isArray(attachmentInputs) && attachmentInputs.length > 0);
     if (!text && !command && !hasFiles) return fail("Empty message", conversationId ?? "");
     const prepared = prepareAttachments(attachmentInputs);
     if (!prepared.ok) return fail(prepared.reason, conversationId ?? "");
@@ -921,7 +929,7 @@ async function runTracedTurn(
   if (!regenerate && compactAt > 0) {
     const incoming =
       Math.ceil(text.length / 4) +
-      attached.reduce((n, a) => n + (a.kind === "image" ? 1000 : Math.ceil((a.text?.length ?? 0) / 4)), 0);
+      [...preset, ...attached].reduce((n, a) => n + (a.kind === "image" ? 1000 : Math.ceil((a.text?.length ?? 0) / 4)), 0);
     const size = estimateWireTokens(convo.messages) + incoming;
     if (size > compactAt) {
       compacted = (
@@ -1063,7 +1071,7 @@ async function runTracedTurn(
   // What a chat list shows for a turn with nothing typed after its command.
   // A chat that has never been saved: its first successful turn names it.
   const firstTurnOfChat = convo.title === null;
-  const files = regenerated?.attachments ?? attached;
+  const files = regenerated?.attachments ?? [...preset, ...attached];
   const asked =
     text ||
     (command ? `/${command.name}` : regenerated?.command ? `/${regenerated.command}` : "") ||
@@ -1313,6 +1321,56 @@ export function askAssistant(
   attachments?: unknown
 ): Promise<AssistantReply> {
   return runTurn({ conversationId, message, command, attachments, hooks, requestId });
+}
+
+// Edits an earlier question: a NEW chat (the branch) gets a copy of the history
+// before it, linked back to the original, and the edited question runs there as
+// an ordinary turn (normal approvals; copied tool calls are history and never
+// re-run). The original chat is not touched. See assistantBranch.ts for where a
+// cut is allowed and how a summarized part is handled.
+//
+// The branch is saved only when its first turn succeeds, like any new chat. A
+// failure leaves nothing behind (an auto-compaction may already have written a
+// row, so that is removed too) and reports against the original chat.
+export async function branchAssistantChat(
+  sourceId: string,
+  turn: number,
+  message: string,
+  options: { command?: string; keepAttachments?: unknown; attachments?: unknown } = {},
+  hooks: AskHooks = NOOP_HOOKS,
+  requestId: string = randomUUID()
+): Promise<AssistantReply> {
+  const fail = (reason: string): AssistantReply => ({
+    ok: false,
+    reason,
+    conversationId: sourceId,
+    text: "",
+    toolCalls: [],
+    remembered: [],
+  });
+  // The saved chat, not the live cache: a turn running elsewhere (the quick
+  // panel) can't hand a half-finished history to the branch.
+  const source = loadChat(sourceId);
+  if (!source) return fail("That chat no longer exists");
+  const plan = planBranch(source.messages, turn);
+  if (!plan.ok) return fail(plan.reason);
+
+  const branchId = randomUUID();
+  const convo = freshConversation(plan.prefix, branchTitle(source.title));
+  convo.origin = { parentId: sourceId, seq: plan.seq };
+  conversations.set(branchId, convo);
+  const reply = await runTurn({
+    conversationId: branchId,
+    message,
+    command: options.command,
+    attachments: options.attachments,
+    presetAttachments: keptAttachments(plan.original, options.keepAttachments),
+    hooks,
+    requestId,
+  });
+  if (reply.ok) return reply;
+  deleteAssistantChat(branchId);
+  return { ...reply, conversationId: sourceId };
 }
 
 // Re-runs the last question in a chat. The old answer is replaced only if the

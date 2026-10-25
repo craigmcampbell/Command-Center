@@ -118,6 +118,8 @@ interface AssistantChatProps {
 
 export default function AssistantChat({ chat, onOpenSettings, emptyState, focusToken }: AssistantChatProps) {
   const [draft, setDraft] = useState("");
+  // The user message being edited (as a branch), by ChatItem id.
+  const [editingId, setEditingId] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { items, busy } = chat;
@@ -306,6 +308,14 @@ export default function AssistantChat({ chat, onOpenSettings, emptyState, focusT
               !item.toolCalls?.some((c) => ASSISTANT_MUTATING_TOOLS.has(c.name))
             }
             onRegenerate={() => void chat.regenerate()}
+            canEdit={item.role === "user" && item.turn !== undefined && !busy && chat.conversationId !== null}
+            editing={editingId === item.id}
+            onStartEdit={() => setEditingId(item.id)}
+            onCancelEdit={() => setEditingId(null)}
+            onSubmitEdit={(text, command, keep) => {
+              setEditingId(null);
+              if (item.turn !== undefined) void chat.editAndBranch(item.turn, text, command, keep);
+            }}
             onApprove={chat.answerApproval}
             onOpenSettings={onOpenSettings}
           />
@@ -404,11 +414,29 @@ interface MessageRowProps {
   question: string | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  canEdit: boolean;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (text: string, command: string | undefined, keepAttachments: string[]) => void;
   onApprove: (approvalId: string, allow: boolean, allowedItems?: string[]) => void;
   onOpenSettings: () => void;
 }
 
-function MessageRow({ item, conversationId, question, canRegenerate, onRegenerate, onApprove, onOpenSettings }: MessageRowProps) {
+function MessageRow({
+  item,
+  conversationId,
+  question,
+  canRegenerate,
+  onRegenerate,
+  canEdit,
+  editing,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  onApprove,
+  onOpenSettings,
+}: MessageRowProps) {
   // Re-parsed on every streamed delta, which is cheap at chat-reply sizes; the
   // memo just keeps unrelated re-renders (typing in the input) from redoing it.
   // An unclosed fence or list mid-stream renders as-is and tidies itself as the
@@ -430,6 +458,10 @@ function MessageRow({ item, conversationId, question, canRegenerate, onRegenerat
         <p>{item.text}</p>
       </details>
     );
+  }
+
+  if (item.role === "user" && editing) {
+    return <EditQuestion item={item} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />;
   }
 
   const liveTools = item.liveTools ?? [];
@@ -472,6 +504,18 @@ function MessageRow({ item, conversationId, question, canRegenerate, onRegenerat
           {item.command && <span className="assistant-command-chip">/{item.command}</span>}
           {item.command && item.text ? " " : ""}
           {item.text}
+        </div>
+      )}
+      {item.role === "user" && canEdit && (
+        <div className="assistant-reply-actions">
+          <button
+            type="button"
+            className="assistant-link"
+            onClick={onStartEdit}
+            title="Edit this question and continue in a new branch; this chat stays as it is"
+          >
+            Edit
+          </button>
         </div>
       )}
       {item.role === "assistant" && item.attachments?.length ? (
@@ -519,6 +563,83 @@ function MessageRow({ item, conversationId, question, canRegenerate, onRegenerat
           model={item.model}
         />
       )}
+    </div>
+  );
+}
+
+// Edits a question in place. Sending makes a branch (a new chat from this
+// point); the files and command can be dropped but not added, since they are
+// the original question's stored ones.
+function EditQuestion({
+  item,
+  onCancel,
+  onSubmit,
+}: {
+  item: ChatItem;
+  onCancel: () => void;
+  onSubmit: (text: string, command: string | undefined, keepAttachments: string[]) => void;
+}) {
+  const [text, setText] = useState(item.text);
+  const [command, setCommand] = useState(item.command);
+  const [kept, setKept] = useState(() => (item.attachments ?? []).map((a) => a.id));
+  const files = (item.attachments ?? []).filter((a) => kept.includes(a.id));
+  const canSend = Boolean(text.trim() || command || files.length);
+  const send = (): void => {
+    if (canSend) onSubmit(text, command, kept);
+  };
+  return (
+    <div className="assistant-msg assistant-msg-user assistant-edit">
+      {(command || files.length > 0) && (
+        <div className="assistant-attachments">
+          {command && (
+            <span className="assistant-attachment-chip">
+              <span className="assistant-attachment-name">/{command}</span>
+              <button type="button" onClick={() => setCommand(undefined)} aria-label={`Remove /${command}`}>
+                ×
+              </button>
+            </span>
+          )}
+          {files.map((a) => (
+            <span key={a.id} className="assistant-attachment-chip" title={`${a.name} · ${describeSize(a.size)}`}>
+              <span className="assistant-attachment-name">{a.name}</span>
+              <button
+                type="button"
+                onClick={() => setKept((ids) => ids.filter((id) => id !== a.id))}
+                aria-label={`Remove ${a.name}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <textarea
+        className="assistant-input"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            send();
+          }
+        }}
+        rows={3}
+        autoFocus
+        aria-label="Edit question"
+      />
+      <div className="assistant-edit-actions">
+        <span className="muted">Sends in a new branch; this chat stays as it is.</span>
+        <button type="button" className="assistant-link" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" className="assistant-send" onClick={send} disabled={!canSend}>
+          Branch and send
+          <IconArrowUp size={13} />
+        </button>
+      </div>
     </div>
   );
 }

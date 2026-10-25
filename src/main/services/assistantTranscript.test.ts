@@ -47,7 +47,7 @@ describe("toTranscript", () => {
       { role: "assistant", content: "Hello." },
     ];
     expect(toTranscript(messages)).toEqual([
-      { role: "user", text: "hi", toolCalls: [], remembered: [] },
+      { role: "user", text: "hi", turn: 0, toolCalls: [], remembered: [] },
       { role: "assistant", text: "Hello.", toolCalls: [], remembered: [] },
     ]);
   });

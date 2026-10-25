@@ -132,6 +132,7 @@ import {
   listAssistantFolders,
   moveAssistantChat,
   regenerateAssistant,
+  branchAssistantChat,
   renameAssistantFolder,
   renameAssistantChat,
   saveAssistantMemory,
@@ -722,6 +723,31 @@ ipcMain.handle(
       typeof requestId === "string" ? requestId : undefined,
       typeof command === "string" && command ? command : undefined,
       attachments
+    )
+);
+ipcMain.handle(
+  "assistant:branch",
+  (
+    evt,
+    sourceId: unknown,
+    turn: unknown,
+    message: unknown,
+    requestId: unknown,
+    command: unknown,
+    keepAttachments: unknown,
+    attachments: unknown
+  ) =>
+    branchAssistantChat(
+      typeof sourceId === "string" ? sourceId : "",
+      typeof turn === "number" ? turn : -1,
+      typeof message === "string" ? message : "",
+      {
+        command: typeof command === "string" && command ? command : undefined,
+        keepAttachments,
+        attachments,
+      },
+      assistantHooks(evt.sender, requestId),
+      typeof requestId === "string" ? requestId : undefined
     )
 );
 ipcMain.handle("assistant:regenerate", (evt, conversationId: unknown, requestId: unknown) =>
