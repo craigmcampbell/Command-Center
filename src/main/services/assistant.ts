@@ -45,7 +45,7 @@ import type {
   AssistantUsage,
 } from "../../shared/types";
 import { deleteAttachmentFiles, prepareAttachments, readImageDataUrl } from "./assistantAttachments";
-import { complete } from "./assistantClient";
+import { complete, type CompleteParams, type CompletionResult } from "./assistantClient";
 import {
   applyCompaction,
   buildSummaryInput,
@@ -78,6 +78,7 @@ import {
 } from "./assistantChats";
 import { outboundLinkWarning } from "./assistantLinks";
 import { localDate, readMemoryFile } from "./assistantMemory";
+import { recordSpend, spendToday } from "./assistantSpend";
 import { memoryPromptBlock } from "./assistantMemoryIndex";
 import { resolveCommand, type ResolvedCommand } from "./assistantCommands";
 import {
@@ -205,6 +206,43 @@ function askForApprovals(
           }
     );
   });
+}
+
+// ---- spend -----------------------------------------------------------------
+//
+// Every model request goes through `callModel`, so today's ledger (the daily
+// cap) sees replies, titles and summaries alike, including requests whose turn
+// later failed — they were paid for all the same. A successful request with no
+// usage at all is recorded as unpriced, never as free.
+
+async function callModel(params: CompleteParams): Promise<CompletionResult> {
+  const result = await complete(params);
+  if (result.usage) recordSpend(result.usage);
+  else if (result.ok) recordSpend({ promptTokens: 0, completionTokens: 0, costUsd: null });
+  return result;
+}
+
+// A cap is a positive number of dollars; anything else means no cap.
+function capOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function formatUsd(value: number): string {
+  return `$${value < 0.01 ? value.toFixed(4) : value.toFixed(2)}`;
+}
+
+function fallbackModelsOf(value: unknown, primary: string): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set([primary]);
+  const out: string[] = [];
+  for (const m of value) {
+    const slug = typeof m === "string" ? m.trim() : "";
+    if (slug && !seen.has(slug)) {
+      seen.add(slug);
+      out.push(slug);
+    }
+  }
+  return out;
 }
 
 // ---- conversation state ----------------------------------------------------
@@ -439,7 +477,10 @@ async function compactConversation(
   apiKey: string,
   model: string,
   // Automatic compaction only: skip a summary that would fold away too little.
-  minFoldTokens = 0
+  minFoldTokens = 0,
+  fallbackModels: string[] = [],
+  // The turn that triggered it counts this toward its own spending cap.
+  onUsage?: (usage: AssistantUsage | undefined) => void
 ): Promise<AssistantCompactResult> {
   const plan = planCompaction(convo.messages);
   if (!plan) return { ok: false, reason: "There isn't enough older conversation to summarize yet" };
@@ -447,9 +488,10 @@ async function compactConversation(
     return { ok: false, reason: "Too little older conversation to be worth summarizing" };
   }
   try {
-    const result = await complete({
+    const result = await callModel({
       apiKey,
       model,
+      fallbackModels,
       // No tools, no history beyond what is being condensed.
       messages: [
         { role: "system", content: SUMMARY_SYSTEM },
@@ -460,6 +502,7 @@ async function compactConversation(
     });
     // The request cost something whether or not the summary is usable.
     if (result.usage) addChatUsage(id, result.usage);
+    onUsage?.(result.ok ? result.usage : undefined);
     if (!result.ok) return { ok: false, reason: result.reason ?? "The summary request failed" };
     const summary = cleanSummary(result.message?.content ?? "");
     if (!summary) return { ok: false, reason: "The model returned no usable summary" };
@@ -482,7 +525,14 @@ export async function compactAssistantChat(id: string): Promise<AssistantCompact
   if (!apiKey || !model) return { ok: false, reason: "The assistant isn't set up yet" };
   const resolved = resolveConversation(id, { createIfMissing: false });
   if (!resolved) return { ok: false, reason: "That chat no longer exists" };
-  return compactConversation(resolved.id, resolved.convo, apiKey, model);
+  return compactConversation(
+    resolved.id,
+    resolved.convo,
+    apiKey,
+    model,
+    0,
+    fallbackModelsOf(settings.fallbackModels, model)
+  );
 }
 
 // ---- AI-written titles -----------------------------------------------------
@@ -527,7 +577,7 @@ function startTitle(params: { apiKey: string; model: string; question: string })
   const controller = new AbortController();
   const result = (async (): Promise<TitleOutcome> => {
     try {
-      const response = await complete({
+      const response = await callModel({
         apiKey: params.apiKey,
         model: params.model,
         // No tools, no history: just the opening message.
@@ -662,6 +712,25 @@ async function runTurn({
   const model = settings.model?.trim();
   if (!apiKey) return fail("No OpenRouter API key configured", conversationId ?? "", true);
   if (!model) return fail("No model configured", conversationId ?? "", true);
+  const fallbackModels = fallbackModelsOf(settings.fallbackModels, model);
+  const replyCap = capOf(settings.maxCostPerReplyUsd);
+  const dailyCap = capOf(settings.maxCostPerDayUsd);
+  // Refused before anything is stored or sent. Requests with no reported cost
+  // can't be counted, so the reason says so rather than implying the total is
+  // complete.
+  if (dailyCap !== null) {
+    const today = spendToday();
+    if (today.costUsd >= dailyCap) {
+      const unseen = today.unpriced
+        ? ` (plus ${today.unpriced} request${today.unpriced === 1 ? "" : "s"} with no reported cost)`
+        : "";
+      return fail(
+        `Today's assistant spending cap of ${formatUsd(dailyCap)} is reached: ${formatUsd(today.costUsd)} spent${unseen}. Raise or clear it in Settings → Assistant.`,
+        conversationId ?? "",
+        true
+      );
+    }
+  }
 
   let text = message?.trim() ?? "";
   let command: ResolvedCommand | null = null;
@@ -694,6 +763,15 @@ async function runTurn({
   // threshold. Before the snapshot, so a failed turn keeps the compaction (it is
   // already saved). Not on regenerate: that replaces an answer, it doesn't grow.
   let compacted = false;
+  // What this reply has cost so far, for its cap: the automatic summary (if
+  // any) plus every step. Title requests run alongside and land later, so they
+  // count toward the daily cap only.
+  let replyCost = 0;
+  let unpriced = false;
+  const countReplySpend = (step: AssistantUsage | undefined): void => {
+    if (!step || step.costUsd === null) unpriced = true;
+    else replyCost += step.costUsd;
+  };
   const compactAt = Number.isFinite(settings.compactAtTokens)
     ? (settings.compactAtTokens as number)
     : DEFAULT_COMPACT_AT_TOKENS;
@@ -703,7 +781,17 @@ async function runTurn({
       attached.reduce((n, a) => n + (a.kind === "image" ? 1000 : Math.ceil((a.text?.length ?? 0) / 4)), 0);
     const size = estimateWireTokens(convo.messages) + incoming;
     if (size > compactAt) {
-      compacted = (await compactConversation(id, convo, apiKey, model, compactAt * MIN_FOLD_SHARE)).ok;
+      compacted = (
+        await compactConversation(
+          id,
+          convo,
+          apiKey,
+          model,
+          compactAt * MIN_FOLD_SHARE,
+          fallbackModels,
+          (u) => u && countReplySpend(u)
+        )
+      ).ok;
     }
   }
 
@@ -792,6 +880,8 @@ async function runTurn({
       usage,
       ...(stopped ? { stopped: true } : {}),
       ...(compacted ? { compacted: true } : {}),
+      ...(answeredBy ? { model: answeredBy } : {}),
+      ...((replyCap !== null || dailyCap !== null) && unpriced ? { costUnreported: true } : {}),
       ...(generated.length
         ? { attachments: generated.map(({ id, name, mime, kind, size }) => ({ id, name, mime, kind, size })) }
         : {}),
@@ -852,16 +942,23 @@ async function runTurn({
   );
   let webCalls = 0;
   let imageCalls = 0;
+  let answeredBy: string | undefined;
   const generated: AssistantAttachment[] = [];
   const tools = TOOLS.filter((t) => offered.has(t.function.name));
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal.aborted) return finishStopped("");
+      // Checked before each request, so a reply can overshoot by at most the
+      // step that crossed the line.
+      if (replyCap !== null && replyCost >= replyCap) {
+        return failTurn(`Stopped at the ${formatUsd(replyCap)} per-reply spending cap`, true);
+      }
 
-      const request = complete({
+      const request = callModel({
         apiKey,
         model,
+        fallbackModels,
         messages: toWire(convo.messages, readImageDataUrl),
         tools,
         onText: emit,
@@ -879,6 +976,8 @@ async function runTurn({
         return failTurn(result.reason ?? "Request failed", result.needsSetup);
       }
       addUsage(usage, result.usage);
+      countReplySpend(result.usage);
+      if (result.model) answeredBy = result.model;
 
       if (result.message.tool_calls?.length) {
         result.message.tool_calls = withUniqueCallIds(

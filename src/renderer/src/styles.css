@@ -6617,6 +6617,15 @@ body {
 .assistant-save-status {
   font-size: 12px;
 }
+.assistant-reply-model {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.assistant-cost-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
 
 /* A write the assistant wants to make, waiting on the user. */
 .assistant-approval {

@@ -494,7 +494,8 @@ standing instructions, memory-file path and the hotkey are Settings → Assistan
 streamed request + SSE parser · `assistantTools.ts` tool schemas, execution and
 the approval rules · `assistantLinks.ts` the outbound-link check · `assistantMemory.ts` the memory file · `assistantChats.ts`
 SQLite · `assistantCompaction.ts` summarize-and-continue · `assistantTranscript.ts` pure helpers (message types, titles,
-`toTranscript`) · `assistantWindow.ts` the quick panel. Renderer:
+`toTranscript`) · `assistantWindow.ts` the quick panel · `assistantSpend.ts`
+the per-day spend ledger · `assistantModels.ts` the Settings model check. Renderer:
 `hooks/useAssistantChat.ts` (all chat state, shared) · `AssistantChat.tsx`
 (transcript + composer, shared) · `AssistantWidget.tsx` (the tab: history,
 memory) · `AssistantQuickApp.tsx` (the panel). `src/shared/assistant.ts` holds
@@ -807,6 +808,51 @@ hotkey) — a drift there is silent.
 - **Cost** is tracked per chat (`usage: { include: true }`; tokens summed, cost
   null — not 0 — when the provider reports none). It is an API-equivalent figure
   from OpenRouter, shown in the tab header.
+- **Transient failures are retried, but only before anything is shown.**
+  `complete()` (assistantClient.ts) retries a 429, a 5xx, a connection that
+  never opened, or a stream that dropped, up to twice (1s then 3s, or
+  `Retry-After`; a Retry-After over 20s is reported instead of waited out), and
+  **only while no text has streamed for that request**. A dropped stream that
+  had shown text fails as before: a retry would answer again underneath it.
+  Tools never re-run, because they run after a request returns, so a retried
+  request has run none (a failed step 2 retries step 2 only). This is the one
+  automatic retry of a POST in the app, and it's safe because a completion
+  changes nothing. An idle timeout is not retried (another 90s), and neither is
+  a 402 or 4xx. Usage from failed attempts is added to the final result: it was
+  billed. `RETRY_POLICY` is exported so tests can zero the delay.
+- **Fallback models** (Settings → Assistant → Fallbacks) go to OpenRouter's own
+  `models` parameter (`[model, ...fallbacks]`, deduped; `model` is still sent),
+  so OpenRouter does the failover and bills whichever model answers. That model
+  comes back in each response's `model` field (every SSE chunk carries it), is
+  stored on the assistant message (`assistant_messages.model`, additive
+  migration; `toWire` never sends it), and is shown at the end of the reply's
+  action row, live and after reopening. Summaries use the fallbacks too; title
+  requests don't (they have their own Title model).
+- **Spending caps** (USD, unset = none, non-positive = none). Every model request
+  goes through `callModel` in assistant.ts, which writes to `assistant_spend`
+  (one row per local day: cost, requests, `unpriced`). That covers replies,
+  titles, summaries, and turns that later failed or rolled back, since all of
+  them were paid for. A chat's `cost_usd` can't answer "today", and a failed
+  turn never reaches it. **Per reply**: checked before each request, counting
+  this turn's automatic summary and steps, not its title, which lands later.
+  Over the cap, the loop stops calling the model and closes via `failTurn`
+  (rollback if nothing changed, a note if something did), with `needsSetup` so
+  the error offers Settings. It can overshoot by the step that crossed the
+  line. **Per day**: checked once at the start of a turn. At the cap the turn is
+  refused before anything is stored or sent, with a reason naming the cap, the
+  spend, any unpriced requests and Settings → Assistant (also `needsSetup`).
+  **No reported cost is not $0.** An unpriced request (cost null, or a
+  successful response with no usage at all) is counted in `unpriced`, can't
+  trip a cap, and makes the reply carry `costUnreported` when a cap is set. The
+  UI then says so under the reply. Settings shows today's spend.
+- **Model check.** Saving a changed model or fallback list looks each slug up in
+  OpenRouter's public `/api/v1/models` (no key, cached 10 min,
+  `fetchWithTimeout`). It warns if a slug is unlisted (variants like `:nitro`
+  match their base) or doesn't list `tools` in `supported_parameters`. It's
+  advisory, and the settings are saved either way, since the list can lag a new
+  model. The main model's `context_length` suggests a Compact-at value (40% of
+  the window, rounded down to 1000, capped at 100k, min 2000) with a one-click
+  "Use". It is shown only when it differs from what's set.
 - **Folders** group the history list. `assistant_folders` (id, name, sort order) plus
   a `folder_id` column on `assistant_chats`; flat, no nesting. Deleting a folder
   returns its chats to the top level and never deletes one, and `listChats` LEFT

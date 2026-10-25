@@ -287,6 +287,8 @@ const api: CommandCenterApi = {
       removePrompt: (name: string) => ipcRenderer.invoke("assistant:commands:removePrompt", name),
     },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
+    spendToday: () => ipcRenderer.invoke("assistant:spendToday"),
+    checkModel: (slug: string) => ipcRenderer.invoke("assistant:checkModel", slug),
     hidePanel: () => ipcRenderer.invoke("assistant:hidePanel"),
     openLink: (url: string, conversationId: string | null) =>
       ipcRenderer.invoke("assistant:openLink", url, conversationId),

@@ -9,7 +9,7 @@ const path = require('node:path');
   const output = path.join(__dirname, '../out/main/assistant-chats-test.cjs');
   try {
     await require('esbuild').build({
-      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/assistantCommands'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
+      stdin: { contents: `export * from './src/main/services/assistantChats'; export * from './src/main/services/assistantCommands'; export * from './src/main/services/assistantSpend'; export * from './src/main/services/db';`, resolveDir: path.join(__dirname, '..') },
       outfile: output, bundle: true, platform: 'node', format: 'cjs', external: ['better-sqlite3'],
       plugins: [{ name: 'test-userdata', setup(build) {
         build.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test' }));
@@ -185,6 +185,22 @@ const path = require('node:path');
     assert.deepEqual(api.listChats('summary'), [], 'The summary is not searchable text');
     api.deleteChat('cmp');
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM assistant_messages WHERE chat_id = 'cmp'`).get().n, 0, 'Deleting a chat deletes its message rows');
+
+    // The model that answered (a fallback, say) rides on assistant messages only.
+    const answered = [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a', model: 'backup/one' }];
+    api.saveChat('mdl', 'Model', answered);
+    assert.deepEqual(api.loadChat('mdl').messages, answered, 'The answering model round-trips');
+    api.deleteChat('mdl');
+
+    // Today's spend ledger for the daily cap: unpriced requests are counted
+    // apart, never as $0, and the table is safe to create every boot.
+    api.initAssistantSpend();
+    api.initAssistantSpend();
+    assert.deepEqual(api.spendToday('2026-01-01'), { costUsd: 0, requests: 0, unpriced: 0 });
+    api.recordSpend({ promptTokens: 1, completionTokens: 1, costUsd: 0.25 }, '2026-01-01');
+    api.recordSpend({ promptTokens: 1, completionTokens: 1, costUsd: null }, '2026-01-01');
+    api.recordSpend({ promptTokens: 1, completionTokens: 1, costUsd: 0.5 }, '2026-01-02');
+    assert.deepEqual(api.spendToday('2026-01-01'), { costUsd: 0.25, requests: 2, unpriced: 1 }, 'Spend is per day');
 
     // A later turn replaces the messages, ADDS usage, and leaves the title alone
     // (that is the user's to change) and created_at as it was.
