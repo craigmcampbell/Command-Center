@@ -401,6 +401,53 @@ export interface AssistantCommandConfig {
   tools: AssistantToolInfo[];
 }
 
+// ---- Assistant: MCP servers ----
+//
+// Servers the Assistant can call tools on (Settings → Assistant → MCP servers).
+// Main process only: the renderer edits this list and reads a status, and never
+// talks to a server itself. See services/assistantMcp.ts.
+
+export type McpTransport = "stdio" | "http";
+
+export interface McpServerConfig {
+  id: number;
+  label: string;
+  transport: McpTransport;
+  // stdio: the command to spawn, its arguments, and extra environment variables.
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  // http (Streamable HTTP): the endpoint and an optional bearer token.
+  url?: string;
+  bearerToken?: string;
+  enabled: boolean;
+  // Run tools the server marks `readOnlyHint: true` without asking. Off by default.
+  trustReadOnly: boolean;
+  sortOrder: number;
+}
+
+export type McpServerInput = Omit<McpServerConfig, "id" | "sortOrder">;
+
+export interface McpToolStatus {
+  // What the model calls it: mcp__<server>__<tool>.
+  name: string;
+  // The server's own name for it.
+  tool: string;
+  description?: string;
+  readOnly: boolean;
+  // Runs without a confirmation card (read-only AND the server is trusted for that).
+  autoRun: boolean;
+}
+
+export interface McpServerStatus {
+  id: number;
+  label: string;
+  // idle = enabled but not connected yet (connections are made on first use).
+  state: "disabled" | "idle" | "connecting" | "connected" | "failed";
+  reason?: string;
+  tools: McpToolStatus[];
+}
+
 export interface AssistantCommandResult {
   ok: boolean;
   reason?: string;
@@ -2232,6 +2279,11 @@ export interface CommandCenterApi {
       }) => Promise<AssistantCommandResult>;
       removePrompt: (name: string) => Promise<AssistantCommandResult>;
     };
+    mcp: {
+      status: () => Promise<McpServerStatus[]>;
+      // Connects (or reconnects) one server now and returns every server's status.
+      connect: (id: number) => Promise<McpServerStatus[]>;
+    };
     hotkeyStatus: () => Promise<CaptureHotkeyStatus>;
     // Today's spend across every assistant request, for the daily cap.
     spendToday: () => Promise<AssistantSpendToday>;
@@ -2437,6 +2489,13 @@ export interface CommandCenterApi {
     };
     railway: {
       update: (values: RailwayScalarConfig) => Promise<RailwayScalarConfig>;
+    };
+    mcpServers: {
+      list: () => Promise<McpServerConfig[]>;
+      add: (input: McpServerInput) => Promise<McpServerConfig[]>;
+      update: (id: number, input: McpServerInput) => Promise<McpServerConfig[]>;
+      remove: (id: number) => Promise<McpServerConfig[]>;
+      reorder: (orderedIds: number[]) => Promise<McpServerConfig[]>;
     };
     youtubeChannels: {
       list: () => Promise<YouTubeChannelConfig[]>;

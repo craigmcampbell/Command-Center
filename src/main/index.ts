@@ -154,6 +154,15 @@ import {
 } from "./services/assistantCommands";
 import { MUTATING_TOOLS, SKILL_FILE_TOOL, TOOL_DEFS, WEB_TOOLS } from "./services/assistantTools";
 import { proposeMemoryTidy } from "./services/assistantTidy";
+import { cachedMcpTools, closeAllMcp, connectMcpServer, getMcpStatus } from "./services/assistantMcp";
+import {
+  addMcpServer,
+  listMcpServerSettings,
+  removeMcpServer,
+  reorderMcpServers,
+  updateMcpServer,
+} from "./services/settings";
+import type { McpServerInput } from "../shared/types";
 import {
   assistantHotkeyStatus,
   destroyAssistantWindow,
@@ -830,13 +839,23 @@ ipcMain.handle("assistant:commands:config", async (): Promise<AssistantCommandCo
     skillsDir,
     skills,
     prompts,
-    tools: TOOL_DEFS.filter((t) => t.name !== SKILL_FILE_TOOL).map((t) => ({
-      name: t.name,
-      mutating: MUTATING_TOOLS.has(t.name) || t.name === "remember",
-      ...(WEB_TOOLS.has(t.name) ? { external: true } : {}),
-    })),
+    tools: [
+      ...TOOL_DEFS.filter((t) => t.name !== SKILL_FILE_TOOL).map((t) => ({
+        name: t.name,
+        mutating: MUTATING_TOOLS.has(t.name) || t.name === "remember",
+        ...(WEB_TOOLS.has(t.name) ? { external: true } : {}),
+      })),
+      // MCP tools from the last listing. Never in a command's default
+      // allowlist; a custom list can name one.
+      ...cachedMcpTools().map((t) => ({ name: t.name, mutating: !t.readOnly, external: true })),
+    ],
   };
 });
+// MCP servers: status and the Connect button. The list itself is settings:mcpServers:*.
+ipcMain.handle("assistant:mcp:status", () => getMcpStatus());
+ipcMain.handle("assistant:mcp:connect", (_evt, id: unknown) =>
+  typeof id === "number" ? connectMcpServer(id) : getMcpStatus()
+);
 ipcMain.handle("assistant:commands:setSkill", (_evt, name: unknown, values: any) =>
   typeof name === "string"
     ? setSkillSetting(name, { enabled: values?.enabled === true, tools: Array.isArray(values?.tools) ? values.tools : null })
@@ -1283,6 +1302,14 @@ ipcMain.handle("settings:railway:update", (_evt, values: RailwayScalarConfig) =>
   updateRailwaySettings(values)
 );
 
+ipcMain.handle("settings:mcpServers:list", () => listMcpServerSettings());
+ipcMain.handle("settings:mcpServers:add", (_evt, input: McpServerInput) => addMcpServer(input));
+ipcMain.handle("settings:mcpServers:update", (_evt, id: number, input: McpServerInput) =>
+  updateMcpServer(id, input)
+);
+ipcMain.handle("settings:mcpServers:remove", (_evt, id: number) => removeMcpServer(id));
+ipcMain.handle("settings:mcpServers:reorder", (_evt, orderedIds: number[]) => reorderMcpServers(orderedIds));
+
 ipcMain.handle("settings:youtubeChannels:list", () => listYouTubeChannelSettings());
 ipcMain.handle("settings:youtubeChannels:add", (_evt, label: string, channelId: string) =>
   addYouTubeChannel(label, channelId)
@@ -1401,5 +1428,6 @@ app.on("before-quit", (event) => {
   // would make the hotkey dead until the next launch.
   destroyCaptureWindow();
   destroyAssistantWindow();
-  stopAllProcesses().finally(() => app.exit());
+  // MCP stdio servers are child processes too.
+  Promise.allSettled([stopAllProcesses(), closeAllMcp()]).finally(() => app.exit());
 });

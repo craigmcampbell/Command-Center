@@ -7,6 +7,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRendererEvent } from "electron";
 import type {
   AppAlert,
+  McpServerInput,
   AppCommand,
   BackupSettings,
   CaptureSettings,
@@ -296,6 +297,10 @@ const api: CommandCenterApi = {
       savePrompt: (input: unknown) => ipcRenderer.invoke("assistant:commands:savePrompt", input),
       removePrompt: (name: string) => ipcRenderer.invoke("assistant:commands:removePrompt", name),
     },
+    mcp: {
+      status: () => ipcRenderer.invoke("assistant:mcp:status"),
+      connect: (id: number) => ipcRenderer.invoke("assistant:mcp:connect", id),
+    },
     hotkeyStatus: () => ipcRenderer.invoke("assistant:hotkeyStatus"),
     spendToday: () => ipcRenderer.invoke("assistant:spendToday"),
     checkModel: (slug: string) => ipcRenderer.invoke("assistant:checkModel", slug),
@@ -534,6 +539,14 @@ const api: CommandCenterApi = {
     railway: {
       update: (values: RailwayScalarConfig) =>
         ipcRenderer.invoke("settings:railway:update", values),
+    },
+    mcpServers: {
+      list: () => ipcRenderer.invoke("settings:mcpServers:list"),
+      add: (input: McpServerInput) => ipcRenderer.invoke("settings:mcpServers:add", input),
+      update: (id: number, input: McpServerInput) =>
+        ipcRenderer.invoke("settings:mcpServers:update", id, input),
+      remove: (id: number) => ipcRenderer.invoke("settings:mcpServers:remove", id),
+      reorder: (orderedIds: number[]) => ipcRenderer.invoke("settings:mcpServers:reorder", orderedIds),
     },
     youtubeChannels: {
       list: () => ipcRenderer.invoke("settings:youtubeChannels:list"),

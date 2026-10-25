@@ -6297,6 +6297,15 @@ body {
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 2px 12px;
 }
+.assistant-mcp-tools {
+  list-style: none;
+  margin: 4px 0 0 24px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px 12px;
+  font-size: 12px;
+}
 .assistant-tool-warn {
   color: var(--pending);
   font-size: 11px;

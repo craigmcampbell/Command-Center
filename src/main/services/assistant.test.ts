@@ -142,6 +142,43 @@ vi.mock("./settings", () => ({
   getReaderSettings: () => ({ apiToken: "r" }),
   listGithubRepoSettings: () => [],
   listVaultSettings: () => [],
+  listMcpServerSettings: () => mcpSdk.config,
+}));
+// The MCP SDK, faked so the real assistantMcp.ts runs: a server is keyed by its
+// stdio command and has a tool list and a call log.
+const mcpSdk = vi.hoisted(() => ({
+  config: [] as any[],
+  servers: new Map<string, { fail?: string; tools: any[] }>(),
+  calls: [] as { name: string; arguments: unknown }[],
+}));
+vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+  getDefaultEnvironment: () => ({}),
+  StdioClientTransport: class {
+    stderr = null;
+    key: string;
+    constructor(params: { command: string }) {
+      this.key = params.command;
+    }
+  },
+}));
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({ StreamableHTTPClientTransport: class {} }));
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+  Client: class {
+    key = "";
+    async connect(transport: { key: string }) {
+      this.key = transport.key;
+      const server = mcpSdk.servers.get(transport.key);
+      if (!server || server.fail) throw new Error(server?.fail ?? "spawn ENOENT");
+    }
+    async listTools() {
+      return { tools: mcpSdk.servers.get(this.key)?.tools ?? [] };
+    }
+    async callTool(params: { name: string; arguments: unknown }) {
+      mcpSdk.calls.push(params);
+      return { content: [{ type: "text", text: `ran ${params.name}` }] };
+    }
+    async close() {}
+  },
 }));
 vi.mock("./todoist", () => ({
   completeTask: vi.fn(async () => ({ ok: true })),
@@ -209,6 +246,7 @@ vi.mock("./readerFeed", () => ({
 }));
 
 import { completeTask, createTask } from "./todoist";
+import { closeAllMcp } from "./assistantMcp";
 import { scrapePage, searchWeb } from "./firecrawlWeb";
 import { generateImage } from "./openaiImages";
 import { estimateTokens } from "./assistantCompaction";
@@ -3064,5 +3102,131 @@ describe("editing an earlier question (branches)", () => {
     expect(fs.readdirSync(attachDir)).toContain(image.id);
     expect(deleteAssistantChat(branch.conversationId).ok).toBe(true);
     expect(fs.existsSync(path.join(attachDir, image.id))).toBe(false);
+  });
+});
+
+describe("MCP tools", () => {
+  const server = (extra: object = {}) => ({
+    id: 1,
+    label: "todo",
+    transport: "stdio",
+    command: "todo-mcp",
+    args: [],
+    env: {},
+    enabled: true,
+    trustReadOnly: false,
+    sortOrder: 0,
+    ...extra,
+  });
+  const names = (sent: Sent) => sent.body.tools.map((t) => t.function.name);
+
+  beforeEach(() => {
+    const memoryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cc-assistant-")), "memory.md");
+    settings.assistant = {
+      apiKey: "sk-or-test",
+      model: "test/model",
+      memoryPath: memoryFile,
+      autoTitle: false,
+      askBeforeRemember: false,
+      compactAtTokens: 0,
+    };
+    store.chats.clear();
+    cmds.table.clear();
+    mcpSdk.calls = [];
+    mcpSdk.servers = new Map([
+      [
+        "todo-mcp",
+        {
+          tools: [
+            { name: "find-tasks", description: "Find tasks", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+            { name: "add-task", inputSchema: { type: "object", properties: { title: { type: "string" } } } },
+          ],
+        },
+      ],
+    ]);
+    mcpSdk.config = [server()];
+  });
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await closeAllMcp();
+  });
+
+  it("offers the server's tools, namespaced and labelled as untrusted", async () => {
+    const sent = scriptFetch(stop("hi"));
+    await askAssistant(null, "hello");
+    expect(names(sent[0])).toEqual(expect.arrayContaining(["mcp__todo__find_tasks", "mcp__todo__add_task"]));
+    const tool = sent[0].body.tools.find((t) => t.function.name === "mcp__todo__add_task");
+    expect(tool.function.description).toMatch(/MCP server "todo".*untrusted/);
+    expect(tool.function.parameters).toEqual({ type: "object", properties: { title: { type: "string" } } });
+  });
+
+  it("asks first with the exact arguments, then runs it; Regenerate is refused afterwards", async () => {
+    scriptFetch(callTools({ id: "c1", name: "mcp__todo__add_task", args: { title: "Milk" } }), stop("Added."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "add milk", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({
+      tool: "mcp__todo__add_task",
+      summary: 'Run “add-task” on MCP server “todo” with arguments: {"title":"Milk"}',
+    });
+    expect(mcpSdk.calls).toEqual([]);
+    answerApproval(approvals[0].approvalId, true);
+    const reply = await pending;
+    expect(mcpSdk.calls).toEqual([{ name: "add-task", arguments: { title: "Milk" } }]);
+    expect(reply.toolCalls).toMatchObject([{ name: "mcp__todo__add_task", ok: true }]);
+
+    expect(await regenerateAssistant(reply.conversationId)).toMatchObject({
+      ok: false,
+      reason: "Can't regenerate: that reply changed something",
+    });
+    expect(mcpSdk.calls).toHaveLength(1);
+  });
+
+  it("a declined call never reaches the server", async () => {
+    scriptFetch(callTools({ id: "c1", name: "mcp__todo__add_task", args: { title: "Milk" } }), stop("Okay."));
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "add milk", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    answerApproval(approvals[0].approvalId, false);
+    expect((await pending).toolCalls).toMatchObject([{ declined: true }]);
+    expect(mcpSdk.calls).toEqual([]);
+  });
+
+  it("runs a trusted read-only tool without asking, allows Regenerate, and makes memory writes ask", async () => {
+    mcpSdk.config = [server({ trustReadOnly: true })];
+    scriptFetch(
+      callTools({ id: "c1", name: "mcp__todo__find_tasks" }, { id: "c2", name: "remember", args: { fact: "Likes milk" } }),
+      stop("Found them.")
+    );
+    const approvals: any[] = [];
+    const pending = askAssistant(null, "find tasks", hooks({ onApproval: (a) => approvals.push(a) }));
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    // Only the memory write asks: the MCP output counts as third-party text.
+    expect(approvals[0].tool).toBe("remember");
+    answerApproval(approvals[0].approvalId, false);
+    const reply = await pending;
+    expect(mcpSdk.calls).toEqual([{ name: "find-tasks", arguments: {} }]);
+
+    scriptFetch(callTools({ id: "c3", name: "mcp__todo__find_tasks" }), stop("Again."));
+    expect(await regenerateAssistant(reply.conversationId)).toMatchObject({ ok: true, text: "Again." });
+  });
+
+  it("keeps MCP tools out of a command's default allowlist", async () => {
+    cmds.table.set("polish", { kind: "prompt", enabled: true, tools: null, injected: "P" });
+    let sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r1", "polish");
+    expect(names(sent[0]).some((n) => n.startsWith("mcp__"))).toBe(false);
+
+    cmds.table.set("polish", { kind: "prompt", enabled: true, tools: ["mcp__todo__find_tasks"], injected: "P" });
+    sent = scriptFetch(stop("ok"));
+    await askAssistant(null, "x", hooks(), "r2", "polish");
+    expect(names(sent[0])).toEqual(["mcp__todo__find_tasks"]);
+  });
+
+  it("chats normally when a server won't start", async () => {
+    mcpSdk.servers.set("todo-mcp", { fail: "command not found", tools: [] });
+    const sent = scriptFetch(stop("Hello."));
+    expect(await askAssistant(null, "hi")).toMatchObject({ ok: true, text: "Hello." });
+    expect(names(sent[0]).some((n) => n.startsWith("mcp__"))).toBe(false);
   });
 });

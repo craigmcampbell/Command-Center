@@ -27,6 +27,8 @@ import type {
   GitHubRepoInput,
   NotificationSettings,
   VaultConfig,
+  McpServerConfig,
+  McpServerInput,
   ProcessConfig,
   YnabScalarConfig,
   OpenRouterScalarConfig,
@@ -120,6 +122,21 @@ export function initSettings(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS subreddits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subreddit TEXT NOT NULL,
+    sort_order INTEGER NOT NULL
+  )`);
+  // Assistant MCP servers. args/env are JSON; the transport decides which of
+  // command/args/env or url/bearer_token is used, and the other pair is ignored.
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_mcp_servers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL,
+    transport TEXT NOT NULL,
+    command TEXT,
+    args TEXT NOT NULL DEFAULT '[]',
+    env TEXT NOT NULL DEFAULT '{}',
+    url TEXT,
+    bearer_token TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    trust_read_only INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL
   )`);
   db.exec(`CREATE TABLE IF NOT EXISTS tabs (
@@ -764,6 +781,131 @@ export function reorderProcesses(orderedIds: string[]): ProcessConfig[] {
   });
   updateAll(orderedIds);
   return processRowsToItems();
+}
+
+// ---- assistant MCP servers ----
+//
+// Same CRUD shape as processes. Input is cleaned here (trimmed, strings only)
+// because this list ends up as a spawned command line and request headers.
+
+interface McpServerRow {
+  id: number;
+  label: string;
+  transport: string;
+  command: string | null;
+  args: string;
+  env: string;
+  url: string | null;
+  bearer_token: string | null;
+  enabled: number;
+  trust_read_only: number;
+  sortOrder: number;
+}
+
+function parseJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function mcpServerRowToConfig(row: McpServerRow): McpServerConfig {
+  const args = parseJson<unknown>(row.args, []);
+  const env = parseJson<unknown>(row.env, {});
+  return {
+    id: row.id,
+    label: row.label,
+    transport: row.transport === "http" ? "http" : "stdio",
+    command: row.command ?? undefined,
+    args: Array.isArray(args) ? args.filter((a): a is string => typeof a === "string") : [],
+    env:
+      env && typeof env === "object" && !Array.isArray(env)
+        ? Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === "string")) as Record<string, string>
+        : {},
+    url: row.url ?? undefined,
+    bearerToken: row.bearer_token ?? undefined,
+    enabled: row.enabled === 1,
+    trustReadOnly: row.trust_read_only === 1,
+    sortOrder: row.sortOrder,
+  };
+}
+
+function mcpServerRowsToItems(): McpServerConfig[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT id, label, transport, command, args, env, url, bearer_token, enabled, trust_read_only,
+              sort_order as sortOrder
+       FROM assistant_mcp_servers ORDER BY sort_order ASC`
+    )
+    .all() as McpServerRow[];
+  return rows.map(mcpServerRowToConfig);
+}
+
+function mcpServerValues(input: McpServerInput) {
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const args = Array.isArray(input.args) ? input.args.filter((a) => typeof a === "string") : [];
+  const env: Record<string, string> = {};
+  if (input.env && typeof input.env === "object") {
+    for (const [k, v] of Object.entries(input.env)) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && typeof v === "string") env[k] = v;
+    }
+  }
+  return {
+    label: text(input.label) ?? "MCP server",
+    transport: input.transport === "http" ? "http" : "stdio",
+    command: text(input.command),
+    args: JSON.stringify(args),
+    env: JSON.stringify(env),
+    url: text(input.url),
+    bearer_token: text(input.bearerToken),
+    enabled: input.enabled === false ? 0 : 1,
+    trust_read_only: input.trustReadOnly === true ? 1 : 0,
+  };
+}
+
+export function listMcpServerSettings(): McpServerConfig[] {
+  return mcpServerRowsToItems();
+}
+
+export function addMcpServer(input: McpServerInput): McpServerConfig[] {
+  const db = getDatabase();
+  const { maxOrder } = db
+    .prepare(`SELECT COALESCE(MAX(sort_order), -1) as maxOrder FROM assistant_mcp_servers`)
+    .get() as { maxOrder: number };
+  db.prepare(
+    `INSERT INTO assistant_mcp_servers
+       (label, transport, command, args, env, url, bearer_token, enabled, trust_read_only, sort_order)
+     VALUES (@label, @transport, @command, @args, @env, @url, @bearer_token, @enabled, @trust_read_only, @sort_order)`
+  ).run({ ...mcpServerValues(input), sort_order: maxOrder + 1 });
+  return mcpServerRowsToItems();
+}
+
+export function updateMcpServer(id: number, input: McpServerInput): McpServerConfig[] {
+  getDatabase()
+    .prepare(
+      `UPDATE assistant_mcp_servers SET label = @label, transport = @transport, command = @command,
+         args = @args, env = @env, url = @url, bearer_token = @bearer_token, enabled = @enabled,
+         trust_read_only = @trust_read_only
+       WHERE id = @id`
+    )
+    .run({ ...mcpServerValues(input), id });
+  return mcpServerRowsToItems();
+}
+
+export function removeMcpServer(id: number): McpServerConfig[] {
+  getDatabase().prepare(`DELETE FROM assistant_mcp_servers WHERE id = ?`).run(id);
+  return mcpServerRowsToItems();
+}
+
+export function reorderMcpServers(orderedIds: number[]): McpServerConfig[] {
+  const db = getDatabase();
+  const update = db.prepare(`UPDATE assistant_mcp_servers SET sort_order = ? WHERE id = ?`);
+  const updateAll = db.transaction((ids: number[]) => {
+    ids.forEach((id, i) => update.run(i, id));
+  });
+  updateAll(orderedIds);
+  return mcpServerRowsToItems();
 }
 
 // ---- tabs ----
